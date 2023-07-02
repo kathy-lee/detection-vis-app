@@ -12,19 +12,19 @@ from data import crud, models, schemas
 from data.database import SessionLocal, engine
 
 
-models.Base.metadata.create_all(bind=engine)
+# models.Base.metadata.create_all(bind=engine)
 
-# Create a new session
-db = SessionLocal()
+# # Create a new session
+# db = SessionLocal()
 
-# Define the user data
-user_data = schemas.UserCreate(email="tenthhuser@example.com", name="lulu")
+# # Define the user data
+# user_data = schemas.UserCreate(email="eleventhhuser@example.com", name="lulu")
 
-# Call the create_user function to insert the user
-crud.create_user(db=db, user=user_data)
+# # Call the create_user function to insert the user
+# crud.create_user(db=db, user=user_data)
 
-# Close the session
-db.close()
+# # Close the session
+# db.close()
 
 
 
@@ -45,11 +45,6 @@ def get_image(style: str, file: UploadFile = File(...)):
     # cv2.imwrite(name, output)
     return {"name": name}
 
-# @app.get("/users/")
-# def read_users():
-#     db = SessionLocal()
-#     users = crud.get_users(db)
-#     return users
 
 # Dependency
 def get_db():
