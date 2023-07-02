@@ -7,3 +7,4 @@ typing_extensions>=3.10.0, <3.11.0
 loguru>=0.6.0, <0.7.0
 sqlalchemy
 psycopg2-binary
+alembic

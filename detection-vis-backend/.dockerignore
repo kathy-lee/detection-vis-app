@@ -1,10 +1,6 @@
-jupyter_notebooks*
-*/env*
-*/venv*
-venv
-env
-.circleci*
-*.env
+.vscode
+.venv
+detection-vis-ui
 *.log
 .git
 .gitignore

@@ -5,8 +5,12 @@ RUN adduser --disabled-password --gecos '' detect-vis-api-user
 
 WORKDIR /opt
 
-ADD data /opt/data
-ADD detection-vis-backend /opt/detection-vis-backend
+COPY . .
+# ADD data /opt/data
+# ADD alembic /opt/alembic
+# ADD alembic.ini /opt/alembic.ini
+# ADD detection-vis-backend /opt/detection-vis-backend
+
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r /opt/detection-vis-backend/requirements.txt
 
