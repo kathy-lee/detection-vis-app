@@ -6,58 +6,92 @@ import pandas as pd
 # Define the title 
 st.title("Automotive sensor data visualization web application")
 
-DATASETS = {
-    "RaDICaL": "RaDICaL",
-    "RADIal": "RADIal",
-}
+# ########################
+# response = requests.get("http://detection-vis-backend:8001/users")  # or your FastAPI server URL
+# users = response.json()
+# st.json(users)
+# ########################
 
-########################
-response = requests.get("http://detection-vis-backend:8001/users")  # or your FastAPI server URL
-data = response.json()
-#df = pd.DataFrame(data)
-st.json(data)
-########################
+response = requests.get("http://detection-vis-backend:8001/datasets")  # or your FastAPI server URL
+datasets = response.json()
+# st.json(datasets)
+# show datasets on top level
+root_datasets = []
+for d in datasets:
+  if d["parent_id"] is None:
+    root_datasets.append(d)
+dataset_name = st.selectbox("Choose the dataset", [i["name"] for i in root_datasets])
+st.subheader(f"{dataset_name} Dataset")
 
-dataset = st.selectbox("Choose the dataset", [i for i in DATASETS.keys()])
-st.subheader(f"{dataset} Dataset")
-st.write("RaDICaL dataset includes 4 subdatasets. Each subdataset contains a couple of `.bag` files which includes raw sensor recordings of RGB, depth and radar data streams.")
+dataset = {}
+for d in datasets:
+  if d["name"] == dataset_name:
+    dataset = d
+    st.write(d["description"])
 
-tab1, tab2, tab3 = st.tabs(["radar_high_res", "indoor_human", "30m_collection"])
+subdatasets = []
+for d in datasets:
+  if d["parent_id"] == dataset["id"]:
+    subdatasets.append(d)
 
-with tab1:
-  st.subheader("radar_high_res")
-  # Show bag files 
+if subdatasets:
+  # show subdataset in tab page
+  subdataset_tabs = st.tabs([i["name"] for i in subdatasets])
+  index = 0
+  button_index = 0
+  for t in subdataset_tabs:
+    with t:
+      # Show data files 
+      response = requests.get(f"http://detection-vis-backend:8001/dataset/{subdatasets[index]['id']}")
+      files = response.json()
+
+      colms = st.columns((1, 2, 2, 1, 1))
+      fields = ['No', 'File name', 'info', "size", 'action']
+      # table header
+      for col, field_name in zip(colms, fields):
+        col.write(field_name)
+      # table content
+      for no, file in enumerate(files):
+        col1, col2, col3, col4, col5 = st.columns((1, 2, 2, 1, 1))
+        col1.write(no)  
+        col2.write(file["name"])  
+        col3.write(file["description"])  
+        col4.write("1GB") 
+        # last column
+        button_type = "Load" 
+        button_phold = col5.empty()  # create a placeholder
+        do_action = button_phold.button(button_type, key=button_index)
+        button_index = button_index + 1
+        if do_action:
+          bagfile = file
+          # response = requests.post(f"http://backend:8080/load/{file}", file=bagfile)
+          # datafile = response.json()
+          button_phold.empty()  #  remove button
+          col5.write('Loading...')
+    index = index + 1
+else:
+  button_index = 0
+  # Show data files 
+  response = requests.get(f"http://detection-vis-backend:8001/dataset/{dataset['id']}")
+  files = response.json()
+
   colms = st.columns((1, 2, 2, 1, 1))
   fields = ['No', 'File name', 'info', "size", 'action']
+  # table header
   for col, field_name in zip(colms, fields):
-    # column header
     col.write(field_name)
-
-  data_table = {'name':['file1', 'file2', 'file3'], 'info':['a', 'b', 'c'], 'size':[100,200,300]}
-  for no, email in enumerate(data_table['name']):
+  # table content
+  for no, file in enumerate(files):
     col1, col2, col3, col4, col5 = st.columns((1, 2, 2, 1, 1))
-    col1.write(no)  # index
-    col2.write(data_table['name'][no])  
-    col3.write(data_table['info'][no])  
-    col4.write(data_table['size'][no]) 
-    
+    col1.write(no)  
+    col2.write(file["name"])  
+    col3.write(file["description"])  
+    col4.write("1GB") 
+    # last column
     button_type = "Load" 
     button_phold = col5.empty()  # create a placeholder
-    do_action = button_phold.button(button_type, key=no)
+    do_action = button_phold.button(button_type, key=button_index)
+    button_index = button_index + 1
     if do_action:
-      bagfile = data_table['name'][no]
-      # response = requests.post(f"http://backend:8080/load/{file}", file=bagfile)
-      # datafile = response.json()
       button_phold.empty()  #  remove button
       col5.write('Loading...')
-
-
-with tab2:
-  st.subheader("indoor_human")
-  #st.image("https://static.streamlit.io/examples/dog.jpg", width=200)
-
-with tab3:
-  st.subheader("30m_collection")
-  #st.image("https://static.streamlit.io/examples/owl.jpg", width=200)
-
-

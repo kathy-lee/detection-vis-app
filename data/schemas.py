@@ -13,3 +13,24 @@ class User(BaseModel):
     class Config:
         orm_mode = True
 
+class Directory(BaseModel):
+    id: int
+    name: str
+    description: str
+    parent_id: Optional[int]
+
+    class Config:
+        orm_mode = True
+
+
+class File(BaseModel):
+    id: int
+    name: str
+    description: str
+    size: str
+    path: str
+    directory_id: int
+    
+
+    class Config:
+        orm_mode = True

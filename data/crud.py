@@ -10,3 +10,11 @@ def create_user(db: Session, user: schemas.UserCreate):
     db.commit()
     db.refresh(db_user)
     return db_user
+
+def get_datasets(db: Session):
+    # return db.query(models.Directory).filter(models.Directory.parent_id==None)
+    return db.query(models.Directory).all()
+
+def get_datasetfiles(db: Session, dataset_id: int):
+    return db.query(models.File).filter(models.File.directory_id == dataset_id).all()
+

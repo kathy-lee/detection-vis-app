@@ -1,9 +1,8 @@
 import uuid
 #import cv2
 import uvicorn
-from fastapi import File
-from fastapi import FastAPI, Depends
-from fastapi import UploadFile
+from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
+
 #from PIL import Image
 from typing import List
 from sqlalchemy.orm import Session
@@ -58,6 +57,18 @@ def get_db():
 def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     users = crud.get_users(db)
     return users
+
+@app.get("/datasets", response_model=List[schemas.Directory])
+def read_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    datasets = crud.get_datasets(db)
+    return datasets
+
+@app.get("/dataset/{id}", response_model=List[schemas.File])
+def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    datasetfiles = crud.get_datasetfiles(db, dataset_id = id)
+    if datasetfiles is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return datasetfiles
 
 
 
