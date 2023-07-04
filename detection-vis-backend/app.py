@@ -70,6 +70,22 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
         raise HTTPException(status_code=404, detail="Dataset not found")
     return datasetfiles
 
+# @app.post("/download")
+# async def download_file(item: Item):
+#     ssh = paramiko.SSHClient()
+#     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+#     ssh.connect('hostname', username='username', password='password')
+
+#     sftp = ssh.open_sftp()
+#     remote_file_path = "/path/on/remote/server/" + item.file
+#     local_file_path = "/path/on/local/machine/" + item.file
+#     sftp.get(remote_file_path, local_file_path)
+
+#     sftp.close()
+#     ssh.close()
+
+#     return {"status": "File download initiated for " + item.file}
+
 
 
 if __name__ == "__main__":

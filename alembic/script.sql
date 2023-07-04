@@ -15,9 +15,9 @@ INSERT INTO files (name, description, size, path, directory_id) VALUES ('1.bag',
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('2.bag', 'description', '2.5GB', './2.bag', 2);
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('3.bag', 'description', '2.5GB', './3.bag', 2);
 
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-05-16-35-19.bag', 'description', '2.5GB', '.dataset/indoor_human', 3);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-06-15-00-49.bag', 'description', '2.5GB', '.dataset/indoor_human', 3);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-10-15-55-08.bag', 'description', '2.5GB', '.dataset/indoor_human', 3);
+INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-05-16-35-19.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
+INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-06-15-00-49.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
+INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-10-15-55-08.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
 
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('4.bag', 'description', '2.5GB', './4.bag', 4);
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('5.bag', 'description', '2.5GB', './5.bag', 4);
@@ -27,5 +27,5 @@ INSERT INTO files (name, description, size, path, directory_id) VALUES ('7.bag',
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('8.bag', 'description', '2.5GB', './8.bag', 5);
 INSERT INTO files (name, description, size, path, directory_id) VALUES ('9.bag', 'description', '2.5GB', './9.bag', 5);
 
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.54.38.zip', 'description', '2.5GB', '.dataset/radial',6);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.48.07.zip', 'description', '2.5GB', '.dataset/radial',6);
+INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.54.38.zip', 'description', '2.5GB', 'dataset/radial',6);
+INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.48.07.zip', 'description', '2.5GB', 'dataset/radial',6);
