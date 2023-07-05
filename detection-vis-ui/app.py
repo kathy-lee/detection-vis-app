@@ -1,5 +1,4 @@
 import requests
-import paramiko
 import os
 import streamlit as st
 import pandas as pd
@@ -98,21 +97,27 @@ else:
       loading_phold = col5.empty()  # create another placeholder for loading
       loading_phold.write('Loading...')
       
-      #
-      #response = requests.post("http://localhost:8000/download", data=json.dumps({"file": selected_file}), headers={'Content-Type': 'application/json'})
-      # if response.status_code == 200:
-      #     st.write("File download initiated")
-      # download data file from remote
-      ssh = paramiko.SSHClient()
-      ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
-      private_key = paramiko.RSAKey.from_private_key_file('key_for_ssh')
-      ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
-      sftp = ssh.open_sftp()
-      #remote_file_path = os.path.join("/home/kangle", file["path"], file["name"])
-      remote_file_path = os.path.join("/home/kangle", file["path"], "test.txt")
-      local_file_path = file["name"]
-      sftp.get(remote_file_path, local_file_path)
-      sftp.close()
-      ssh.close()
-      loading_phold.empty()  # remove loading text
-      col5.write('Loaded')
+      params = {
+        "file_path": file["path"],
+        "file_name": file["name"],
+      }
+      response = requests.get("http://detection-vis-backend:8001/download", params=params)
+      if response.status_code == 204:
+        loading_phold.empty()  # remove loading text
+        col5.write('Loaded')
+
+      # # download data file from remote
+      # ssh = paramiko.SSHClient()
+      # ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
+      # private_key = paramiko.RSAKey.from_private_key_file('key_for_ssh')
+      # ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
+      # sftp = ssh.open_sftp()
+      # #remote_file_path = os.path.join("/home/kangle", file["path"], file["name"])
+      # remote_file_path = os.path.join("/home/kangle", file["path"], "test.txt") # for testing
+      # local_file_path = file["name"]
+      # sftp.get(remote_file_path, local_file_path)
+      # sftp.close()
+      # ssh.close()
+
+      # loading_phold.empty()  # remove loading text
+      # col5.write('Loaded')

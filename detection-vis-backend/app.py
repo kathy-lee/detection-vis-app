@@ -1,8 +1,10 @@
 import uuid
 #import cv2
+import os
 import uvicorn
+import paramiko
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
-
+from fastapi import Response, status
 #from PIL import Image
 from typing import List
 from sqlalchemy.orm import Session
@@ -70,21 +72,20 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
         raise HTTPException(status_code=404, detail="Dataset not found")
     return datasetfiles
 
-# @app.post("/download")
-# async def download_file(item: Item):
-#     ssh = paramiko.SSHClient()
-#     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#     ssh.connect('hostname', username='username', password='password')
-
-#     sftp = ssh.open_sftp()
-#     remote_file_path = "/path/on/remote/server/" + item.file
-#     local_file_path = "/path/on/local/machine/" + item.file
-#     sftp.get(remote_file_path, local_file_path)
-
-#     sftp.close()
-#     ssh.close()
-
-#     return {"status": "File download initiated for " + item.file}
+@app.get("/download")
+async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
+    private_key = paramiko.RSAKey.from_private_key_file('id_rsa')
+    ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
+    sftp = ssh.open_sftp()
+    #remote_file_path = os.path.join("/home/kangle", file_path, file_name)
+    remote_file_path = os.path.join("/home/kangle", file_path, "test.txt") # for testing
+    local_file_path = file_name
+    sftp.get(remote_file_path, local_file_path)
+    sftp.close()
+    ssh.close()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 

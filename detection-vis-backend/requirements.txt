@@ -8,3 +8,4 @@ loguru>=0.6.0, <0.7.0
 sqlalchemy
 psycopg2-binary
 alembic
+paramiko

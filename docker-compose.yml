@@ -27,6 +27,7 @@ services:
       - 8001:8001
     volumes:
       - ./storage:/storage
+      - /home/kangle/.ssh/id_rsa_mifcom:/opt/id_rsa
     depends_on:
       db:
         condition: service_healthy
