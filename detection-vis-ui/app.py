@@ -3,6 +3,11 @@ import os
 import streamlit as st
 import pandas as pd
 
+st.set_page_config(
+    page_title="Have fun ",
+    page_icon=":red_car:", 
+)
+
 # Define the title 
 st.title("Automotive sensor data visualization web application")
 
@@ -14,7 +19,7 @@ st.title("Automotive sensor data visualization web application")
 
 response = requests.get("http://detection-vis-backend:8001/datasets")  # or your FastAPI server URL
 datasets = response.json()
-# st.json(datasets)
+
 # show datasets on top level
 root_datasets = []
 for d in datasets:
@@ -105,19 +110,3 @@ else:
       if response.status_code == 204:
         loading_phold.empty()  # remove loading text
         col5.write('Loaded')
-
-      # # download data file from remote
-      # ssh = paramiko.SSHClient()
-      # ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
-      # private_key = paramiko.RSAKey.from_private_key_file('key_for_ssh')
-      # ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
-      # sftp = ssh.open_sftp()
-      # #remote_file_path = os.path.join("/home/kangle", file["path"], file["name"])
-      # remote_file_path = os.path.join("/home/kangle", file["path"], "test.txt") # for testing
-      # local_file_path = file["name"]
-      # sftp.get(remote_file_path, local_file_path)
-      # sftp.close()
-      # ssh.close()
-
-      # loading_phold.empty()  # remove loading text
-      # col5.write('Loaded')
