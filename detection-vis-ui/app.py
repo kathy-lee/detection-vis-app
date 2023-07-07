@@ -1,6 +1,7 @@
 import requests
 import os
 import streamlit as st
+from streamlit_extras.switch_page_button import switch_page
 import pandas as pd
 
 st.set_page_config(
@@ -39,6 +40,7 @@ for d in datasets:
   if d["parent_id"] == dataset["id"]:
     subdatasets.append(d)
 
+  datafile_chosen = {}
 if subdatasets:
   # show subdataset in tab page
   subdataset_tabs = st.tabs([i["name"] for i in subdatasets])
@@ -68,11 +70,21 @@ if subdatasets:
         do_action = button_phold.button(button_type, key=button_index)
         button_index = button_index + 1
         if do_action:
-          bagfile = file
-          # response = requests.post(f"http://backend:8080/load/{file}", file=bagfile)
-          # datafile = response.json()
+          datafile_chosen = file
+          if 'datafile_chosen' not in st.session_state:
+            st.session_state['datafile_chosen'] = datafile_chosen
           button_phold.empty()  #  remove button
-          col5.write('Loading...')
+          loading_phold = col5.empty()  # create another placeholder for loading
+          loading_phold.write('Loading...')
+          params = {
+            "file_path": file["path"],
+            "file_name": file["name"],
+          }
+          response = requests.get("http://detection-vis-backend:8001/download", params=params)
+          if response.status_code == 204:
+            loading_phold.empty()  # remove loading text
+            col5.write('Loaded')
+            switch_page("get features")
     index = index + 1
 else:
   button_index = 0
@@ -98,10 +110,12 @@ else:
     do_action = button_phold.button(button_type, key=button_index)
     button_index = button_index + 1
     if do_action:
+      datafile_chosen = file
+      if 'datafile_chosen' not in st.session_state:
+        st.session_state['datafile_chosen'] = datafile_chosen
       button_phold.empty()  #  remove button
       loading_phold = col5.empty()  # create another placeholder for loading
       loading_phold.write('Loading...')
-      
       params = {
         "file_path": file["path"],
         "file_name": file["name"],
@@ -110,3 +124,6 @@ else:
       if response.status_code == 204:
         loading_phold.empty()  # remove loading text
         col5.write('Loaded')
+        switch_page("get features")
+
+
