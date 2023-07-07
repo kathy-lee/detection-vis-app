@@ -29,6 +29,17 @@ class File(BaseModel):
     description: str
     size: str
     path: str
+    ADC: bool
+    RAD: bool
+    RA: bool
+    AD: bool
+    RD: bool
+    spectrogram: bool
+    radarPC: bool
+    lidarPC: bool
+    image: bool
+    config: str  
+    parse: str
     directory_id: int
     
 

@@ -63,7 +63,7 @@ if subdatasets:
         col1.write(no)  
         col2.write(file["name"])  
         col3.write(file["description"])  
-        col4.write("1GB") 
+        col4.write(file["size"]) 
         # last column
         button_type = "Load" 
         button_phold = col5.empty()  # create a placeholder

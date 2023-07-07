@@ -1,5 +1,5 @@
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 
 
@@ -21,7 +21,6 @@ class Directory(Base):
     description = Column(String, index=True)
     parent_id = Column(Integer, ForeignKey("directories.id"))  # Parent directory
 
-
     files = relationship("File", back_populates="directory")
     subdirectories = relationship("Directory")  # Subdirectories
 
@@ -33,6 +32,20 @@ class File(Base):
     description = Column(String, index=True)
     size = Column(String, index=True)
     path = Column(String, index=True)
+    # raw data type
+    ADC = Column(Boolean, index=True)
+    RAD = Column(Boolean, index=True)
+    RA = Column(Boolean, index=True)
+    AD = Column(Boolean, index=True)
+    RD = Column(Boolean, index=True)
+    spectrogram = Column(Boolean, index=True)
+    radarPC = Column(Boolean, index=True)
+    lidarPC = Column(Boolean, index=True)
+    image = Column(Boolean, index=True)
+    # config file path
+    config = Column(String, index=True)
+    # parse class
+    parse = Column(String, index=True)
     directory_id = Column(Integer, ForeignKey("directories.id"))  # The directory the file is in
 
     directory = relationship("Directory", back_populates="files")

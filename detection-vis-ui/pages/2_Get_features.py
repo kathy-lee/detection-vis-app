@@ -9,9 +9,9 @@ st.set_page_config(
 )
 
 
-# datafile_chosen = st.session_state.datafile_chosen
-# st.info(f"You have chosen {datafile_chosen['name']} data file.")
-# st.json(datafile_chosen)
+datafile_chosen = st.session_state.datafile_chosen
+st.info(f"You have chosen {datafile_chosen['name']} data file.")
+st.json(datafile_chosen)
 
 def show_next_spectrogram(length):
   # Increments the counter to get next photo
@@ -41,7 +41,6 @@ def show_last_image(length):
     st.session_state.counter_image = length-1
 
 
-
 def make_grid(cols,rows):
   grid = [0]*cols
   for i in range(cols):
@@ -50,12 +49,11 @@ def make_grid(cols,rows):
   return grid
 
 
-grid = make_grid(2,2)
+# layout of the page
+grid = make_grid(2,1)
 
-
-
-datafile_chosen = {}
-datafile_chosen["spectrogram"] = True
+# datafile_chosen = {}
+# datafile_chosen["spectrogram"] = True
 if datafile_chosen["spectrogram"]:
   grid[0][0].header(f"Spectrogram feature")
 
@@ -78,7 +76,7 @@ col1_spectrogram.write(f"Index : {st.session_state.counter_spectrogram}")
 
 
 # show camera images
-datafile_chosen["image"] = True
+# datafile_chosen["image"] = True
 if datafile_chosen["image"]:
   grid[1][0].header(f"Camera images")
 
