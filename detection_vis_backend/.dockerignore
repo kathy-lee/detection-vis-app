@@ -1,6 +1,6 @@
 .vscode
 .venv
-detection-vis-ui
+detection_vis_ui
 *.log
 .git
 .gitignore

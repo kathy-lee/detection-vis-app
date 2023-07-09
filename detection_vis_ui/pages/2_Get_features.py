@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 import os
 import time
 
@@ -86,6 +87,15 @@ if 'counter_image' not in st.session_state:
   st.session_state.counter_image = 0
 
 # Get list of images in folder
+params = {
+  "feature_name": "image",
+  "file_path": datafile_chosen["path"],
+  "file_name": datafile_chosen["name"],
+  "parser": datafile_chosen["parse"],
+}
+response = requests.get("http://detection_vis_backend:8001/feature/{datafile_chosen['parse']/image/0}", params=params)
+
+files = response.json()
 feature_subpath = r"images"
 feature_set = [os.path.join(feature_subpath,f) for f in os.listdir(feature_subpath)]
 col1_image.write(f"Total frames: {len(feature_set)}")

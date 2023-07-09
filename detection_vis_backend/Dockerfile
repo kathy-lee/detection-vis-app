@@ -9,16 +9,16 @@ COPY . .
 # ADD data /opt/data
 # ADD alembic /opt/alembic
 # ADD alembic.ini /opt/alembic.ini
-# ADD detection-vis-backend /opt/detection-vis-backend
+# ADD detection_vis_backend /opt/detection_vis_backend
 
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r /opt/detection-vis-backend/requirements.txt
+RUN pip install --no-cache-dir -r /opt/detection_vis_backend/requirements.txt
 
-RUN chmod +x /opt/detection-vis-backend/run.sh
+RUN chmod +x /opt/detection_vis_backend/run.sh
 RUN chown -R detect-vis-api-user:detect-vis-api-user ./
 
 USER detect-vis-api-user
 
 EXPOSE 8001
 
-CMD ["bash", "detection-vis-backend/run.sh"]
+CMD ["bash", "detection_vis_backend/run.sh"]

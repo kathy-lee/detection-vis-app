@@ -1,21 +1,21 @@
 version: '3'
 
 services:
-  detection-vis-ui:
+  detection_vis_ui:
     build: 
-      dockerfile: detection-vis-ui/Dockerfile
+      dockerfile: detection_vis_ui/Dockerfile
     # extra_hosts:
     #   - "host.docker.internal:host-gateway"
     ports:
       - 8501:8501
     depends_on:
-      - detection-vis-backend
+      - detection_vis_backend
     volumes:
         - ./storage:/storage
   
-  detection-vis-backend:
+  detection_vis_backend:
     build: 
-      dockerfile: detection-vis-backend/Dockerfile
+      dockerfile: detection_vis_backend/Dockerfile
     environment:
       - PYTHONPATH=/opt
       - DB_HOST=0.0.0.0

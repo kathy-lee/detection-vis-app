@@ -1,6 +1,6 @@
 import uuid
-#import cv2
 import os
+import logging
 import uvicorn
 import paramiko
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
@@ -9,8 +9,12 @@ from fastapi import Response, status
 from typing import List
 from sqlalchemy.orm import Session
 
+# import sys
+# sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
+
 from data import crud, models, schemas
 from data.database import SessionLocal, engine
+from detection_vis_backend.processing import DatasetFactory, RaDICaL, RADIal
 
 
 # models.Base.metadata.create_all(bind=engine)
@@ -55,15 +59,32 @@ def get_db():
     finally:
         db.close()
 
+
 @app.get("/users", response_model=List[schemas.User])
 def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    users = crud.get_users(db)
+    try:
+        users = crud.get_users(db)
+    except Exception as e:
+        logging.error(f"An error occurred during getting the users: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred while getting the users.")
+
+    if not users:
+        raise HTTPException(status_code=404, detail="No users found.")
     return users
+
 
 @app.get("/datasets", response_model=List[schemas.Directory])
 def read_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    datasets = crud.get_datasets(db)
+    try:
+        datasets = crud.get_datasets(db)
+    except Exception as e:
+        logging.error(f"An error occurred during reading the datasets: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred while getting the datasets.")
+
+    if not datasets:
+        raise HTTPException(status_code=404, detail="No datasets found.")
     return datasets
+
 
 @app.get("/dataset/{id}", response_model=List[schemas.File])
 def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -71,6 +92,7 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
     if datasetfiles is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return datasetfiles
+
 
 @app.get("/download")
 async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -99,6 +121,23 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
         ssh.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
+@app.get("/feature/{parser}/{feature_name}/{id}")
+async def get_feature(feature_name: str, id: int, file_path: str, file_name: str, parser: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        DataInst = DatasetFactory.get_instance(parser)
+        DataInst.parse()
+    except Exception as e:
+        logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
+    
+    try:
+        feature = DataInst.images[id]
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"Image ID {id} is out of range.")
+
+    return feature
+    
 
 
 if __name__ == "__main__":
