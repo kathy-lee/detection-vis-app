@@ -1,4 +1,5 @@
 import rosbag
+import os
 import numpy as np
 
 from detection_vis_backend.radarframe import RadarFrame
@@ -22,41 +23,46 @@ class DatasetFactory:
 
 
 class RaDICaL:
-
-    images = []
+    name = ""
+    image = []
+    depth_image = []
     RAD = []
     pointcloud = []
 
     def __init__(self):
         self.name = "RaDICaL dataset instance"
 
-    def parse(config):
-        bag = rosbag.Bag()
+    def parse(self, file_path, file_name, config):
+        file = os.path.join(file_path, file_name)
+        bag = rosbag.Bag(file)
         topics = bag.get_type_and_topic_info()[1].keys()
 
-        for topic, msg, t in bag.read_messages(topics=['/camera/color/image_raw']):
-            # print(t.secs)
-            # print(t.nsecs)
-            # print(msg.header.stamp.secs)
-            # print(msg.header.stamp.nsecs)
-            # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
-            assert msg.encoding == "rgb8"
-            dtype = np.dtype("uint8")  # 8-bit color image
-            dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
-            image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
+        # for topic, msg, t in bag.read_messages(topics=['/camera/color/image_raw']):
+        #     # print(t.secs)
+        #     # print(t.nsecs)
+        #     # print(msg.header.stamp.secs)
+        #     # print(msg.header.stamp.nsecs)
+        #     # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
+        #     assert msg.encoding == "rgb8"
+        #     dtype = np.dtype("uint8")  # 8-bit color image
+        #     dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
+        #     image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
+        #     self.image.append(image)
 
-        for topic, msg, t in bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw']):
-            # print(t.secs)
-            # print(t.nsecs)
-            # print(msg.header.stamp.secs)
-            # print(msg.header.stamp.nsecs)
-            # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
-            assert msg.encoding == "16UC1"
-            dtype = np.dtype("uint16")  # 16-bit grayscale image
-            dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
-            image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
+        # for topic, msg, t in bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw']):
+        #     # print(t.secs)
+        #     # print(t.nsecs)
+        #     # print(msg.header.stamp.secs)
+        #     # print(msg.header.stamp.nsecs)
+        #     # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
+        #     assert msg.encoding == "16UC1"
+        #     dtype = np.dtype("uint16")  # 16-bit grayscale image
+        #     dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
+        #     image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
+        #     self.depth_image.append(image)
 
-        radar_config = read_radar_params('/home/kangle/projects/radical_sdk/samples/indoor_human_rcs.cfg')
+        radar_config = read_radar_params(config)
+        print("#######################################finished radar config parsing#########################")
         rf = RadarFrame(radar_config)
         for topic, msg, t in bag.read_messages(topics=['/radar_data']):
             #   print(t.secs)
@@ -74,6 +80,7 @@ class RaDICaL:
             transformed = np.swapaxes(complex_arr, 1, 2)
             print(transformed.shape)
             beamformed_range_azimuth = rf.compute_range_azimuth(transformed) 
+            self.RA.append(beamformed_range_azimuth)
 
         bag.close()
 
@@ -132,6 +139,5 @@ class RADIal:
         print("")
 
 
-dataset_factory = DatasetFactory()
 
 

@@ -12,7 +12,7 @@ st.set_page_config(
 
 datafile_chosen = st.session_state.datafile_chosen
 st.info(f"You have chosen {datafile_chosen['name']} data file.")
-st.json(datafile_chosen)
+# st.json(datafile_chosen)
 
 def show_next_spectrogram(length):
   # Increments the counter to get next photo
@@ -55,54 +55,54 @@ grid = make_grid(2,1)
 
 # datafile_chosen = {}
 # datafile_chosen["spectrogram"] = True
+# datafile_chosen["image"] = True
+
 if datafile_chosen["spectrogram"]:
   grid[0][0].header(f"Spectrogram feature")
 
-col1_spectrogram,col2_spectrogram = grid[0][0].columns(2)
+  col1_spectrogram,col2_spectrogram = grid[0][0].columns(2)
 
-if 'counter_spectrogram' not in st.session_state: 
-  st.session_state.counter_spectrogram = 0
+  if 'counter_spectrogram' not in st.session_state: 
+    st.session_state.counter_spectrogram = 0
 
-# Get list of images in folder
-feature_spectrogram_subpath = r"spectrograms"
-feature_spectrogram_set = [os.path.join(feature_spectrogram_subpath,f) for f in os.listdir(feature_spectrogram_subpath)]
-col1_spectrogram.write(f"Total frames: {len(feature_spectrogram_set)}")
-col1_spectrogram.write(feature_spectrogram_set)
+  # Get list of images in folder
+  feature_spectrogram_subpath = r"spectrograms"
+  feature_spectrogram_set = [os.path.join(feature_spectrogram_subpath,f) for f in os.listdir(feature_spectrogram_subpath)]
+  col1_spectrogram.write(f"Total frames: {len(feature_spectrogram_set)}")
+  col1_spectrogram.write(feature_spectrogram_set)
 
-forward_spec_btn = col1_spectrogram.button("Show next frame ⏭️",on_click=show_next_spectrogram,args=([len(feature_spectrogram_set)]), key="spectrogram_forward_btn")
-backward_spec_btn = col1_spectrogram.button("Show last frame ⏪",on_click=show_last_spectrogram,args=([len(feature_spectrogram_set)]), key="spectrogram_backward_btn")
-photo = feature_spectrogram_set[st.session_state.counter_spectrogram]
-col2_spectrogram.image(photo,caption=photo)
-col1_spectrogram.write(f"Index : {st.session_state.counter_spectrogram}")
+  forward_spec_btn = col1_spectrogram.button("Show next frame ⏭️",on_click=show_next_spectrogram,args=([len(feature_spectrogram_set)]), key="spectrogram_forward_btn")
+  backward_spec_btn = col1_spectrogram.button("Show last frame ⏪",on_click=show_last_spectrogram,args=([len(feature_spectrogram_set)]), key="spectrogram_backward_btn")
+  photo = feature_spectrogram_set[st.session_state.counter_spectrogram]
+  col2_spectrogram.image(photo,caption=photo)
+  col1_spectrogram.write(f"Index : {st.session_state.counter_spectrogram}")
 
 
 # show camera images
-# datafile_chosen["image"] = True
 if datafile_chosen["image"]:
   grid[1][0].header(f"Camera images")
 
-col1_image,col2_image = grid[1][0].columns(2)
+  col1_image,col2_image = grid[1][0].columns(2)
 
-if 'counter_image' not in st.session_state: 
-  st.session_state.counter_image = 0
+  if 'counter_image' not in st.session_state: 
+    st.session_state.counter_image = 0
 
-# Get list of images in folder
-params = {
-  "feature_name": "image",
-  "file_path": datafile_chosen["path"],
-  "file_name": datafile_chosen["name"],
-  "parser": datafile_chosen["parse"],
-}
-response = requests.get("http://detection_vis_backend:8001/feature/{datafile_chosen['parse']/image/0}", params=params)
+  # Get list of images in folder
+  params = {
+    "file_path": datafile_chosen["path"],
+    "file_name": datafile_chosen["name"],
+    "config": datafile_chosen["config"],
+  }
+  response = requests.get(f"http://detection_vis_backend:8001/feature/{datafile_chosen['parse']}/image/0", params=params)
+  feature = response.json()
 
-files = response.json()
-feature_subpath = r"images"
-feature_set = [os.path.join(feature_subpath,f) for f in os.listdir(feature_subpath)]
-col1_image.write(f"Total frames: {len(feature_set)}")
-col1_image.write(feature_set)
-forward_imag_btn = col1_image.button("Show next frame ⏭️",on_click=show_next_image,args=([len(feature_set)]), key="image_forward_btn")
-backward_imag_btn = col1_image.button("Show last frame ⏪",on_click=show_last_image,args=([len(feature_set)]), key="image_backward_btn")
-photo = feature_set[st.session_state.counter_image]
-col2_image.image(photo,caption=photo)
-col1_image.write(f"Index : {st.session_state.counter_image}")
+  feature_subpath = r"images"
+  feature_set = [os.path.join(feature_subpath,f) for f in os.listdir(feature_subpath)]
+  col1_image.write(f"Total frames: {len(feature_set)}")
+  col1_image.write(feature_set)
+  forward_imag_btn = col1_image.button("Show next frame ⏭️",on_click=show_next_image,args=([len(feature_set)]), key="image_forward_btn")
+  backward_imag_btn = col1_image.button("Show last frame ⏪",on_click=show_last_image,args=([len(feature_set)]), key="image_backward_btn")
+  photo = feature_set[st.session_state.counter_image]
+  col2_image.image(photo,caption=photo)
+  col1_image.write(f"Index : {st.session_state.counter_image}")
 
