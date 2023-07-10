@@ -42,6 +42,7 @@ class File(Base):
     radarPC = Column(Boolean, index=True)
     lidarPC = Column(Boolean, index=True)
     image = Column(Boolean, index=True)
+    depth_image = Column(Boolean, index=True)
     # config file path
     config = Column(String, index=True)
     # parse class

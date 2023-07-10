@@ -38,6 +38,7 @@ class File(BaseModel):
     radarPC: bool
     lidarPC: bool
     image: bool
+    depth_image: bool
     config: str  
     parse: str
     directory_id: int
