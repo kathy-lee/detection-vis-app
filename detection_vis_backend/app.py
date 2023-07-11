@@ -96,44 +96,48 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
 
 @app.get("/download")
 async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    # ssh = paramiko.SSHClient()
-    # ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
-    # private_key = paramiko.RSAKey.from_private_key_file('id_rsa')
-    # #ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
-    # try:
-    #     ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
-    # except paramiko.AuthenticationException:
-    #     return Response(content="SSH connection failed", status_code=status.HTTP_401_UNAUTHORIZED)
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
+    private_key = paramiko.RSAKey.from_private_key_file("id_rsa")
+    #ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
+    try:
+        ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
+    except paramiko.AuthenticationException:
+        return Response(content="SSH connection failed", status_code=status.HTTP_401_UNAUTHORIZED)
     
-    # sftp = ssh.open_sftp()
-    # remote_file_path = os.path.join("/home/kangle", file_path, file_name)
-    # # remote_file_path = os.path.join("/home/kangle", file_path, "test.txt") # for testing
-    # local_file_path = file_name
-    # # sftp.get(remote_file_path, local_file_path)
-    # # sftp.close()
-    # # ssh.close()
-    # try:
-    #     sftp.get(remote_file_path, local_file_path)
-    # except IOError:
-    #     return Response(content="File not found", status_code=status.HTTP_404_NOT_FOUND)
-    # finally:
-    #     sftp.close()
-    #     ssh.close()
+    sftp = ssh.open_sftp()
+    remote_file_path = os.path.join("/home/kangle", file_path, file_name)
+    # remote_file_path = os.path.join("/home/kangle", file_path, "test.txt") # for testing
+    local_file_path = file_name
+    # sftp.get(remote_file_path, local_file_path)
+    # sftp.close()
+    # ssh.close()
+    try:
+        sftp.get(remote_file_path, local_file_path)
+    except IOError:
+        return Response(content="File not found", status_code=status.HTTP_404_NOT_FOUND)
+    finally:
+        sftp.close()
+        ssh.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-
-@app.get("/feature/{parser}/{feature_name}/{id}")
-async def get_feature(feature_name: str, id: int, parser: str, file_path: str, file_name: str, config: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/parse")
+async def parse_data(parser: str, file_path: str, file_name: str, config: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         dataset_factory = DatasetFactory()
-        DataInst = dataset_factory.get_instance(parser)
-        DataInst.parse(file_path, file_name, config)
+        dataset_inst = dataset_factory.get_instance(parser)
+        dataset_inst.parse(file_path, file_name, config)
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
-    
+
+
+@app.get("/feature/{feature_name}/{id}")
+async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
-        feature = DataInst.images[id]
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(parser)
+        feature = dataset_inst.RA[id].tolist()
     except IndexError:
         raise HTTPException(status_code=404, detail=f"Image ID {id} is out of range.")
 
