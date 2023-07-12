@@ -28,6 +28,7 @@ services:
     volumes:
       - ./storage:/storage
       - /home/kangle/.ssh/id_rsa_mifcom:/opt/id_rsa
+      - /home/kangle/projects/indoor_human_rcs.cfg:/opt/indoor_human_rcs.cfg # for testing
     depends_on:
       db:
         condition: service_healthy

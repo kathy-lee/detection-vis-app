@@ -62,8 +62,11 @@ for idx, (i, f) in enumerate(zip(rawset, featureset)):
       placeholder5 = st.empty()
       placeholder6 = st.empty()
       
-      do_action = placeholder1.button("Get feature")
-      if do_action:
+      load_action = placeholder1.button("Get feature")
+      # if "load_state" not in st.session_state:
+      #   st.session_state["load_state"] = False
+      if load_action:# or st.session_state["load_state"]:
+        #st.session_state["load_state"] = True
         placeholder1.empty()
         st.session_state['lidarstatus'] = True
         i = 'lidar'
@@ -77,6 +80,8 @@ for idx, (i, f) in enumerate(zip(rawset, featureset)):
           placeholder5.image(photo,caption=photo)
           placeholder6.write(f"Index : {st.session_state[i]}")
             
+
+#st.info(f"load state: {st.session_state['load_state']}")
 
 # # layout of the page
 # grid = make_grid(2,1)

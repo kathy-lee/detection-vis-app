@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import os
 import time
+import numpy as np
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="Getfeature",
@@ -9,10 +11,23 @@ st.set_page_config(
     layout="wide",
 )
 
+if 'datafile_chosen' not in st.session_state:
+  st.info("Please choose a dataset first.")
+  st.stop()
 
 datafile_chosen = st.session_state.datafile_chosen
 st.info(f"You have chosen {datafile_chosen['name']} data file.")
 # st.json(datafile_chosen)
+params = {
+    "file_path": datafile_chosen["path"],
+    "file_name": datafile_chosen["name"],
+    "config": datafile_chosen["config"],
+    "parser": datafile_chosen["parse"],
+}
+response = requests.get(f"http://detection_vis_backend:8001/parse", params=params)
+if response.status_code == 204:
+  st.info("Got feature.")
+
 
 def show_next_spectrogram(length):
   # Increments the counter to get next photo
@@ -89,20 +104,26 @@ if datafile_chosen["image"]:
 
   # Get list of images in folder
   params = {
-    "file_path": datafile_chosen["path"],
-    "file_name": datafile_chosen["name"],
-    "config": datafile_chosen["config"],
+    "file_path": datafile_chosen["parse"],
   }
-  response = requests.get(f"http://detection_vis_backend:8001/feature/{datafile_chosen['parse']}/image/0", params=params)
+  response = requests.get(f"http://detection_vis_backend:8001/feature/image/0", params=params)
   feature = response.json()
+  photo = np.array(feature)
+  # photo = photo - np.min(photo)
+  # photo = photo / np.max(photo)
 
-  feature_subpath = r"images"
-  feature_set = [os.path.join(feature_subpath,f) for f in os.listdir(feature_subpath)]
-  col1_image.write(f"Total frames: {len(feature_set)}")
-  col1_image.write(feature_set)
-  forward_imag_btn = col1_image.button("Show next frame ⏭️",on_click=show_next_image,args=([len(feature_set)]), key="image_forward_btn")
-  backward_imag_btn = col1_image.button("Show last frame ⏪",on_click=show_last_image,args=([len(feature_set)]), key="image_backward_btn")
-  photo = feature_set[st.session_state.counter_image]
-  col2_image.image(photo,caption=photo)
-  col1_image.write(f"Index : {st.session_state.counter_image}")
+  fig, ax = plt.subplots(figsize=(5, 5))
+  ax.imshow(photo, aspect='auto')
+  col2_image.pyplot(fig, use_container_width=False)
+
+  # feature_subpath = r"images"
+  # feature_set = [os.path.join(feature_subpath,f) for f in os.listdir(feature_subpath)]
+  # col1_image.write(f"Total frames: {len(feature_set)}")
+  # col1_image.write(feature_set)
+  # forward_imag_btn = col1_image.button("Show next frame ⏭️",on_click=show_next_image,args=([len(feature_set)]), key="image_forward_btn")
+  # backward_imag_btn = col1_image.button("Show last frame ⏪",on_click=show_last_image,args=([len(feature_set)]), key="image_backward_btn")
+  # photo = feature_set[st.session_state.counter_image]
+  #col2_image.image(photo,caption=photo)
+  # col1_image.write(f"Index : {st.session_state.counter_image}")
+  col1_image.write(f"Index : ")
 
