@@ -121,6 +121,7 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
         ssh.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @app.get("/parse")
 async def parse_data(parser: str, file_path: str, file_name: str, config: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
@@ -130,18 +131,61 @@ async def parse_data(parser: str, file_path: str, file_name: str, config: str, s
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
+@app.get("/feature/{feature_name}/size")
+async def get_feature_size(parser: str, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try:
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(parser)
+
+        function_dict = {
+            'RAD': dataset_inst.get_RAD,
+            'RD': dataset_inst.get_RD,
+            'RA': dataset_inst.get_RA,
+            'AD': dataset_inst.get_AD,
+            'spectrogram': dataset_inst.get_spectrogram,
+            'radarPC': dataset_inst.get_radarpointcloud,
+            'lidarPC': dataset_inst.get_lidarpointcloud,
+            'image': dataset_inst.get_image,
+            'depth_image': dataset_inst.depth_image,
+        }
+        feature = function_dict[feature_name]()
+        count = len(feature)
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"Featue {feature_name} doesn't exist.")
+
+    return count
+    
 
 @app.get("/feature/{feature_name}/{id}")
 async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(parser)
-        feature = dataset_inst.RA[id].tolist()
-    except IndexError:
-        raise HTTPException(status_code=404, detail=f"Image ID {id} is out of range.")
+        function_dict = {
+            'RAD': dataset_inst.get_RAD,
+            'RD': dataset_inst.get_RD,
+            'RA': dataset_inst.get_RA,
+            'AD': dataset_inst.get_AD,
+            'spectrogram': dataset_inst.get_spectrogram,
+            'radarPC': dataset_inst.get_radarpointcloud,
+            'lidarPC': dataset_inst.get_lidarpointcloud,
+            'image': dataset_inst.get_image,
+            'depth_image': dataset_inst.depth_image,
+        }
+        features = function_dict[feature_name]()
+        feature = features[id]
 
-    return feature
+        if feature_name == "RAD":
+            serialized_feature = [[[(x.real, x.imag) for x in y] for y in z] for z in feature.tolist()]
+        else:
+            serialized_feature = feature.tolist()
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"Feature ID {id} is out of range.")
+
+    return {"serialized_feature": serialized_feature}
     
 
 
