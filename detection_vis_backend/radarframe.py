@@ -145,7 +145,7 @@ class RadarFrame(object):
         if self.__range_doppler is not None:
             return self.__range_doppler
         else:
-            range_doppler = dsp.doppler_processing(self.raw_cube)
+            range_doppler, _ = dsp.doppler_processing(self.raw_cube)
             self.__range_doppler = range_doppler
             return self.__range_doppler
 
