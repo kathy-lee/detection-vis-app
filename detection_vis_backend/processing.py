@@ -28,7 +28,10 @@ class RaDICaL:
     depth_image = []
     RAD = []
     RA = []
-    pointcloud = []
+    RD = []
+    AD = []
+    radarpointcloud = []
+    spectrogram = []
 
     def __init__(self):
         self.name = "RaDICaL dataset instance"
@@ -52,22 +55,20 @@ class RaDICaL:
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
                 self.image.append(image)
 
-        # for topic, msg, t in bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw']):
-        #     # print(t.secs)
-        #     # print(t.nsecs)
-        #     # print(msg.header.stamp.secs)
-        #     # print(msg.header.stamp.nsecs)
-        #     # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
-        #     assert msg.encoding == "16UC1"
-        #     dtype = np.dtype("uint16")  # 16-bit grayscale image
-        #     dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
-        #     image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
-        #     self.depth_image.append(image)
+        if "/camera/aligned_depth_to_color/image_raw" in topics_dict:
+            for topic, msg, t in bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw']):
+                # print(t.secs)
+                # print(t.nsecs)
+                # print(msg.header.stamp.secs)
+                # print(msg.header.stamp.nsecs)
+                # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
+                assert msg.encoding == "16UC1"
+                dtype = np.dtype("uint16")  # 16-bit grayscale image
+                dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
+                image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
+                self.depth_image.append(image)
 
         if "/radar_data" in topics_dict:
-            # radar_config = read_radar_params(config)
-            radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
-            rf = RadarFrame(radar_config)
             for topic, msg, t in bag.read_messages(topics=['/radar_data']):
                 #   print(t.secs)
                 #   print(t.nsecs  print(t.secs + t.nsecs*1e-9)
@@ -83,32 +84,71 @@ class RaDICaL:
                 #print(complex_arr.shape) # (32, 304, 8)
                 transformed = np.swapaxes(complex_arr, 1, 2)
                 #print(transformed.shape)
-                beamformed_range_azimuth = rf.compute_range_azimuth(transformed) 
-                #print(type(beamformed_range_azimuth), beamformed_range_azimuth.shape)
-                beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))
-                #print(type(beamformed_range_azimuth), beamformed_range_azimuth.shape)
-                self.RA.append(beamformed_range_azimuth)
+                self.RAD.append(transformed)
 
         bag.close()
 
 
-    def get_RAD():
-        print("")
+    def get_RAD(self):
+        return self.RAD
     
-    def get_RA():
-        print("")
+    def get_RA(self):
+        if not self.RA:
+            for x in self.RAD:
+                # radar_config = read_radar_params(config)
+                radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+                rf = RadarFrame(radar_config)
+                beamformed_range_azimuth = rf.compute_range_azimuth(x) 
+                beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))
+                self.RA.append(beamformed_range_azimuth)
+        return self.RA
 
-    def get_RD():
-        print("")
 
-    def get_AD():
-        print("")
+    def get_RD(self):
+        if not self.RD:
+            # radar_config = read_radar_params(config)
+            radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+            rf = RadarFrame(radar_config)
+            range_doppler = rf.range_doppler
+            print(range_doppler.shape, range_doppler[0,0])
+            self.RD = range_doppler
+        return self.RD
 
-    def get_pointcloud():
-        print("")
+    def get_AD(self):
+        for x in self.RAD:
+            # radar_config = read_radar_params(config)
+            # radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+            # rf = RadarFrame(radar_config)
+            y = np.random.rand(30,20)
+            self.AD.append(y)
+        return self.AD
 
-    def get_spectrogram():
-        print("")
+    def get_radarpointcloud(self):
+        for x in self.RAD:
+            # radar_config = read_radar_params(config)
+            # radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+            # rf = RadarFrame(radar_config)
+            y = np.random.rand(30,20)
+            self.radarpointcloud.append(y)
+        return self.radarpointcloud
+
+    def get_lidarpointcloud():
+        return None
+    
+    def get_spectrogram(self):
+        for x in self.RAD:
+            # radar_config = read_radar_params(config)
+            # radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+            # rf = RadarFrame(radar_config)
+            y = np.random.rand(30,20)
+            self.spectrogram.append(y)
+        return self.spectrogram
+
+    def get_image(self):
+        return self.image
+    
+    def get_depth_image(self):
+        return self.depth_image
 
     
 
