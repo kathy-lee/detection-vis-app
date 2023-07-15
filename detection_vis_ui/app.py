@@ -18,7 +18,7 @@ st.title("Automotive sensor data visualization web application")
 # st.json(users)
 # ########################
 
-response = requests.get("http://detection_vis_backend:8001/datasets")  # or your FastAPI server URL
+response = requests.get("http://localhost:8001/datasets")  # or your FastAPI server URL
 datasets = response.json()
 
 # show datasets on top level
@@ -49,7 +49,7 @@ if subdatasets:
   for t in subdataset_tabs:
     with t:
       # Show data files 
-      response = requests.get(f"http://detection_vis_backend:8001/dataset/{subdatasets[index]['id']}")
+      response = requests.get(f"http://localhost:8001/dataset/{subdatasets[index]['id']}")
       files = response.json()
 
       colms = st.columns((1, 2, 2, 1, 1))
@@ -80,7 +80,7 @@ if subdatasets:
             "file_path": file["path"],
             "file_name": file["name"],
           }
-          response = requests.get("http://detection_vis_backend:8001/download", params=params)
+          response = requests.get("http://localhost:8001/download", params=params)
           if response.status_code == 204:
             loading_phold.empty()  # remove loading text
             col5.write('Loaded')
@@ -89,7 +89,7 @@ if subdatasets:
 else:
   button_index = 0
   # Show data files 
-  response = requests.get(f"http://detection_vis_backend:8001/dataset/{dataset['id']}")
+  response = requests.get(f"http://localhost:8001/dataset/{dataset['id']}")
   files = response.json()
 
   colms = st.columns((1, 2, 2, 1, 1))
@@ -120,7 +120,7 @@ else:
         "file_path": file["path"],
         "file_name": file["name"],
       }
-      response = requests.get("http://detection_vis_backend:8001/download", params=params)
+      response = requests.get("http://localhost:8001/download", params=params)
       if response.status_code == 204:
         loading_phold.empty()  # remove loading text
         col5.write('Loaded')

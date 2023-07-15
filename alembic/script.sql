@@ -11,21 +11,23 @@ INSERT INTO directories (name, description, parent_id) VALUES ('50m_collection',
 INSERT INTO directories (name, description, parent_id) VALUES ('RADIal', 'radial description', NULL);
 
 
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('1.bag', 'description', '2.5GB', './1.bag', 2);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2.bag', 'description', '2.5GB', './2.bag', 2);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('3.bag', 'description', '2.5GB', './3.bag', 2);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('1.bag', 'description', '2.5GB', './1.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('2.bag', 'description', '2.5GB', './2.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('3.bag', 'description', '2.5GB', './3.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+                                                                               
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('2020-03-05-16-35-19.bag', 'description', '44GB', 'radical/indoor_human', 3, 'radical/radarcfg', 'RaDICaL', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('2020-04-10-13-37-01.bag', 'description', '3.8GB', 'radical/indoor_human', 3, 'radical/radarcfg', 'RaDICaL', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('2020-03-10-15-55-08.bag', 'description', '57MB', 'radical/indoor_human', 3, 'radical/radarcfg', 'RaDICaL', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE);
+                                                                               
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('4.bag', 'description', '2.5GB', './4.bag', 4, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('5.bag', 'description', '2.5GB', './5.bag', 4, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('6.bag', 'description', '2.5GB', './6.bag', 4, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+                                                                               
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('7.bag', 'description', '2.5GB', './7.bag', 5, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('8.bag', 'description', '2.5GB', './8.bag', 5, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('9.bag', 'description', '2.5GB', './9.bag', 5, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE);
+                                                                               
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('RECORD@2020-11-22_12.54.38.zip', 'description', '2.5GB', 'radial',6, '', 'RADIal', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image) VALUES ('RECORD@2020-11-22_12.48.07.zip', 'description', '2.5GB', 'radial',6, '', 'RADIal', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
 
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-05-16-35-19.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-06-15-00-49.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('2020-03-10-15-55-08.bag', 'description', '2.5GB', 'dataset/indoor_human', 3);
 
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('4.bag', 'description', '2.5GB', './4.bag', 4);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('5.bag', 'description', '2.5GB', './5.bag', 4);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('6.bag', 'description', '2.5GB', './6.bag', 4);
-
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('7.bag', 'description', '2.5GB', './7.bag', 5);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('8.bag', 'description', '2.5GB', './8.bag', 5);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('9.bag', 'description', '2.5GB', './9.bag', 5);
-
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.54.38.zip', 'description', '2.5GB', 'dataset/radial',6);
-INSERT INTO files (name, description, size, path, directory_id) VALUES ('RECORD@2020-11-22_12.48.07.zip', 'description', '2.5GB', 'dataset/radial',6);

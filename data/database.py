@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 
 #DATABASE_URL = "postgresql://user:password@localhost:5432/dbname"
-DATABASE_URL = "postgresql://postgres:postgres@db:5432/postgres"
+DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
 # DATABASE_URL = "postgresql://{}:{}@{}:{}/{}?sslmode=disable".format(
 #         quote(os.environ["DB_USER"]),
 #         quote(os.environ["DB_PSWD"]),
