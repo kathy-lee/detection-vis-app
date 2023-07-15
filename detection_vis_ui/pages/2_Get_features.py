@@ -5,6 +5,9 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
+
 st.set_page_config(
     page_title="Getfeature",
     page_icon=":red_car:", 
@@ -29,7 +32,7 @@ if 'datafile_parsed' not in st.session_state:
         "config": datafile_chosen["config"],
         "parser": datafile_chosen["parse"],
     }
-    response = requests.get(f"http://detection_vis_backend:8001/parse", params=params)
+    response = requests.get(f"http://{backend_service}:8001/parse", params=params)
   if response.status_code != 204:
     st.info("An error occurred in parsing data file.")
     st.stop()
@@ -92,13 +95,13 @@ for idx, (counter, feature) in enumerate(zip(counters, features)):
       # photo = fileset[st.session_state[counter]]
       # st.image(photo,caption=photo)
 
-      response = requests.get(f"http://detection_vis_backend:8001/feature/{feature}/size", params=params)
+      response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
       feature_size = response.json()
       st.write(f"Total frames: {feature_size}")
       forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
       backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
       params = {"parser": datafile_chosen["parse"]}
-      response = requests.get(f"http://detection_vis_backend:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+      response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
       feature_data = response.json()
       
       if feature == "RAD":
@@ -136,13 +139,13 @@ for idx, (counter, feature) in enumerate(zip(counters, features)):
           # placeholders[idx][4].image(photo,caption=photo) 
 
           with st.spinner(text="Getting the feature in progress..."):
-            response = requests.get(f"http://detection_vis_backend:8001/feature/{feature}/size", params=params)
+            response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
             feature_size = response.json()
           
           placeholders[idx][1].write(f"Total frames: {feature_size}")
           forward_btn = placeholders[idx][2].button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
           backward_btn = placeholders[idx][3].button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
-          response = requests.get(f"http://detection_vis_backend:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+          response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
           feature_data = response.json()
           if feature == "RAD":
             serialized_feature = feature_data["serialized_feature"]

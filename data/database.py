@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 
 #DATABASE_URL = "postgresql://user:password@localhost:5432/dbname"
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+#DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
 # DATABASE_URL = "postgresql://{}:{}@{}:{}/{}?sslmode=disable".format(
 #         quote(os.environ["DB_USER"]),
 #         quote(os.environ["DB_PSWD"]),
@@ -14,9 +14,9 @@ DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
 #         os.environ["DB_PORT"],
 #         os.environ["DB_NAME"],
 #     )
+database_url = os.getenv('DATABASE_URL')
 
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(database_url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # # Create a new session

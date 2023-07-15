@@ -98,15 +98,25 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
 async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
-    private_key = paramiko.RSAKey.from_private_key_file("id_rsa")
-    #ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
+    try:
+        # private_key = paramiko.RSAKey.from_private_key_file("id_rsa")
+        private_key = paramiko.RSAKey.from_private_key_file("/home/kangle/.ssh/id_rsa_mifcom")
+    except paramiko.PasswordRequiredException:
+        print("Private key is encrypted, password is required")
+    except paramiko.SSHException:
+        print("Private key file is not a valid RSA private key file")
+    except FileNotFoundError:
+        print("Private key file does not exist")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
     try:
         ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
     except paramiko.AuthenticationException:
         return Response(content="SSH connection failed", status_code=status.HTTP_401_UNAUTHORIZED)
     
     sftp = ssh.open_sftp()
-    remote_file_path = os.path.join("/home/kangle", file_path, file_name)
+    remote_file_path = os.path.join("/home/kangle/dataset", file_path, file_name)
     # remote_file_path = os.path.join("/home/kangle", file_path, "test.txt") # for testing
     local_file_path = file_name
     # sftp.get(remote_file_path, local_file_path)
