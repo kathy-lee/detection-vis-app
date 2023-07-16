@@ -46,8 +46,6 @@ for d in datasets:
 
 if 'datafiles_chosen' not in st.session_state:
   st.session_state.datafiles_chosen = []
-if 'checkbox' not in st.session_state:
-  st.session_state.checkbox = []
 
 if subdatasets:
   # show subdatasets in tab pages
@@ -72,20 +70,21 @@ if subdatasets:
         col3.write(file["description"])  
         col4.write(file["size"]) 
         # last column
-        if f"{dataset['name']}_{index}_{file['name']}" not in st.session_state:
-          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
-          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = False
-        elif st.session_state[f"{dataset['name']}_{index}_{file['name']}"]:
-          checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
+        checkbox = f"{dataset['name']}_{index}_{file['name']}"
+        if  checkbox not in st.session_state:
+          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{checkbox}")
+          st.session_state[checkbox] = False
+        elif st.session_state[checkbox]:
+          checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{checkbox}")
         else:
-          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
+          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{checkbox}")
 
         if checkbox_status and file not in st.session_state.datafiles_chosen:
           st.session_state.datafiles_chosen.append(file)
-          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = True
+          st.session_state[checkbox] = True
 
         if not checkbox_status and file in st.session_state.datafiles_chosen:
-          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = False
+          st.session_state[checkbox] = False
           st.session_state.datafiles_chosen.remove(file)
 
     index = index + 1
@@ -107,13 +106,14 @@ else:
     col3.write(file["description"])  
     col4.write(file["size"]) 
     # last column
-    if f"{dataset['name']}_{file['name']}" not in st.session_state:
-      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{file['name']}")
+    checkbox = f"{dataset['name']}_{file['name']}"
+    if checkbox not in st.session_state:
+      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{checkbox}")
       st.session_state[f"{dataset['name']}_{file['name']}"] = False
     elif st.session_state[f"{dataset['name']}_{file['name']}"]:
-      checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{dataset['name']}_{file['name']}")
+      checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{checkbox}")
     else:
-      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{file['name']}")
+      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{checkbox}")
 
     if checkbox_status and file not in st.session_state.datafiles_chosen:
       st.session_state.datafiles_chosen.append(file)
@@ -129,3 +129,5 @@ button_click = st.button("Check feature")
 if button_click:
   #check_datafiles(st.session_state.datafiles_chosen)
   switch_page("get features")
+
+  

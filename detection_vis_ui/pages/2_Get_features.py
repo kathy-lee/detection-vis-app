@@ -14,30 +14,37 @@ st.set_page_config(
     layout="wide",
 )
 
-if 'datafile_chosen' not in st.session_state:
+if 'datafiles_chosen' not in st.session_state:
   st.info("Please choose a dataset first.")
   st.stop()
 
 
-datafile_chosen = st.session_state.datafile_chosen
-st.info(f"You have chosen {datafile_chosen['name']} data file.")
-# st.json(datafile_chosen)
+datafiles_chosen = st.session_state.datafiles_chosen
+datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen])
 
-if 'datafile_parsed' not in st.session_state:
-  st.session_state.datafile_parsed = False
-  with st.spinner(text="Parsing data in progress..."):
+# get the chosen data file
+datafile_chosen = {}
+for f in datafiles_chosen:
+  if f["name"] == datafile_name:
+    datafile_chosen = f
+    st.write(datafile_chosen["name"])
+
+datafile_parsed = f"parse_{datafile_chosen['name']}"
+if datafile_parsed not in st.session_state:
+  st.session_state[datafile_parsed] = False
+  with st.spinner(text="Parsing data file in progress..."):
     params = {
-        "file_path": datafile_chosen["path"],
-        "file_name": datafile_chosen["name"],
-        "config": datafile_chosen["config"],
-        "parser": datafile_chosen["parse"],
+      "file_path": datafile_chosen["path"],
+      "file_name": datafile_chosen["name"],
+      "config": datafile_chosen["config"],
+      "parser": datafile_chosen["parse"],
     }
     response = requests.get(f"http://{backend_service}:8001/parse", params=params)
   if response.status_code != 204:
     st.info("An error occurred in parsing data file.")
     st.stop()
   else:
-    st.session_state.datafile_parsed = True
+    st.session_state[datafile_parsed] = True
 
 
 sources = ["RAD", "RA", "RD", "AD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
