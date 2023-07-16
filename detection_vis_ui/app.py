@@ -31,31 +31,36 @@ for d in datasets:
 dataset_name = st.selectbox("Choose the dataset", [i["name"] for i in root_datasets])
 st.subheader(f"{dataset_name} Dataset")
 
+# get the chosen dataset
 dataset = {}
 for d in datasets:
   if d["name"] == dataset_name:
     dataset = d
     st.write(d["description"])
 
+# get subdatasets from the chosen dataset
 subdatasets = []
 for d in datasets:
   if d["parent_id"] == dataset["id"]:
     subdatasets.append(d)
 
-  datafile_chosen = {}
+if 'datafiles_chosen' not in st.session_state:
+  st.session_state.datafiles_chosen = []
+if 'checkbox' not in st.session_state:
+  st.session_state.checkbox = []
+
 if subdatasets:
-  # show subdataset in tab page
+  # show subdatasets in tab pages
   subdataset_tabs = st.tabs([i["name"] for i in subdatasets])
   index = 0
-  button_index = 0
-  for t in subdataset_tabs:
+  for i, t in enumerate(subdataset_tabs):
     with t:
       # Show data files 
       response = requests.get(f"http://{backend_service}:8001/dataset/{subdatasets[index]['id']}")
       files = response.json()
 
       colms = st.columns((1, 2, 2, 1, 1))
-      fields = ['No', 'File name', 'info', "size", 'action']
+      fields = ['No', 'File name', 'info', "size", 'select']
       # table header
       for col, field_name in zip(colms, fields):
         col.write(field_name)
@@ -67,35 +72,30 @@ if subdatasets:
         col3.write(file["description"])  
         col4.write(file["size"]) 
         # last column
-        button_type = "Load" 
-        button_phold = col5.empty()  # create a placeholder
-        do_action = button_phold.button(button_type, key=button_index)
-        button_index = button_index + 1
-        if do_action:
-          datafile_chosen = file
-          if 'datafile_chosen' not in st.session_state:
-            st.session_state['datafile_chosen'] = datafile_chosen
-          button_phold.empty()  #  remove button
-          loading_phold = col5.empty()  # create another placeholder for loading
-          loading_phold.write('Loading...')
-          params = {
-            "file_path": file["path"],
-            "file_name": file["name"],
-          }
-          response = requests.get(f"http://{backend_service}:8001/download", params=params)
-          if response.status_code == 204:
-            loading_phold.empty()  # remove loading text
-            col5.write('Loaded')
-            switch_page("get features")
+        if f"{dataset['name']}_{index}_{file['name']}" not in st.session_state:
+          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
+          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = False
+        elif st.session_state[f"{dataset['name']}_{index}_{file['name']}"]:
+          checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
+        else:
+          checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{index}_{file['name']}")
+
+        if checkbox_status and file not in st.session_state.datafiles_chosen:
+          st.session_state.datafiles_chosen.append(file)
+          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = True
+
+        if not checkbox_status and file in st.session_state.datafiles_chosen:
+          st.session_state[f"{dataset['name']}_{index}_{file['name']}"] = False
+          st.session_state.datafiles_chosen.remove(file)
+
     index = index + 1
 else:
-  button_index = 0
   # Show data files 
   response = requests.get(f"http://{backend_service}:8001/dataset/{dataset['id']}")
   files = response.json()
 
   colms = st.columns((1, 2, 2, 1, 1))
-  fields = ['No', 'File name', 'info', "size", 'action']
+  fields = ['No', 'File name', 'info', "size", 'select']
   # table header
   for col, field_name in zip(colms, fields):
     col.write(field_name)
@@ -105,27 +105,27 @@ else:
     col1.write(no)  
     col2.write(file["name"])  
     col3.write(file["description"])  
-    col4.write("1GB") 
+    col4.write(file["size"]) 
     # last column
-    button_type = "Load" 
-    button_phold = col5.empty()  # create a placeholder
-    do_action = button_phold.button(button_type, key=button_index)
-    button_index = button_index + 1
-    if do_action:
-      datafile_chosen = file
-      if 'datafile_chosen' not in st.session_state:
-        st.session_state['datafile_chosen'] = datafile_chosen
-      button_phold.empty()  #  remove button
-      loading_phold = col5.empty()  # create another placeholder for loading
-      loading_phold.write('Loading...')
-      params = {
-        "file_path": file["path"],
-        "file_name": file["name"],
-      }
-      response = requests.get(f"http://{backend_service}:8001/download", params=params)
-      if response.status_code == 204:
-        loading_phold.empty()  # remove loading text
-        col5.write('Loaded')
-        switch_page("get features")
+    if f"{dataset['name']}_{file['name']}" not in st.session_state:
+      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{file['name']}")
+      st.session_state[f"{dataset['name']}_{file['name']}"] = False
+    elif st.session_state[f"{dataset['name']}_{file['name']}"]:
+      checkbox_status = col5.checkbox("", value=True,key=f"checkbox_{dataset['name']}_{file['name']}")
+    else:
+      checkbox_status = col5.checkbox("", value=False,key=f"checkbox_{dataset['name']}_{file['name']}")
 
+    if checkbox_status and file not in st.session_state.datafiles_chosen:
+      st.session_state.datafiles_chosen.append(file)
+      st.session_state[f"{dataset['name']}_{file['name']}"] = True
 
+    if not checkbox_status and file in st.session_state.datafiles_chosen:
+      st.session_state[f"{dataset['name']}_{file['name']}"] = False
+      st.session_state.datafiles_chosen.remove(file)
+    
+
+st.write(st.session_state.datafiles_chosen)
+button_click = st.button("Check feature")
+if button_click:
+  #check_datafiles(st.session_state.datafiles_chosen)
+  switch_page("get features")
