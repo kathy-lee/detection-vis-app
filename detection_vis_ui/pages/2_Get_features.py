@@ -5,6 +5,9 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
+from streamlit_extras.switch_page_button import switch_page
+
+
 
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 
@@ -27,8 +30,8 @@ datafile_chosen = {}
 for f in datafiles_chosen:
   if f["name"] == datafile_name:
     datafile_chosen = f
-    st.write(datafile_chosen["name"])
 
+# parse the chosen data file
 datafile_parsed = f"parse_{datafile_chosen['name']}"
 if datafile_parsed not in st.session_state:
   st.session_state[datafile_parsed] = False
@@ -47,23 +50,71 @@ if datafile_parsed not in st.session_state:
     st.session_state[datafile_parsed] = True
 
 
-sources = ["RAD", "RA", "RD", "AD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
+# frame sync mode
+if 'frame_sync' not in st.session_state:
+  st.session_state.frame_sync = False
+
+frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync)
+frame_begin = 0
+frame_end = 2
+frame_id = 0
+if frame_sync:
+  st.session_state.frame_sync = True
+  frame_id = st.slider('Choose a frame', frame_begin, frame_end, frame_begin)
+else:
+  st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
+  st.session_state.frame_sync = False
+  
+
+# infer the available features
+featureset = ["ADC", "RAD", "RA", "RD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
 features = []
-show_status = []
-for idx, f in enumerate(sources):
+features_show = []
+for idx, f in enumerate(featureset):
   if datafile_chosen[f]:
     features.append(f)
-    show_status.append(True)
-  elif f in ("RAD", "RA", "RD", "AD", "spectrogram", "radarPC") and datafile_chosen["ADC"]:
+    if f in ("ADC", "RAD"):
+      features_show.append(False)
+    else:
+      features_show.append(True)
+  elif f in ("RAD", "RA", "RD", "spectrogram", "radarPC") and datafile_chosen["ADC"]:
     features.append(f)
-    show_status.append(False)
-  elif f in ("RA", "RD", "AD", "spectrogram", "radarPC") and "RAD" in features:
+    if f != "RAD":
+      features_show.append(False)
+    else:
+      features_show.append(True)
+  elif f in ("RA", "RD", "spectrogram", "radarPC") and "RAD" in features:
     features.append(f)
-    show_status.append(False)
+    features_show.append(False)
 
 # st.info(features)
 # st.info(status)
 
+if "fft_cfg" not in st.session_state:
+  st.session_state.fft_cfg = 0
+if "tfa_cfg" not in st.session_state:
+  st.session_state.tfa_cfg = 0
+if "aoa_cfg" not in st.session_state:
+  st.session_state.aoa_cfg = 0
+if "noise_cfg" not in st.session_state:
+  st.session_state.noise_cfg = 0
+if "cfar_cfg" not in st.session_state:
+  st.session_state.cfar_cfg = 0
+fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
+tfa_config_list = ["Not interested", "STFT", "WV"]
+aoa_config_list = ["Not interested", "Barlett", "Capon"]
+noise_config_list = ["Not interested", "Static noise removal"]
+cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
+fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
+tfa_config = st.sidebar.radio("How would you like to do time frequency analysis?", tfa_config_list, index=st.session_state.tfa_cfg)
+aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
+noise_config = st.sidebar.radio("How would you like to remove nosie?", noise_config_list, index=st.session_state.noise_cfg)
+cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
+st.session_state.fft_cfg = fft_config_list.index(fft_config)
+st.session_state.tfa_cfg = tfa_config_list.index(tfa_config)
+st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
+st.session_state.noise_cfg = noise_config_list.index(noise_config)
+st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
 
 def show_next(i, length):
   # Increments the counter to get next photo
@@ -79,101 +130,224 @@ def show_last(i, length):
     st.session_state[i] = length-1
 
 
-expanders = [None]*len(features)
-counters = [f"counter_{f}" for f in features]
-placeholders = [[None]*6 for _ in range(len(features)) ]
-load_actions = [None]*len(features)
-for idx, (counter, feature) in enumerate(zip(counters, features)):
-  expanders[idx] = st.expander(feature, expanded=True)
-  with expanders[idx]:
-    if counter not in st.session_state: 
-      st.session_state[counter] = 0
-    if feature not in st.session_state:
-      st.session_state[feature] = show_status[idx]
-    
-    params = {"parser": datafile_chosen["parse"]}
-    
-    if st.session_state[feature]:
-      ###################### test code
-      # fileset = [os.path.join("RAD",f) for f in os.listdir("RAD")]
-      # st.write(f"Total frames: {len(fileset)}")
-      # forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), key=f"{feature}_forward_btn")
-      # backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), key=f"{feature}_backward_btn")
-      # photo = fileset[st.session_state[counter]]
-      # st.image(photo,caption=photo)
+def show_feature(feature, counter, frame_id, config=None):
+  ###################### test code
+  fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
+  st.write(f"Total frames: {len(fileset)}")
+  forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), 
+                          key=f"{feature}_forward_btn", disabled=st.session_state.frame_sync)
+  backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), 
+                          key=f"{feature}_backward_btn", disabled=st.session_state.frame_sync)
+  if st.session_state.frame_sync:
+    st.session_state[counter] = frame_id
+  photo = fileset[st.session_state[counter]]
+  st.image(photo,caption=photo)
 
-      response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
-      feature_size = response.json()
-      st.write(f"Total frames: {feature_size}")
-      forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
-      backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
-      params = {"parser": datafile_chosen["parse"]}
-      response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
-      feature_data = response.json()
+  # response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
+  # feature_size = response.json()
+  # st.write(f"Total frames: {feature_size}")
+  # forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
+  # backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
+  # params = {"parser": datafile_chosen["parse"]}
+  # response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+  # feature_data = response.json()
+  
+  # if feature == "RAD":
+  #   serialized_feature = feature_data["serialized_feature"]
+  #   complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
+  #   feature_image = np.abs(complex_feature[:, 0, :])
+  #   feature_image = feature_image - np.min(feature_image)
+  #   feature_image = feature_image / np.max(feature_image)
+  #   st.image(feature_image, caption=f"{feature_image.shape}")
+  # else:
+  #   serialized_feature = feature_data["serialized_feature"]
+  #   feature_image = np.array(serialized_feature)
+  #   feature_image = feature_image - np.min(feature_image)
+  #   feature_image = feature_image / np.max(feature_image)
+  #   st.image(feature_image, caption=f"{feature_image.shape}")
+
+  # st.write(f"Index : {st.session_state[counter]}")
+
+
+feature = "image"
+counter = f"counter_{feature}" 
+if feature in features:
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  expander_image = st.expander("RGB images", expanded=True)
+  with expander_image:
+    show_feature(feature, counter, frame_id)
+
+
+feature = "depth_image"
+counter = f"counter_{feature}" 
+if feature in features:
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  expander_depthimage = st.expander("Depth images", expanded=True)
+  with expander_depthimage:
+    show_feature(feature, counter, frame_id)
+
+
+feature = "lidarPC"
+counter = f"counter_{feature}" 
+if feature in features:
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  expander_lidarpc = st.expander("Lidar Point Cloud", expanded=True)
+  with expander_lidarpc:
+    show_feature(feature, counter, frame_id)
+
+
+feature = "RD"
+counter = f"counter_{feature}" 
+if feature in features and fft_config in ("No windowing", "Hamming windowing", "Hanning windowing"):
+  expander_RD = st.expander("Range-Doppler(RD) feature", expanded=True)
+  if counter not in st.session_state: 
+    st.session_state[counter] = frame_id
+  with expander_RD:
+    show_feature(feature, counter, frame_id, config=fft_config)
+
+
+feature = "RA" 
+counter = f"counter_{feature}"  
+if feature in features and aoa_config in ("Barlett", "Capon"):
+  expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  with expander_RA:
+    show_feature(feature, counter, frame_id, config=aoa_config)
+
+
+feature = "spectrogram" 
+counter = f"counter_{feature}"  
+if feature in features and tfa_config in ("STFT", "WV"):
+  expander_tfa = st.expander("Spectrogram feature", expanded=True)
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  with expander_tfa:
+    show_feature(feature, counter, frame_id, config=tfa_config)
+
+
+feature = "radarPC" 
+counter = f"counter_{feature}"  
+if feature in features and cfar_config in ("CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"):
+  expander_radarpc = st.expander("Radar Point Cloud", expanded=True)
+  if counter not in st.session_state:
+    st.session_state[counter] = frame_id
+  with expander_radarpc:
+    show_feature(feature, counter, frame_id, config=cfar_config)
+
+
+if 'features_chosen' not in st.session_state:
+  st.session_state.features_chosen = []
+
+features_chosen = st.multiselect("Which features would you like to select as input?", features, st.session_state.features_chosen)
+st.session_state.features_chosen = features_chosen
+
+button_click = st.button("Go to train")
+if button_click:
+  #check_datafiles(st.session_state.datafiles_chosen)
+  switch_page("train model")
+
+# #############################################
+# expanders = [None]*len(features)
+# counters = [f"counter_{f}" for f in features]
+# placeholders = [[None]*6 for _ in range(len(features)) ]
+# load_actions = [None]*len(features)
+# for idx, (counter, feature) in enumerate(zip(counters, features)):
+#   expanders[idx] = st.expander(feature, expanded=True)
+#   with expanders[idx]:
+#     if counter not in st.session_state: 
+#       st.session_state[counter] = 0
+#     if feature not in st.session_state:
+#       st.session_state[feature] = show_status[idx]
+    
+#     params = {"parser": datafile_chosen["parse"]}
+    
+#     if st.session_state[feature]:
+#       ###################### test code
+#       # fileset = [os.path.join("RAD",f) for f in os.listdir("RAD")]
+#       # st.write(f"Total frames: {len(fileset)}")
+#       # forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), key=f"{feature}_forward_btn")
+#       # backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), key=f"{feature}_backward_btn")
+#       # photo = fileset[st.session_state[counter]]
+#       # st.image(photo,caption=photo)
+
+#       response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
+#       feature_size = response.json()
+#       st.write(f"Total frames: {feature_size}")
+#       forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
+#       backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
+#       params = {"parser": datafile_chosen["parse"]}
+#       response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+#       feature_data = response.json()
       
-      if feature == "RAD":
-        serialized_feature = feature_data["serialized_feature"]
-        complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
-        feature_image = np.abs(complex_feature[:, 0, :])
-        feature_image = feature_image - np.min(feature_image)
-        feature_image = feature_image / np.max(feature_image)
-        st.image(feature_image, caption=f"{feature_image.shape}")
-      else:
-        serialized_feature = feature_data["serialized_feature"]
-        feature_image = np.array(serialized_feature)
-        feature_image = feature_image - np.min(feature_image)
-        feature_image = feature_image / np.max(feature_image)
-        st.image(feature_image, caption=f"{feature_image.shape}")
+#       if feature == "RAD":
+#         serialized_feature = feature_data["serialized_feature"]
+#         complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
+#         feature_image = np.abs(complex_feature[:, 0, :])
+#         feature_image = feature_image - np.min(feature_image)
+#         feature_image = feature_image / np.max(feature_image)
+#         st.image(feature_image, caption=f"{feature_image.shape}")
+#       else:
+#         serialized_feature = feature_data["serialized_feature"]
+#         feature_image = np.array(serialized_feature)
+#         feature_image = feature_image - np.min(feature_image)
+#         feature_image = feature_image / np.max(feature_image)
+#         st.image(feature_image, caption=f"{feature_image.shape}")
 
-      st.write(f"Index : {st.session_state[counter]}")
-    else:
-      for i in range(len(placeholders[idx])):
-        placeholders[idx][i] = st.empty()
+#       st.write(f"Index : {st.session_state[counter]}")
+#     else:
+#       for i in range(len(placeholders[idx])):
+#         placeholders[idx][i] = st.empty()
 
-      load_actions[idx] = placeholders[idx][0].button("Get feature", key=f"{feature}_load_btn")
+#       load_actions[idx] = placeholders[idx][0].button("Get feature", key=f"{feature}_load_btn")
      
-      if load_actions[idx]:
+#       if load_actions[idx]:
         
-        placeholders[idx][0].empty()
-        st.session_state[feature] = True
-        with expanders[idx]:
-          #######################test code
-          # fileset = [os.path.join("RAD",f) for f in os.listdir("RAD")]
-          # placeholders[idx][1].write(f"Total frames: {len(fileset)}")
-          # forward_btn = placeholders[idx][2].button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), key=f"{feature}_forward_btn")
-          # backward_btn = placeholders[idx][3].button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), key=f"{feature}_backward_btn")
-          # photo = fileset[st.session_state[counter]]
-          # placeholders[idx][4].image(photo,caption=photo) 
+#         placeholders[idx][0].empty()
+#         st.session_state[feature] = True
+#         with expanders[idx]:
+#           #######################test code
+#           # fileset = [os.path.join("RAD",f) for f in os.listdir("RAD")]
+#           # placeholders[idx][1].write(f"Total frames: {len(fileset)}")
+#           # forward_btn = placeholders[idx][2].button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), key=f"{feature}_forward_btn")
+#           # backward_btn = placeholders[idx][3].button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), key=f"{feature}_backward_btn")
+#           # photo = fileset[st.session_state[counter]]
+#           # placeholders[idx][4].image(photo,caption=photo) 
 
-          with st.spinner(text="Getting the feature in progress..."):
-            response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
-            feature_size = response.json()
+#           with st.spinner(text="Getting the feature in progress..."):
+#             response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
+#             feature_size = response.json()
           
-          placeholders[idx][1].write(f"Total frames: {feature_size}")
-          forward_btn = placeholders[idx][2].button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
-          backward_btn = placeholders[idx][3].button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
-          response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
-          feature_data = response.json()
-          if feature == "RAD":
-            serialized_feature = feature_data["serialized_feature"]
-            complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
-            feature_image = np.abs(complex_feature[:, 0, :])
-            feature_image = feature_image - np.min(feature_image)
-            feature_image = feature_image / np.max(feature_image)
-            placeholders[idx][4].image(feature_image, caption=f"{feature_image.shape}")
-          else:
-            serialized_feature = feature_data["serialized_feature"]
-            feature_image = np.array(serialized_feature)
-            feature_image = feature_image - np.min(feature_image)
-            feature_image = feature_image / np.max(feature_image)
-            placeholders[idx][4].image(feature_image, caption=f"{feature_image.shape}")
-          placeholders[idx][5].write(f"Index : {st.session_state[counter]}")
+#           placeholders[idx][1].write(f"Total frames: {feature_size}")
+#           forward_btn = placeholders[idx][2].button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
+#           backward_btn = placeholders[idx][3].button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
+#           response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+#           feature_data = response.json()
+#           if feature == "RAD":
+#             serialized_feature = feature_data["serialized_feature"]
+#             complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
+#             feature_image = np.abs(complex_feature[:, 0, :])
+#             feature_image = feature_image - np.min(feature_image)
+#             feature_image = feature_image / np.max(feature_image)
+#             placeholders[idx][4].image(feature_image, caption=f"{feature_image.shape}")
+#           else:
+#             serialized_feature = feature_data["serialized_feature"]
+#             feature_image = np.array(serialized_feature)
+#             feature_image = feature_image - np.min(feature_image)
+#             feature_image = feature_image / np.max(feature_image)
+#             placeholders[idx][4].image(feature_image, caption=f"{feature_image.shape}")
+#           placeholders[idx][5].write(f"Index : {st.session_state[counter]}")
 
 
 
 
 
 
+
+################################### Grid layout
 
 # def show_next_spectrogram(length):
 #   # Increments the counter to get next photo
