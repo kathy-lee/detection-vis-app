@@ -151,15 +151,13 @@ async def get_feature_size(parser: str, feature_name: str,  skip: int = 0, limit
         dataset_inst = dataset_factory.get_instance(parser)
 
         function_dict = {
-            'RAD': dataset_inst.get_RAD,
             'RD': dataset_inst.get_RD,
             'RA': dataset_inst.get_RA,
-            'AD': dataset_inst.get_AD,
             'spectrogram': dataset_inst.get_spectrogram,
             'radarPC': dataset_inst.get_radarpointcloud,
             'lidarPC': dataset_inst.get_lidarpointcloud,
             'image': dataset_inst.get_image,
-            'depth_image': dataset_inst.depth_image,
+            'depth_image': dataset_inst.get_depthimage,
         }
         feature = function_dict[feature_name]()
         count = len(feature)
@@ -183,7 +181,7 @@ async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, li
             'radarPC': dataset_inst.get_radarpointcloud,
             'lidarPC': dataset_inst.get_lidarpointcloud,
             'image': dataset_inst.get_image,
-            'depth_image': dataset_inst.depth_image,
+            'depth_image': dataset_inst.get_depthimage,
         }
         features = function_dict[feature_name]()
         feature = features[id]

@@ -24,8 +24,10 @@ class DatasetFactory:
 
 class RaDICaL:
     name = ""
+    config = ""
     image = []
     depth_image = []
+    ADC = []
     RAD = []
     RA = []
     RD = []
@@ -37,9 +39,11 @@ class RaDICaL:
         self.name = "RaDICaL dataset instance"
 
     def parse(self, file_path, file_name, config):
-        # file = os.path.join(file_path, file_name)
-        # bag = rosbag.Bag(file)
-        bag = rosbag.Bag(file_name) # for testing
+        file = os.path.join(file_path, file_name)
+        try:
+            bag = rosbag.Bag(file)
+        except rosbag.ROSBagException:
+            print(f"No file found at {file}")
         topics_dict = bag.get_type_and_topic_info()[1]
 
         if "/camera/color/image_raw" in topics_dict:
@@ -84,8 +88,10 @@ class RaDICaL:
                 #print(complex_arr.shape) # (32, 304, 8)
                 transformed = np.swapaxes(complex_arr, 1, 2)
                 #print(transformed.shape)
-                self.RAD.append(transformed)
+                self.ADC.append(transformed)
 
+        print("#################################")
+        print(len(self.image), len(self.depth_image), len(self.ADC))
         bag.close()
 
 
@@ -96,7 +102,7 @@ class RaDICaL:
         if not self.RA:
             for x in self.RAD:
                 # radar_config = read_radar_params(config)
-                radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
+                radar_config = read_radar_params(self.config) # for local test
                 rf = RadarFrame(radar_config)
                 beamformed_range_azimuth = rf.compute_range_azimuth(x) 
                 beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))
@@ -147,7 +153,7 @@ class RaDICaL:
     def get_image(self):
         return self.image
     
-    def get_depth_image(self):
+    def get_depthimage(self):
         return self.depth_image
 
     
