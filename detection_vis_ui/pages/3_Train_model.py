@@ -13,8 +13,9 @@ from streamlit_extras.switch_page_button import switch_page
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 
 st.set_page_config(
-    page_title="Have fun ",
-    page_icon=":red_car:", 
+    page_title = "Have fun ",
+    page_icon = ":red_car:", 
+    layout = "wide"
 )
 
 

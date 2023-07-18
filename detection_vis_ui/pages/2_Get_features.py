@@ -17,9 +17,11 @@ st.set_page_config(
     layout="wide",
 )
 
-if 'datafiles_chosen' not in st.session_state:
-  st.info("Please choose a dataset first.")
+
+if 'datafiles_chosen' not in st.session_state or not st.session_state.datafiles_chosen:
+  st.info("Please choose the data first.")
   st.stop()
+
 
 if 'datafile_chosen' not in st.session_state:
   st.session_state.datafile_chosen = 0
@@ -32,9 +34,7 @@ st.session_state.datafile_chosen = next((index for (index, d) in enumerate(dataf
 # get the chosen data file
 datafile_chosen = {}
 datafile_chosen = next(f for f in datafiles_chosen if f["name"] == datafile_name)
-# for f in datafiles_chosen:
-#   if f["name"] == datafile_name:
-#     datafile_chosen = f
+
 
 # parse the chosen data file
 datafile_parsed = f"parse_{datafile_chosen['name']}"
@@ -137,25 +137,35 @@ def show_last(i, length):
 
 def show_feature(feature, counter, frame_id, config=None):
   ###################### test code
-  fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
-  st.write(f"Total frames: {len(fileset)}")
-  forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), 
+  # fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
+  # st.write(f"Total frames: {len(fileset)}")
+  # forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,len(fileset)]), 
+  #                         key=f"{feature}_forward_btn", disabled=st.session_state.frame_sync)
+  # backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), 
+  #                         key=f"{feature}_backward_btn", disabled=st.session_state.frame_sync)
+  # if st.session_state.frame_sync:
+  #   st.session_state[counter] = frame_id
+  # photo = fileset[st.session_state[counter]]
+  # st.image(photo,caption=st.session_state[counter])
+
+  params = {"parser": datafile_chosen["parse"]}
+  response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
+  feature_size = response.json()
+  st.write(f"Total frames: {feature_size}")
+  forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), 
                           key=f"{feature}_forward_btn", disabled=st.session_state.frame_sync)
-  backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,len(fileset)]), 
-                          key=f"{feature}_backward_btn", disabled=st.session_state.frame_sync)
+  backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), 
+                           key=f"{feature}_backward_btn", disabled=st.session_state.frame_sync)
   if st.session_state.frame_sync:
     st.session_state[counter] = frame_id
-  photo = fileset[st.session_state[counter]]
-  st.image(photo,caption=photo)
-
-  # response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
-  # feature_size = response.json()
-  # st.write(f"Total frames: {feature_size}")
-  # forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), key=f"{feature}_forward_btn")
-  # backward_btn = st.button("Show last frame ⏪",on_click=show_last,args=([counter,feature_size]), key=f"{feature}_backward_btn")
-  # params = {"parser": datafile_chosen["parse"]}
-  # response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
-  # feature_data = response.json()
+  params = {"parser": datafile_chosen["parse"]}
+  response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+  feature_data = response.json()
+  serialized_feature = feature_data["serialized_feature"]
+  feature_image = np.array(serialized_feature)
+  feature_image = feature_image - np.min(feature_image)
+  feature_image = feature_image / np.max(feature_image)
+  st.image(feature_image, caption=f"index: {st.session_state[counter]}")
   
   # if feature == "RAD":
   #   serialized_feature = feature_data["serialized_feature"]

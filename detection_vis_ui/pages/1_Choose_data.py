@@ -127,7 +127,6 @@ else:
       st.session_state.datafiles_chosen.remove(file)
     
 
-# st.write(st.session_state.datafiles_chosen)
 button_click = st.button("Check feature")
 if button_click:
   #check_datafiles(st.session_state.datafiles_chosen)
