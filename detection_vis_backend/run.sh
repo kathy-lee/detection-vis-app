@@ -21,6 +21,11 @@ else
     export DATABASE_SERVICE="localhost"
     export DATABASE_URL="postgresql://postgres:postgres@localhost/postgres"
     docker compose up -d --build db
+    while ! docker exec detection-vis-app-db-1 pg_isready -U postgres
+    do
+        echo "Waiting for postgres database..."
+        sleep 1
+    done
     alembic upgrade head
     uvicorn detection_vis_backend.app:app --host 0.0.0.0 --port 8001
 fi
