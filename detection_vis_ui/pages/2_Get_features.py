@@ -21,15 +21,20 @@ if 'datafiles_chosen' not in st.session_state:
   st.info("Please choose a dataset first.")
   st.stop()
 
+if 'datafile_chosen' not in st.session_state:
+  st.session_state.datafile_chosen = 0
 
 datafiles_chosen = st.session_state.datafiles_chosen
-datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen])
+datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
+                             index=st.session_state.datafile_chosen)
+st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) if d["name"] == datafile_name), None)
 
 # get the chosen data file
 datafile_chosen = {}
-for f in datafiles_chosen:
-  if f["name"] == datafile_name:
-    datafile_chosen = f
+datafile_chosen = next(f for f in datafiles_chosen if f["name"] == datafile_name)
+# for f in datafiles_chosen:
+#   if f["name"] == datafile_name:
+#     datafile_chosen = f
 
 # parse the chosen data file
 datafile_parsed = f"parse_{datafile_chosen['name']}"
