@@ -59,16 +59,19 @@ if datafile_parsed not in st.session_state:
 if 'frame_sync' not in st.session_state:
   st.session_state.frame_sync = False
 
-frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync)
+params = {"parser": datafile_chosen["parse"]}
+response = requests.get(f"http://{backend_service}:8001/sync", params=params)
+sync = response.json()
+frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync, disabled=not sync)
 frame_begin = 0
-frame_end = 2
+frame_end = sync
 frame_id = 0
 if frame_sync:
   st.session_state.frame_sync = True
   frame_id = st.slider('Choose a frame', frame_begin, frame_end, frame_begin)
-else:
-  st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
-  st.session_state.frame_sync = False
+# else:
+#   st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
+#   st.session_state.frame_sync = False
   
 
 # infer the available features

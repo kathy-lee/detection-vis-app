@@ -3,7 +3,7 @@
 __all__ = ['RadarFrame']
 
 # Cell
-
+import logging
 import numpy as np
 from mmwave import dsp
 
@@ -145,7 +145,7 @@ class RadarFrame(object):
         if self.__range_doppler is not None:
             return self.__range_doppler
         else:
-            range_doppler, _ = dsp.doppler_processing(self.raw_cube)
+            range_doppler, _ = dsp.doppler_processing(self.raw_cube, interleaved=False)
             self.__range_doppler = range_doppler
             return self.__range_doppler
 

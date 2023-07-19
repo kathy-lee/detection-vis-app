@@ -3,6 +3,7 @@ import os
 import logging
 import uvicorn
 import paramiko
+
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
 #from PIL import Image
@@ -39,16 +40,6 @@ app = FastAPI()
 @app.get("/")
 def read_root():
     return {"message": "Welcome from the Detection API"}
-
-
-@app.post("/{style}")
-def get_image(style: str, file: UploadFile = File(...)):
-    # image = np.array(Image.open(file.file))
-    # model = config.STYLES[style]
-    # output, resized = inference.inference(model, image)
-    name = f"/storage/{str(uuid.uuid4())}.jpg"
-    # cv2.imwrite(name, output)
-    return {"name": name}
 
 
 # Dependency
@@ -144,28 +135,38 @@ async def parse_data(parser: str, file_path: str, file_name: str, config: str, s
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.get("/sync")
+async def get_sync(parser: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try:
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(parser)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to retrieve sync mode.")
+
+    return dataset_inst.frame_sync
+
+
 @app.get("/feature/{feature_name}/size")
 async def get_feature_size(parser: str, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(parser)
 
-        function_dict = {
-            'RD': dataset_inst.get_RD,
-            'RA': dataset_inst.get_RA,
-            'spectrogram': dataset_inst.get_spectrogram,
-            'radarPC': dataset_inst.get_radarpointcloud,
-            'lidarPC': dataset_inst.get_lidarpointcloud,
-            'image': dataset_inst.get_image,
-            'depth_image': dataset_inst.get_depthimage,
-        }
-        feature = function_dict[feature_name]()
-        count = len(feature)
-    except IndexError:
-        raise HTTPException(status_code=404, detail=f"Featue {feature_name} doesn't exist.")
+        if feature_name in ("RD", "RA", "spectrogram", "radarPC"):
+            count = dataset_inst.radarframe_count
+        elif feature_name == "lidarPC":
+            count = dataset_inst.lidarframe_count
+        elif feature_name == "image":
+            count = dataset_inst.image_count
+        else:
+            count = dataset_inst.depthimage_count
+
+        logging.error(f"feature size {feature_name}: {count}")
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to retrieve feature size.")
 
     return count
-    
+ 
 
 @app.get("/feature/{feature_name}/{id}")
 async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
@@ -176,15 +177,14 @@ async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, li
             'RAD': dataset_inst.get_RAD,
             'RD': dataset_inst.get_RD,
             'RA': dataset_inst.get_RA,
-            'AD': dataset_inst.get_AD,
             'spectrogram': dataset_inst.get_spectrogram,
             'radarPC': dataset_inst.get_radarpointcloud,
             'lidarPC': dataset_inst.get_lidarpointcloud,
             'image': dataset_inst.get_image,
             'depth_image': dataset_inst.get_depthimage,
         }
-        features = function_dict[feature_name]()
-        feature = features[id]
+        feature = function_dict[feature_name](id)
+
 
         if feature_name == "RAD":
             serialized_feature = [[[(x.real, x.imag) for x in y] for y in z] for z in feature.tolist()]
