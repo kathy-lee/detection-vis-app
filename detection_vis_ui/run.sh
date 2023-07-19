@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set default value for RUN_MODE
-RUN_MODE="debug"
+RUN_MODE="dev"
 
 # Check if a command line argument was provided
 if [ $# -eq 1 ]; then
