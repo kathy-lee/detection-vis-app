@@ -2,26 +2,45 @@ import rosbag
 import os
 import logging
 import numpy as np
+import logging
 
 from detection_vis_backend.radarframe import RadarFrame
 from detection_vis_backend.utils import read_radar_params, reshape_frame
 from scipy import signal
 
+
+
 class DatasetFactory:
-    _instances = {}
-    _singleton_instance = None
-
+    _instance = None
     def __new__(cls, *args, **kwargs):
-        if not cls._singleton_instance:
-            cls._singleton_instance = super().__new__(cls)
-        return cls._singleton_instance
+        if not isinstance(cls._instance, cls):
+            cls._instance = super(DatasetFactory, cls).__new__(cls, *args, **kwargs)
+            cls._instance.instance_dict = {}  # this dictionary stores the instances
+        return cls._instance
 
-    def get_instance(self, class_name):
-        if class_name not in self._instances:
-            # Fetch the class from globals, create a singleton instance
-            cls = globals()[class_name]
-            self._instances[class_name] = cls()
-        return self._instances[class_name]
+    def get_instance(self, class_name, id):
+        if id in self.instance_dict:
+            return self.instance_dict[id]
+        
+        class_obj = globals()[class_name]()
+        self.instance_dict[id] = class_obj
+        return class_obj
+
+# class DatasetFactory:
+#     _instances = {}
+#     _singleton_instance = None
+
+#     def __new__(cls, *args, **kwargs):
+#         if not cls._singleton_instance:
+#             cls._singleton_instance = super().__new__(cls)
+#         return cls._singleton_instance
+
+#     def get_instance(self, class_name):
+#         if class_name not in self._instances:
+#             # Fetch the class from globals, create a singleton instance
+#             cls = globals()[class_name]
+#             self._instances[class_name] = cls()
+#         return self._instances[class_name]
 
 
 class RaDICaL:
