@@ -22,32 +22,28 @@ if 'datafiles_chosen' not in st.session_state or not st.session_state.datafiles_
   st.info("Please choose the data first.")
   st.stop()
 
+datafiles_chosen = st.session_state.datafiles_chosen
 
 if 'datafile_chosen' not in st.session_state:
   st.session_state.datafile_chosen = 0
 
-datafiles_chosen = st.session_state.datafiles_chosen
 datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
                              index=st.session_state.datafile_chosen)
 st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) if d["name"] == datafile_name), None)
 
 # get the chosen data file
 datafile_chosen = {}
-datafile_chosen = next(f for f in datafiles_chosen if f["name"] == datafile_name)
+#datafile_chosen = next(f for f in datafiles_chosen if f["name"] == datafile_name)
+datafile_chosen = datafiles_chosen[st.session_state.datafile_chosen]
+#st.write(datafile_chosen)
 
 
 # parse the chosen data file
-datafile_parsed = f"parse_{datafile_chosen['name']}"
+datafile_parsed = f"parse_{datafile_chosen['id']}"
 if datafile_parsed not in st.session_state:
   st.session_state[datafile_parsed] = False
   with st.spinner(text="Parsing data file in progress..."):
-    params = {
-      "file_path": datafile_chosen["path"],
-      "file_name": datafile_chosen["name"],
-      "config": datafile_chosen["config"],
-      "parser": datafile_chosen["parse"],
-    }
-    response = requests.get(f"http://{backend_service}:8001/parse", params=params)
+    response = requests.get(f"http://{backend_service}:8001/parse/{datafile_chosen['id']}")
   if response.status_code != 204:
     st.info("An error occurred in parsing data file.")
     st.stop()
@@ -59,8 +55,7 @@ if datafile_parsed not in st.session_state:
 if 'frame_sync' not in st.session_state:
   st.session_state.frame_sync = False
 
-params = {"parser": datafile_chosen["parse"]}
-response = requests.get(f"http://{backend_service}:8001/sync", params=params)
+response = requests.get(f"http://{backend_service}:8001/sync/{datafile_chosen['id']}")
 sync = response.json()
 frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync, disabled=not sync)
 frame_begin = 0
@@ -151,8 +146,8 @@ def show_feature(feature, counter, frame_id, config=None):
   # photo = fileset[st.session_state[counter]]
   # st.image(photo,caption=st.session_state[counter])
 
-  params = {"parser": datafile_chosen["parse"]}
-  response = requests.get(f"http://{backend_service}:8001/feature/{feature}/size", params=params)
+
+  response = requests.get(f"http://{backend_service}:8001/feature/{datafile_chosen['id']}/{feature}/size")
   feature_size = response.json()
   st.write(f"Total frames: {feature_size}")
   forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), 
@@ -161,8 +156,8 @@ def show_feature(feature, counter, frame_id, config=None):
                            key=f"{feature}_backward_btn", disabled=st.session_state.frame_sync)
   if st.session_state.frame_sync:
     st.session_state[counter] = frame_id
-  params = {"parser": datafile_chosen["parse"]}
-  response = requests.get(f"http://{backend_service}:8001/feature/{feature}/{st.session_state[counter]}", params=params)
+
+  response = requests.get(f"http://{backend_service}:8001/feature/{datafile_chosen['id']}/{feature}/{st.session_state[counter]}")
   feature_data = response.json()
   serialized_feature = feature_data["serialized_feature"]
   feature_image = np.array(serialized_feature)

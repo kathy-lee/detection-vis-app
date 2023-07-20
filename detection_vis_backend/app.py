@@ -123,34 +123,37 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.get("/parse")
-async def parse_data(parser: str, file_path: str, file_name: str, config: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/parse/{file_id}")
+async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
+        datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parser)
-        dataset_inst.parse(file_path, file_name, config)
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        dataset_inst.parse(datafile.path, datafile.name, datafile.config)
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.get("/sync")
-async def get_sync(parser: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+@app.get("/sync/{file_id}")
+async def get_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
+        datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parser)
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to retrieve sync mode.")
 
     return dataset_inst.frame_sync
 
 
-@app.get("/feature/{feature_name}/size")
-async def get_feature_size(parser: str, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+@app.get("/feature/{file_id}/{feature_name}/size")
+async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
+        datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parser)
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
 
         if feature_name in ("RD", "RA", "spectrogram", "radarPC"):
             count = dataset_inst.radarframe_count
@@ -160,19 +163,18 @@ async def get_feature_size(parser: str, feature_name: str,  skip: int = 0, limit
             count = dataset_inst.image_count
         else:
             count = dataset_inst.depthimage_count
-
-        logging.error(f"feature size {feature_name}: {count}")
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to retrieve feature size.")
 
     return count
  
 
-@app.get("/feature/{feature_name}/{id}")
-async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+@app.get("/feature/{file_id}/{feature_name}/{id}")
+async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
+        datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parser)
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         function_dict = {
             'RAD': dataset_inst.get_RAD,
             'RD': dataset_inst.get_RD,
@@ -184,7 +186,6 @@ async def get_feature(parser: str, feature_name: str, id: int, skip: int = 0, li
             'depth_image': dataset_inst.get_depthimage,
         }
         feature = function_dict[feature_name](id)
-
 
         if feature_name == "RAD":
             serialized_feature = [[[(x.real, x.imag) for x in y] for y in z] for z in feature.tolist()]

@@ -18,3 +18,6 @@ def get_datasets(db: Session):
 def get_datasetfiles(db: Session, dataset_id: int):
     return db.query(models.File).filter(models.File.directory_id == dataset_id).all()
 
+def get_datafile(db: Session, file_id: int):
+    return db.query(models.File).filter(models.File.id == file_id).first()
+
