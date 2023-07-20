@@ -64,9 +64,9 @@ frame_id = 0
 if frame_sync:
   st.session_state.frame_sync = True
   frame_id = st.slider('Choose a frame', frame_begin, frame_end, frame_begin)
-# else:
-#   st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
-#   st.session_state.frame_sync = False
+else:
+  #st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
+  st.session_state.frame_sync = False
   
 
 # infer the available features
