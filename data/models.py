@@ -13,6 +13,7 @@ class User(Base):
     name = Column(String, index=True)
     email = Column(String, unique=True, index=True)
 
+
 class Directory(Base):
     __tablename__ = "directories"
 
@@ -23,6 +24,7 @@ class Directory(Base):
 
     files = relationship("File", back_populates="directory")
     subdirectories = relationship("Directory")  # Subdirectories
+
 
 class File(Base):
     __tablename__ = "files"
@@ -50,3 +52,17 @@ class File(Base):
     directory_id = Column(Integer, ForeignKey("directories.id"))  # The directory the file is in
 
     directory = relationship("Directory", back_populates="files")
+
+
+class MLmodel(Base):
+    __tablename__ = "models"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, unique=True)
+    description = Column(String, index=True)
+    flow_run_id = Column(Integer, index=True)
+    flow_name = Column(String, index=True)
+    # data_input
+    # feature_input
+    # model_config
+    # train_config

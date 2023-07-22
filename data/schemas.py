@@ -43,6 +43,13 @@ class File(BaseModel):
     parse: str
     directory_id: int
     
-
     class Config:
         orm_mode = True
+
+
+class ModelCreate(BaseModel):
+    id: str
+    name: str
+    description: str
+    flow_run_id: int
+    flow_name: int
