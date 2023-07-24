@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from data import crud, models, schemas
 from data.database import SessionLocal, engine
-from detection_vis_backend.processing import DatasetFactory, RaDICaL, RADIal
+from detection_vis_backend.dataset import DatasetFactory, RaDICaL, RADIal
 
 
 # models.Base.metadata.create_all(bind=engine)
@@ -196,6 +196,70 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
 
     return {"serialized_feature": serialized_feature}
     
+
+@app.get("/train/{model_id}")
+async def train_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    # try:
+    #     model = crud.get_model(db, model_id)
+    #     model_factory = DatasetFactory()
+    #     model_inst = model_factory.get_instance(model.type, model_id)
+        
+
+    # Kick off a run of training flow with specified parameters
+    flow = Flow('TrainModelFlow')
+    try:
+        run = flow.run(parameters={'datafiles': datafiles_chosen,
+                                   'features': features_chosen,
+                                   'model_config': model_configs,
+                                   'train_config': train_configs})
+        run.wait_for_completion()
+        accuracy = run['end'].task.data.accuracy
+    except MetaflowException as e:
+        print(f"Metaflow exception occurred: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    
+    except Exception as e:
+        logging.error(f"An error occurred during training the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred while training the model: {str(e)}")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+
+@app.get("/save/{model_id}")
+async def save_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        model = crud.add_model(db, model_id)
+    except Exception as e:
+        logging.error(f"An error occurred during training the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during training the model: {str(e)}")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+
+@app.get("/evaulate/{model_id}")
+async def evaulate_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        model = crud.get_model(db, model_id)
+    except Exception as e:
+        logging.error(f"An error occurred during evaluating the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/predict/{model_id}")
+async def predict(model_id: int, input_data: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        model = crud.get_model(db, model_id)
+        prediction = model.predict(input_data)
+    except Exception as e:
+        logging.error(f"An error occurred during evaluating the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
+
+    return {"prediction": prediction}
 
 
 if __name__ == "__main__":
