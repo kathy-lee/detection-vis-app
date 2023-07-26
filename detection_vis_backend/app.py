@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from data import crud, models, schemas
 from data.database import SessionLocal, engine
-from detection_vis_backend.dataset import DatasetFactory, RaDICaL, RADIal
-
+from detection_vis_backend.datasets.dataset import DatasetFactory, RaDICaL, RADIal
+from detection_vis_backend.train.train import TrainModelFlow
 
 # models.Base.metadata.create_all(bind=engine)
 
@@ -197,8 +197,8 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
     return {"serialized_feature": serialized_feature}
     
 
-@app.get("/train/{model_id}")
-async def train_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+@app.get("/train")
+async def train_model(datafiles: list, features: list, model_config: dict, train_config: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     # try:
     #     model = crud.get_model(db, model_id)
     #     model_factory = DatasetFactory()
@@ -206,12 +206,11 @@ async def train_model(model_id: int, skip: int = 0, limit: int = 100, db: Sessio
         
 
     # Kick off a run of training flow with specified parameters
-    flow = Flow('TrainModelFlow')
     try:
-        run = flow.run(parameters={'datafiles': datafiles_chosen,
-                                   'features': features_chosen,
-                                   'model_config': model_configs,
-                                   'train_config': train_configs})
+        run = TrainModelFlow().run(datafiles=datafiles,
+                      features=features,
+                      model_config=model_config,
+                      train_config=train_config)
         run.wait_for_completion()
         accuracy = run['end'].task.data.accuracy
     except MetaflowException as e:
