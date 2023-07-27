@@ -2,7 +2,7 @@
 uvicorn>=0.18.2, <0.19.0
 fastapi>=0.79.0, <1.0.0
 python-multipart>=0.0.5, <0.1.0
-pydantic>=1.9.1, <1.10.0
+pydantic>=1.10.10, <1.10.11
 typing_extensions>=3.10.0, <3.11.0
 loguru>=0.6.0, <0.7.0
 sqlalchemy
@@ -13,3 +13,6 @@ bagpy
 openradar
 scipy
 scikit-learn
+torchvision
+pkbar
+metaflow
