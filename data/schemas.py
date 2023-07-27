@@ -41,6 +41,7 @@ class File(BaseModel):
     depth_image: bool
     config: str  
     parse: str
+    labeled: bool
     directory_id: int
     
     class Config:

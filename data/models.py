@@ -49,6 +49,9 @@ class File(Base):
     config = Column(String, index=True)
     # parse class
     parse = Column(String, index=True)
+    # whether it's labeled
+    labeled = Column(Boolean, index=True)
+    
     directory_id = Column(Integer, ForeignKey("directories.id"))  # The directory the file is in
 
     directory = relationship("Directory", back_populates="files")
