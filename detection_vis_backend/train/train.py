@@ -5,21 +5,26 @@ import pkbar
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.nn as nn
+import os
 
 from metaflow import FlowSpec, step, Parameter
 from pathlib import Path
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
-from model.FFTRadNet import FFTRadNet
-from dataset.dataset import RADIal
-from dataset.encoder import ra_encoder
-from dataset.dataloader import CreateDataLoaders
 from torch.optim import lr_scheduler
-from loss import pixor_loss
-from utils.evaluation import run_evaluation
-from utils import TrainDataset
+from .utils import CreateDataLoaders, run_evaluation, pixor_loss
+from data import crud
+from data.database import SessionLocal
+from detection_vis_backend.datasets.dataset import DatasetFactory
+from ..networks.network import NetworkFactory
 
-
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 class TrainModelFlow(FlowSpec):
@@ -43,54 +48,27 @@ class TrainModelFlow(FlowSpec):
 
     @step
     def start(self):
-        
-
-        self.next(self.split_data)
-
-    @step
-    def split_data(self):
-        
+        print("TrainModelFlow ready to run...")
         self.next(self.train_model)
 
     @step
     def train_model(self):
-        # Get input data for training
-        if len(self.datafiles) == 1: 
-            datafile = crud.get_datafile(db, file["id"])
-            dataset_factory = DatasetFactory()
-            dataset_inst = dataset_factory.get_instance(datafile.parse, file["id"])
-            train_data = dataset_inst
-        else:
+        # Create data loaders 
+        train_loaders = []
+        val_loaders = []
+        test_loaders = []
+        with get_db() as db:
             for file in self.datafiles:
                 datafile = crud.get_datafile(db, file["id"])
                 dataset_factory = DatasetFactory()
                 dataset_inst = dataset_factory.get_instance(datafile.parse, file["id"])
-                for feature in self.features:
-                    function_dict = {
-                        'RAD': dataset_inst.get_RAD,
-                        'RD': dataset_inst.get_RD,
-                        'RA': dataset_inst.get_RA,
-                        'spectrogram': dataset_inst.get_spectrogram,
-                        'radarPC': dataset_inst.get_radarpointcloud,
-                        'lidarPC': dataset_inst.get_lidarpointcloud,
-                        'image': dataset_inst.get_image,
-                        'depth_image': dataset_inst.get_depthimage,
-                    }
-                    feature_data = function_dict[feature]()
-                    train_data[feature].append(feature_data)
-    
-        # Load the dataset
-        # enc = ra_encoder(geometry = config['dataset']['geometry'], 
-        #                     statistics = config['dataset']['statistics'],
-        #                     regression_layer = 2)
-        
-        # dataset = RADIal(root_dir = config['dataset']['root_dir'],
-        #                     statistics= config['dataset']['statistics'],
-        #                     encoder=enc.encode,
-        #                     difficult=True)
-
-        train_loader, val_loader, test_loader = CreateDataLoaders(train_data, self.train_config)
-
+                # specify the features as train input data type
+                #dataset_inst.set_feature(self.features)
+                train_loader, val_loader, test_loader = CreateDataLoaders(dataset_inst, self.train_config)
+                train_loaders.append(train_loader)
+                val_loaders.append(val_loader)
+                test_loaders.append(test_loader)
+            
         # Setup random seed
         torch.manual_seed(self.train_config['seed'])
         np.random.seed(self.train_config['seed'])
@@ -107,6 +85,9 @@ class TrainModelFlow(FlowSpec):
         output_folder.mkdir(parents=True, exist_ok=True)
         (output_folder / exp_name).mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(output_folder / exp_name)
+
+        # save model path
+        self.model_path = os.path.join(output_folder, exp_name)
 
         # set device
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -140,22 +121,21 @@ class TrainModelFlow(FlowSpec):
         freespace_loss = nn.BCEWithLogitsLoss(reduction='mean')
 
 
-        if resume:
-            print('===========  Resume training  ==================:')
-            dict = torch.load(resume)
-            net.load_state_dict(dict['net_state_dict'])
-            optimizer.load_state_dict(dict['optimizer'])
-            scheduler.load_state_dict(dict['scheduler'])
-            startEpoch = dict['epoch']+1
-            history = dict['history']
-            global_step = dict['global_step']
-
-            print('       ... Start at epoch:',startEpoch)
+        # if resume:
+        #     print('===========  Resume training  ==================:')
+        #     dict = torch.load(resume)
+        #     net.load_state_dict(dict['net_state_dict'])
+        #     optimizer.load_state_dict(dict['optimizer'])
+        #     scheduler.load_state_dict(dict['scheduler'])
+        #     startEpoch = dict['epoch']+1
+        #     history = dict['history']
+        #     global_step = dict['global_step']
+        #     print('       ... Start at epoch:',startEpoch)
 
 
         for epoch in range(startEpoch,num_epochs):
-            
-            kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
+            batch_count = sum(len(loader) for loader in train_loaders)
+            kbar = pkbar.Kbar(target=batch_count, epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
             
             ###################
             ## Training loop ##
@@ -163,65 +143,78 @@ class TrainModelFlow(FlowSpec):
             net.train()
             running_loss = 0.0
             
-            for i, data in enumerate(train_loader):
-                inputs = data[0].to('cuda').float()
-                label_map = data[1].to('cuda').float()
-                if(self.model_config['SegmentationHead']=='True'):
-                    seg_map_label = data[2].to('cuda').double()
+            length_total = 0
+            for train_loader in train_loaders:
+                length_total += len(train_loader.dataset)
 
-                # reset the gradient
-                optimizer.zero_grad()
+                for i, data in enumerate(train_loader):
+                    inputs = data[0].to('cuda').float()
+                    label_map = data[1].to('cuda').float()
+                    if(self.model_config['SegmentationHead']=='True'):
+                        seg_map_label = data[2].to('cuda').double()
+
+                    # reset the gradient
+                    optimizer.zero_grad()
+                    
+                    # forward pass, enable to track our gradient
+                    with torch.set_grad_enabled(True):
+                        outputs = net(inputs)
+
+
+                    classif_loss,reg_loss = pixor_loss(outputs['Detection'], label_map, self.train_config['losses'])           
+                    
+                    prediction = outputs['Segmentation'].contiguous().flatten()
+                    label = seg_map_label.contiguous().flatten()        
+                    loss_seg = freespace_loss(prediction, label)
+                    loss_seg *= inputs.size(0)
+
+                    classif_loss *= self.train_config['losses']['weight'][0]
+                    reg_loss *= self.train_config['losses']['weight'][1]
+                    loss_seg *=self.train_config['losses']['weight'][2]
+
+
+                    loss = classif_loss + reg_loss + loss_seg
+
+                    writer.add_scalar('Loss/train', loss.item(), global_step)
+                    writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
+                    writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
+                    writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
+
+                    # backprop
+                    loss.backward()
+                    optimizer.step()
+
+                    # statistics
+                    running_loss += loss.item() * inputs.size(0)
                 
-                # forward pass, enable to track our gradient
-                with torch.set_grad_enabled(True):
-                    outputs = net(inputs)
-
-
-                classif_loss,reg_loss = pixor_loss(outputs['Detection'], label_map, self.train_config['losses'])           
-                
-                prediction = outputs['Segmentation'].contiguous().flatten()
-                label = seg_map_label.contiguous().flatten()        
-                loss_seg = freespace_loss(prediction, label)
-                loss_seg *= inputs.size(0)
-
-                classif_loss *= self.train_config['losses']['weight'][0]
-                reg_loss *= self.train_config['losses']['weight'][1]
-                loss_seg *=self.train_config['losses']['weight'][2]
-
-
-                loss = classif_loss + reg_loss + loss_seg
-
-                writer.add_scalar('Loss/train', loss.item(), global_step)
-                writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
-                writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
-                writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
-
-                # backprop
-                loss.backward()
-                optimizer.step()
-
-                # statistics
-                running_loss += loss.item() * inputs.size(0)
-            
-                kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
-
-                
-                global_step += 1
+                    kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
+    
+                    global_step += 1
 
 
             scheduler.step()
 
-            history['train_loss'].append(running_loss / len(train_loader.dataset))
+            history['train_loss'].append(running_loss / length_total)
             history['lr'].append(scheduler.get_last_lr()[0])
 
             
             ######################
             ## validation phase ##
             ######################
-
-            eval = run_evaluation(net,val_loader,enc,check_perf=(epoch>=10),
-                                    detection_loss=pixor_loss,segmentation_loss=freespace_loss,
-                                    losses_params=self.train_config['losses'])
+            eval = {}
+            for val_loader in val_loaders: 
+                eval_single = run_evaluation(net,val_loader,enc,check_perf=(epoch>=10),
+                                        detection_loss=pixor_loss,segmentation_loss=freespace_loss,
+                                        losses_params=self.train_config['losses'])
+                eval['loss'] += eval_single['loss']
+                eval['mAP'] += eval_single['mAP']
+                eval['mAR'] += eval_single['mAR']
+                eval['mIoU'] += eval_single['mIoU']
+            
+            eval['mAP'] /= len(val_loaders)
+            eval['mAR'] /= len(val_loaders)
+            eval['mIoU'] /= len(val_loaders)
+                
 
             history['val_loss'].append(eval['loss'])
             history['mAP'].append(eval['mAP'])
@@ -253,20 +246,11 @@ class TrainModelFlow(FlowSpec):
             
             print('')
 
-            self.next(self.evaluate_model)
-
-    @step
-    def evaluate_model(self):
-        self.accuracy = self.model.score(self.test.drop(['target'], axis=1), self.test['target'])
-        print('Model Accuracy:', self.accuracy)
-        self.next(self.end)
+            self.next(self.end)
 
     @step
     def end(self):
         print("Model Training Complete.")
-        with open("model.pkl", "wb") as f:
-            pickle.dump(self.model, f)
-        print("Model Saved.")
-
+        print("TrainModelFlow ends running.")
 
 
