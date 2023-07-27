@@ -61,7 +61,7 @@ if subdatasets:
       files = response.json()
 
       colms = st.columns((1, 2, 2, 1, 1))
-      fields = ['No', 'File name', 'info', "size", 'select']
+      fields = ['No', 'File name', 'Label info', "Size", 'Select']
       # table header
       for col, field_name in zip(colms, fields):
         col.write(field_name)
@@ -70,7 +70,7 @@ if subdatasets:
         col1, col2, col3, col4, col5 = st.columns((1, 2, 2, 1, 1))
         col1.write(no)  
         col2.write(file["name"])  
-        col3.write(file["description"])  
+        col3.write("With label" if file["labeled"] else "Not labeled")  
         col4.write(file["size"]) 
         # last column
         checkbox = f"{dataset['name']}_{index}_{file['name']}"
@@ -97,7 +97,7 @@ else:
   files = response.json()
 
   colms = st.columns((1, 2, 2, 1, 1))
-  fields = ['No', 'File name', 'info', "size", 'select']
+  fields = ['No', 'File name', 'Label info', "Size", 'Select']
   # table header
   for col, field_name in zip(colms, fields):
     col.write(field_name)
@@ -106,7 +106,7 @@ else:
     col1, col2, col3, col4, col5 = st.columns((1, 2, 2, 1, 1))
     col1.write(no)  
     col2.write(file["name"])  
-    col3.write(file["description"])  
+    col3.write("With label" if file["labeled"] else "Not labeled")  
     col4.write(file["size"]) 
     # last column
     checkbox = f"{dataset['name']}_{file['name']}"
