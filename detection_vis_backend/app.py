@@ -7,8 +7,9 @@ import paramiko
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
 #from PIL import Image
-from typing import List
+from typing import List, Dict, Any
 from sqlalchemy.orm import Session
+from metaflow.exception import MetaflowException
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -129,6 +130,7 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        print("############################# create instance ######################## ")
         dataset_inst.parse(datafile.path, datafile.name, datafile.config)
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
@@ -198,7 +200,7 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
     
 
 @app.get("/train")
-async def train_model(datafiles: list, features: list, model_config: dict, train_config: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     # try:
     #     model = crud.get_model(db, model_id)
     #     model_factory = DatasetFactory()
@@ -207,10 +209,10 @@ async def train_model(datafiles: list, features: list, model_config: dict, train
 
     # Kick off a run of training flow with specified parameters
     try:
-        run = TrainModelFlow().run(datafiles=datafiles,
-                      features=features,
-                      model_config=model_config,
-                      train_config=train_config)
+        run = TrainModelFlow().run(datafiles=datafiles_chosen,
+                      features=features_chosen,
+                      model_config=mlmodel_configs,
+                      train_config=train_configs)
         run.wait_for_completion()
         accuracy = run['end'].task.data.accuracy
     except MetaflowException as e:
