@@ -68,7 +68,7 @@ class RaDICaL(Dataset):
     frame_sync = 0
 
 
-    def __init__(self, features):
+    def __init__(self, features=None):
         self.name = "RaDICaL dataset instance"
 
     def parse(self, file_path, file_name, config):
@@ -220,15 +220,36 @@ class RADIal(Dataset):
     radarframe_count = 8252
     frame_sync = 8252
 
-    def parse(self, file_path, file_name, config):
+    def parse(self, file_path, file_name, config, difficult=True):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted(os.listdir(directory))
+        
+        self.image_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'camera'))
+        self.lidarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'laser_PCL'))
+        self.RD_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'radar_FFT'))
+        self.radarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'radar_PCL'))
 
-        self.image_filenames = get_sorted_filenames(os.path.join(file_path, 'camera'))
-        self.lidarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, 'laser_PCL'))
-        self.RD_filenames = get_sorted_filenames(os.path.join(file_path, 'radar_FFT'))
-        self.radarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, 'radar_PCL'))
+        self.labels = pd.read_csv(os.path.join(file_path, file_name, 'labels.csv')).to_numpy()
+
+        # Keeps only easy samples
+        if(difficult==False):
+            ids_filters=[]
+            ids = np.where( self.labels[:, -1] == 0)[0]
+            ids_filters.append(ids)
+            ids_filters = np.unique(np.concatenate(ids_filters))
+            self.labels = self.labels[ids_filters]
+
+        # Gather each input entries by their sample id
+        self.unique_ids = np.unique(self.labels[:,0])
+        self.label_dict = {}
+        for i,ids in enumerate(self.unique_ids):
+            sample_ids = np.where(self.labels[:,0]==ids)[0]
+            self.label_dict[ids]=sample_ids
+        self.sample_keys = list(self.label_dict.keys())
+        
+        self.resize = Resize((256,224), interpolation=transform.InterpolationMode.NEAREST)
+        self.crop = CenterCrop((512,448))
 
     def get_RAD(self, idx=None):
         return None
@@ -266,36 +287,9 @@ class RADIal(Dataset):
     def get_spectrogram(self, idx=None):
         return None
 
-    def __init__(self, root_dir,statistics=None,encoder=None,difficult=False):
+    def __init__(self):
         # RADIal data has two formats: raw and ready-to-use
         self.name = "RADIal dataset instance" 
-        self.root_dir = root_dir
-        self.statistics = statistics
-        self.encoder = encoder
-        
-        self.labels = pd.read_csv(os.path.join(root_dir,'labels.csv')).to_numpy()
-       
-        # Keeps only easy samples
-        if(difficult==False):
-            ids_filters=[]
-            ids = np.where( self.labels[:, -1] == 0)[0]
-            ids_filters.append(ids)
-            ids_filters = np.unique(np.concatenate(ids_filters))
-            self.labels = self.labels[ids_filters]
-
-
-        # Gather each input entries by their sample id
-        self.unique_ids = np.unique(self.labels[:,0])
-        self.label_dict = {}
-        for i,ids in enumerate(self.unique_ids):
-            sample_ids = np.where(self.labels[:,0]==ids)[0]
-            self.label_dict[ids]=sample_ids
-        self.sample_keys = list(self.label_dict.keys())
-        
-
-        self.resize = Resize((256,224), interpolation=transform.InterpolationMode.NEAREST)
-        self.crop = CenterCrop((512,448))
-
 
     def __len__(self):
         return len(self.label_dict)
