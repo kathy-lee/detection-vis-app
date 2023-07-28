@@ -223,7 +223,7 @@ class RADIal(Dataset):
     def parse(self, file_path, file_name, config, difficult=True):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
-            return sorted(os.listdir(directory))
+            return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
         self.image_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'camera'))
         self.lidarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'laser_PCL'))
@@ -258,7 +258,7 @@ class RADIal(Dataset):
         return None
 
     def get_RD(self, idx=None):
-        if idx:
+        if idx is not None:
             return np.load(self.RD_filenames[idx])
         else:
             for i in self.RD_filenames:
@@ -267,7 +267,7 @@ class RADIal(Dataset):
             return self.RD
 
     def get_radarpointcloud(self, idx=None):
-        if idx:
+        if idx is not None:
             return np.load(self.radarpointcloud_filenames[idx])
         else:
             for i in self.radarpointcloud_filenames:
@@ -276,7 +276,7 @@ class RADIal(Dataset):
             return self.radar_pointcloud
 
     def get_lidarpointcloud(self, idx=None):
-        if idx:
+        if idx is not None:
             return np.load(self.lidarpointcloud_filenames[idx])
         else:
             for i in self.lidarpointcloud_filenames:
@@ -284,6 +284,19 @@ class RADIal(Dataset):
                 self.lidar_pointcloud.append(pc)
             return self.lidar_pointcloud
 
+    def get_image(self, idx=None): 
+        if idx is not None:
+            image = np.asarray(Image.open(self.image_filenames[idx]))
+            return image
+        else:
+            for i in self.image_filenames:
+                image = np.asarray(Image.open(self.image_filenames[i]))
+                self.image.append(image)
+            return self.image
+
+    def get_depthimage(self, idx=None):
+        return None
+      
     def get_spectrogram(self, idx=None):
         return None
 
