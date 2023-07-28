@@ -277,10 +277,10 @@ class RADIal(Dataset):
 
     def get_lidarpointcloud(self, idx=None):
         if idx is not None:
-            return np.load(self.lidarpointcloud_filenames[idx])
+            return np.load(self.lidarpointcloud_filenames[idx], allow_pickle=True)[:,:3]
         else:
             for i in self.lidarpointcloud_filenames:
-                pc = np.load(self.lidarpointcloud_filenames[i])
+                pc = np.load(self.lidarpointcloud_filenames[i], allow_pickle=True)[:,:3]
                 self.lidar_pointcloud.append(pc)
             return self.lidar_pointcloud
 
