@@ -259,19 +259,27 @@ class RADIal(Dataset):
 
     def get_RD(self, idx=None):
         if idx is not None:
-            return np.load(self.RD_filenames[idx])
+            rd = np.load(self.RD_filenames[idx])
+            rd = np.concatenate([rd.real,rd.imag], axis=2)
+            return rd
         else:
             for i in self.RD_filenames:
-                rangedoppler = np.load(self.RD_filenames[i])
-                self.RD.append(rangedoppler)
+                rd = np.load(self.RD_filenames[i])['arr_0']
+                rd = np.concatenate([rd.real,rd.imag],axis=2)
+                self.RD.append(rd)
             return self.RD
 
     def get_radarpointcloud(self, idx=None):
         if idx is not None:
-            return np.load(self.radarpointcloud_filenames[idx])
+            pc = np.load(self.radarpointcloud_filenames[idx], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
+            pc = np.rollaxis(pc,1,0)
+            pc[:,1] *= -1
+            return pc
         else:
             for i in self.radarpointcloud_filenames:
-                pc = np.load(self.radarpointcloud_filenames[i])
+                pc = np.load(self.radarpointcloud_filenames[i], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
+                pc = np.rollaxis(pc,1,0)
+                pc[:,1] *= -1
                 self.radar_pointcloud.append(pc)
             return self.radar_pointcloud
 
