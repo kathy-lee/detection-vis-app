@@ -14,7 +14,6 @@ backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 st.set_page_config(
     page_title="Getfeature",
     page_icon=":red_car:", 
-    layout="wide",
 )
 
 
@@ -90,34 +89,48 @@ for idx, f in enumerate(featureset):
     features.append(f)
     features_show.append(False)
 
-# st.info(features)
-# st.info(status)
+st.info(features)
+st.info(features_show)
 
-if "fft_cfg" not in st.session_state:
-  st.session_state.fft_cfg = 0
-if "tfa_cfg" not in st.session_state:
-  st.session_state.tfa_cfg = 0
-if "aoa_cfg" not in st.session_state:
-  st.session_state.aoa_cfg = 0
+
+if "RD" in features and not features_show[features.index("RD")]:
+  if "fft_cfg" not in st.session_state:
+    st.session_state.fft_cfg = 0
+  fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
+  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
+  st.session_state.fft_cfg = fft_config_list.index(fft_config)
+
+
+if "spectrogram" in features and not features_show[features.index("spectrogram")]:
+  if "tfa_cfg" not in st.session_state:
+    st.session_state.tfa_cfg = 0
+  tfa_config_list = ["Not interested", "STFT", "WV"]
+  tfa_config = st.sidebar.radio("How would you like to do time frequency analysis?", tfa_config_list, index=st.session_state.tfa_cfg)
+  st.session_state.tfa_cfg = tfa_config_list.index(tfa_config)
+
+
+if "RA" in features and not features_show[features.index("RA")]:
+  if "aoa_cfg" not in st.session_state:
+    st.session_state.aoa_cfg = 0
+  aoa_config_list = ["Not interested", "Barlett", "Capon"]
+  aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
+  st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
+
+
 if "noise_cfg" not in st.session_state:
   st.session_state.noise_cfg = 0
-if "cfar_cfg" not in st.session_state:
-  st.session_state.cfar_cfg = 0
-fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
-tfa_config_list = ["Not interested", "STFT", "WV"]
-aoa_config_list = ["Not interested", "Barlett", "Capon"]
 noise_config_list = ["Not interested", "Static noise removal"]
-cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
-fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
-tfa_config = st.sidebar.radio("How would you like to do time frequency analysis?", tfa_config_list, index=st.session_state.tfa_cfg)
-aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
 noise_config = st.sidebar.radio("How would you like to remove nosie?", noise_config_list, index=st.session_state.noise_cfg)
-cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
-st.session_state.fft_cfg = fft_config_list.index(fft_config)
-st.session_state.tfa_cfg = tfa_config_list.index(tfa_config)
-st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
 st.session_state.noise_cfg = noise_config_list.index(noise_config)
-st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
+
+
+if "radarPC" in features and not features_show[features.index("radarPC")]:
+  if "cfar_cfg" not in st.session_state:
+    st.session_state.cfar_cfg = 0
+  cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
+  cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
+  st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
+
 
 def show_next(i, length):
   # Increments the counter to get next photo
@@ -161,9 +174,25 @@ def show_feature(feature, counter, frame_id, config=None):
   feature_data = response.json()
   serialized_feature = feature_data["serialized_feature"]
   feature_image = np.array(serialized_feature)
-  feature_image = feature_image - np.min(feature_image)
-  feature_image = feature_image / np.max(feature_image)
-  st.image(feature_image, caption=f"index: {st.session_state[counter]}")
+  if feature == "lidarPC" or feature == "radarPC":
+    plt.figure(figsize=(8, 6))
+    plt.plot(-feature_image[:,1], feature_image[:,0], '.')
+    plt.xlim(-20,20)
+    plt.ylim(0,100)
+    plt.grid()
+    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    st.pyplot(plt)
+  elif feature == "RD":
+    rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
+    power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
+    plt.figure(figsize=(10,10))
+    plt.imshow(np.log10(power_spectrum))
+    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    st.pyplot(plt)
+  else:
+    feature_image = feature_image - np.min(feature_image)
+    feature_image = feature_image / np.max(feature_image)
+    st.image(feature_image, caption=f"index: {st.session_state[counter]}")
   
   # if feature == "RAD":
   #   serialized_feature = feature_data["serialized_feature"]
@@ -214,12 +243,13 @@ if feature in features:
 
 feature = "RD"
 counter = f"counter_{feature}" 
-if feature in features and fft_config in ("No windowing", "Hamming windowing", "Hanning windowing"):
+if feature in features and (features_show[features.index("RD")] or fft_config in ("No windowing", "Hamming windowing", "Hanning windowing")):
   expander_RD = st.expander("Range-Doppler(RD) feature", expanded=True)
   if counter not in st.session_state: 
     st.session_state[counter] = frame_id
   with expander_RD:
-    show_feature(feature, counter, frame_id, config=fft_config)
+    cfg = None if features_show[features.index("RD")] else fft_config
+    show_feature(feature, counter, frame_id, config=cfg)
 
 
 feature = "RA" 
@@ -244,12 +274,13 @@ if feature in features and tfa_config in ("STFT", "WV"):
 
 feature = "radarPC" 
 counter = f"counter_{feature}"  
-if feature in features and cfar_config in ("CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"):
+if feature in features and (features_show[features.index("radarPC")] or cfar_config in ("CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR")):
   expander_radarpc = st.expander("Radar Point Cloud", expanded=True)
   if counter not in st.session_state:
     st.session_state[counter] = frame_id
   with expander_radarpc:
-    show_feature(feature, counter, frame_id, config=cfar_config)
+    cfg = None if features_show[features.index("radarPC")] else cfar_config
+    show_feature(feature, counter, frame_id, config=cfg)
 
 
 if 'features_chosen' not in st.session_state:
@@ -260,8 +291,11 @@ st.session_state.features_chosen = features_chosen
 
 button_click = st.button("Go to train")
 if button_click:
-  #check_datafiles(st.session_state.datafiles_chosen)
-  switch_page("train model")
+  if features_chosen:
+    #check_datafiles(st.session_state.datafiles_chosen)
+    switch_page("train model")
+  else:
+    st.info("Please choose features first")
 
 # #############################################
 # expanders = [None]*len(features)
