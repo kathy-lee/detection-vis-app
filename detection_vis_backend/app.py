@@ -130,7 +130,6 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        print("############################# create instance ######################## ")
         dataset_inst.parse(datafile.path, datafile.name, datafile.config)
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
@@ -188,7 +187,7 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
             'depth_image': dataset_inst.get_depthimage,
         }
         feature = function_dict[feature_name](id)
-
+        
         if feature_name == "RAD":
             serialized_feature = [[[(x.real, x.imag) for x in y] for y in z] for z in feature.tolist()]
         else:
