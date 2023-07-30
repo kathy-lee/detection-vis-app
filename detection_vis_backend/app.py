@@ -3,6 +3,8 @@ import os
 import logging
 import uvicorn
 import paramiko
+import subprocess
+import json
 
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
@@ -10,6 +12,7 @@ from fastapi import Response, status
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from metaflow.exception import MetaflowException
+from pathlib import Path
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -17,7 +20,7 @@ from metaflow.exception import MetaflowException
 from data import crud, models, schemas
 from data.database import SessionLocal, engine
 from detection_vis_backend.datasets.dataset import DatasetFactory, RaDICaL, RADIal
-from detection_vis_backend.train.train import TrainModelFlow
+
 
 # models.Base.metadata.create_all(bind=engine)
 
@@ -33,6 +36,7 @@ from detection_vis_backend.train.train import TrainModelFlow
 # # Close the session
 # db.close()
 
+logging.basicConfig(level=logging.INFO)
 
 
 app = FastAPI()
@@ -198,30 +202,33 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
     return {"serialized_feature": serialized_feature}
     
 
-@app.get("/train")
+@app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    # try:
-    #     model = crud.get_model(db, model_id)
-    #     model_factory = DatasetFactory()
-    #     model_inst = model_factory.get_instance(model.type, model_id)
-        
-
-    # Kick off a run of training flow with specified parameters
     try:
-        run = TrainModelFlow().run(datafiles=datafiles_chosen,
-                      features=features_chosen,
-                      model_config=mlmodel_configs,
-                      train_config=train_configs)
-        run.wait_for_completion()
-        accuracy = run['end'].task.data.accuracy
+        # Convert the parameter values to strings
+        datafiles_str = json.dumps(datafiles_chosen)
+        features_str = json.dumps(features_chosen)
+        model_config_str = json.dumps(mlmodel_configs)
+        train_config_str = json.dumps(train_configs)
+
+        train_file = Path("detection_vis_backend/train/train.py")
+        if train_file.is_file():    
+            subprocess.run(["python", "detection_vis_backend/train/train.py", "run", 
+                            "--datafiles", datafiles_str,
+                            "--features", features_str,
+                            "--model_config", model_config_str,
+                            "--train_config", train_config_str])
+        else:
+            raise FileNotFoundError(f"{train_file} does not exist")
+    except FileNotFoundError as fnf_error:
+        logging.error(f"File not found error: {str(fnf_error)}")
+        raise HTTPException(status_code=500, detail=f"File not found: {str(fnf_error)}")
     except MetaflowException as e:
         print(f"Metaflow exception occurred: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-    
-    except Exception as e:
-        logging.error(f"An error occurred during training the model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while training the model: {str(e)}")
+        logging.error(f"An unexpected error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
