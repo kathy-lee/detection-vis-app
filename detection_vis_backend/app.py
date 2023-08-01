@@ -5,6 +5,7 @@ import uvicorn
 import paramiko
 import subprocess
 import json
+import pickle
 
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
@@ -205,8 +206,35 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
+        # Get feature data from chosen data files
+        datafile = crud.get_datafile(db, datafiles_chosen[0]["id"])
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(datafile.parse, datafiles_chosen[0]["id"])
+        # function_dict = {
+        #     'RAD': dataset_inst.get_RAD,
+        #     'RD': dataset_inst.get_RD,
+        #     'RA': dataset_inst.get_RA,
+        #     'spectrogram': dataset_inst.get_spectrogram,
+        #     'radarPC': dataset_inst.get_radarpointcloud,
+        #     'lidarPC': dataset_inst.get_lidarpointcloud,
+        #     'image': dataset_inst.get_image,
+        #     'depth_image': dataset_inst.get_depthimage,
+        # }
+        train_data = []
+        # for feature in features_chosen:
+        #     feature_data = function_dict[feature]
+        #     train_data.append(feature_data)
+        from itertools import islice
+        for data in islice(dataset_inst, 100):
+        #for data in dataset_inst:
+            train_data.append(data)
+
+        data_path = "train_data.pkl"
+        with open(data_path, 'wb') as f:
+            pickle.dump(train_data, f)
+        logging.error("################## train data pickle finished #################")
         # Convert the parameter values to strings
-        datafiles_str = json.dumps(datafiles_chosen)
+        #datafiles_str = json.dumps(datafiles_chosen)
         features_str = json.dumps(features_chosen)
         model_config_str = json.dumps(mlmodel_configs)
         train_config_str = json.dumps(train_configs)
@@ -214,7 +242,7 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
         train_file = Path("detection_vis_backend/train/train.py")
         if train_file.is_file():    
             subprocess.run(["python", "detection_vis_backend/train/train.py", "run", 
-                            "--datafiles", datafiles_str,
+                            "--data_path", data_path,
                             "--features", features_str,
                             "--model_config", model_config_str,
                             "--train_config", train_config_str])
