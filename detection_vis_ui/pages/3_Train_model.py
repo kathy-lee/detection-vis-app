@@ -80,27 +80,32 @@ if train_mode == train_modes[0]:
         mimolayer = st.number_input("MIMO layer output", min_value=64, max_value=256, value=192)
         detectionhead = st.radio("Detection Head", ["True", "False"])
         seghead = st.radio("Segmentation Head", ["True", "False"])
+        st.session_state.model_configs["type"] = model
         st.session_state.model_configs["blocks"] = blocks
         st.session_state.model_configs["channels"] = channels
-        st.session_state.model_configs["mimolayer"] = mimolayer
-        st.session_state.model_configs["detectionhead"] = detectionhead
-        st.session_state.model_configs["seghead"] = seghead
+        st.session_state.model_configs["mimo_layer"] = mimolayer
+        st.session_state.model_configs["detection_head"] = detectionhead
+        st.session_state.model_configs["segmentation_head"] = seghead
 
 
     with trainconfig_expander:
-      epoch = st.number_input("Num of epochs:", min_value=1, max_value=100, value=100)
+      seed = st.number_input("Random seed:", min_value=1, max_value=10, value=3)
+      epoch = st.number_input("Num of epochs:", min_value=1, max_value=100, value=1)
       lr = st.number_input("Initial learning rate for the optimizer:", min_value=1e-5, max_value=1e-2, value=1e-4, format="%.5f")
       step_size = st.number_input("Step size of learning rate scheduling:", min_value=1, max_value=20, value=10)
       gamma = st.number_input("Gamma factor of learning rate scheduling:", min_value=0.1, max_value=1.0, value=0.9, format="%.5f")
       classif_loss = st.selectbox("Loss function of classification:", classif_loss_functions, index=0)
       reg_loss = st.selectbox("Loss function of regression:", reg_loss_functions, index=0)
-      st.session_state.train_configs["epoch"] = epoch
+      st.session_state.train_configs["seed"] = seed
+      st.session_state.train_configs["num_epochs"] = epoch
       st.session_state.train_configs["lr"] = lr
       st.session_state.train_configs["step_size"] = step_size
       st.session_state.train_configs["gamma"] = gamma
-      st.session_state.train_configs["classif_loss"] = classif_loss
-      st.session_state.train_configs["reg_loss"] = reg_loss
-      st.session_state.train_configs["weight"] = [1,100,100]
+      st.session_state.train_configs["losses"] = {"classification": classif_loss, "regression": reg_loss, "weight": [1,100,100]}
+      st.session_state.train_configs["mode"] = "sequence"
+      st.session_state.train_configs["train"] = {"batch_size": 4, "num_workers": 4}
+      st.session_state.train_configs["val"] = {"batch_size": 4, "num_workers": 4}
+      st.session_state.train_configs["test"] = {"batch_size": 1, "num_workers": 1}
     
     train_action = st.button("Train", key="train_btn")
     evaluation_action = st.button("Evaluation", key="evaluation_btn")
