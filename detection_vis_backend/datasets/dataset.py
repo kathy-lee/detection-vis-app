@@ -25,10 +25,12 @@ class DatasetFactory:
 
     def get_instance(self, class_name, id):
         if id in self.instance_dict:
+            logging.error(f"#####################{class_name} instance created already, directly return {id}")
             return self.instance_dict[id]
         
         class_obj = globals()[class_name]()
         self.instance_dict[id] = class_obj
+        logging.error(f"#######################{class_name} instance not created yet, will create from file {id}")
         return class_obj
 
 # class DatasetFactory:
@@ -225,12 +227,13 @@ class RADIal(Dataset):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
-        self.image_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'camera'))
-        self.lidarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'laser_PCL'))
-        self.RD_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'radar_FFT'))
-        self.radarpointcloud_filenames = get_sorted_filenames(os.path.join(file_path, file_name, 'radar_PCL'))
+        self.root_dir = os.path.join(file_path, file_name)
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_dir, 'camera'))
+        self.lidarpointcloud_filenames = get_sorted_filenames(os.path.join(self.root_dir, 'laser_PCL'))
+        self.RD_filenames = get_sorted_filenames(os.path.join(self.root_dir, 'radar_FFT'))
+        self.radarpointcloud_filenames = get_sorted_filenames(os.path.join(self.root_dir, 'radar_PCL'))
 
-        self.labels = pd.read_csv(os.path.join(file_path, file_name, 'labels.csv')).to_numpy()
+        self.labels = pd.read_csv(os.path.join(self.root_dir, 'labels.csv')).to_numpy()
 
         # Keeps only easy samples
         if(difficult==False):
@@ -247,7 +250,7 @@ class RADIal(Dataset):
             sample_ids = np.where(self.labels[:,0]==ids)[0]
             self.label_dict[ids]=sample_ids
         self.sample_keys = list(self.label_dict.keys())
-        
+
         self.resize = Resize((256,224), interpolation=transform.InterpolationMode.NEAREST)
         self.crop = CenterCrop((512,448))
 
@@ -337,8 +340,8 @@ class RADIal(Dataset):
         #  Encode the labels #
         ######################
         out_label=[]
-        if(self.encoder!=None):
-            out_label = self.encoder(box_labels).copy()      
+        # if(self.encoder!=None):
+        out_label = self.encode(box_labels).copy()      
 
         # Read the Radar FFT data
         radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
@@ -363,3 +366,78 @@ class RADIal(Dataset):
         image = np.asarray(Image.open(img_name))
 
         return radar_FFT, segmap,out_label,box_labels,image
+    
+        
+    def encode(self,labels):
+        geometry = {
+            "ranges": [512,896,1],
+            "resolution": [0.201171875,0.2],
+            "size": 3
+        }
+        self.statistics = {
+            "input_mean":[-2.6244e-03, -2.1335e-01,  1.8789e-02, -1.4427e+00, -3.7618e-01,
+                1.3594e+00, -2.2987e-01,  1.2244e-01,  1.7359e+00, -6.5345e-01,
+                3.7976e-01,  5.5521e+00,  7.7462e-01, -1.5589e+00, -7.2473e-01,
+                1.5182e+00, -3.7189e-01, -8.8332e-02, -1.6194e-01,  1.0984e+00,
+                9.9929e-01, -1.0495e+00,  1.9972e+00,  9.2869e-01,  1.8991e+00,
+               -2.3772e-01,  2.0000e+00,  7.7737e-01,  1.3239e+00,  1.1817e+00,
+               -6.9696e-01,  4.4288e-01],
+            "input_std":[20775.3809, 23085.5000, 23017.6387, 14548.6357, 32133.5547, 28838.8047,
+                27195.8945, 33103.7148, 32181.5273, 35022.1797, 31259.1895, 36684.6133,
+                33552.9258, 25958.7539, 29532.6230, 32646.8984, 20728.3320, 23160.8828,
+                23069.0449, 14915.9053, 32149.6172, 28958.5840, 27210.8652, 33005.6602,
+                31905.9336, 35124.9180, 31258.4316, 31086.0273, 33628.5352, 25950.2363,
+                29445.2598, 32885.7422],
+            "reg_mean":[0.4048094369863972,0.3997392847799934],
+            "reg_std":[0.6968599580482511,0.6942950877813826]
+        }
+        regression_layer = 2
+
+        INPUT_DIM = (geometry['ranges'][0],geometry['ranges'][1],geometry['ranges'][2])
+        OUTPUT_DIM = (regression_layer + 1, INPUT_DIM[0] // 4 , INPUT_DIM[1] // 4 )
+
+        map = np.zeros(OUTPUT_DIM )
+
+        for lab in labels:
+            # [Range, Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix	,y2_pix]
+
+            if(lab[0]==-1):
+                continue
+
+            range_bin = int(np.clip(lab[0]/geometry['resolution'][0]/4,0,OUTPUT_DIM[1]))
+            range_mod = lab[0] - range_bin*geometry['resolution'][0]*4
+
+            # ANgle and deg
+            angle_bin = int(np.clip(np.floor(lab[1]/geometry['resolution'][1]/4 + OUTPUT_DIM[2]/2),0,OUTPUT_DIM[2]))
+            angle_mod = lab[1] - (angle_bin- OUTPUT_DIM[2]/2)*geometry['resolution'][1]*4 
+
+            if(geometry['size']==1):
+                map[0,range_bin,angle_bin] = 1
+                map[1,range_bin,angle_bin] = (range_mod - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
+                map[2,range_bin,angle_bin] = (angle_mod - self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
+            else:
+
+                s = int((geometry['size']-1)/2)
+                r_lin = np.linspace(geometry['resolution'][0]*s, -geometry['resolution'][0]*s,
+                                    geometry['size'])*4
+                a_lin = np.linspace(geometry['resolution'][1]*s, -geometry['resolution'][1]*s,
+                                    geometry['size'])*4
+                
+                px_a, px_r = np.meshgrid(a_lin, r_lin)
+
+                if(angle_bin>=s and angle_bin<(OUTPUT_DIM[2]-s)):
+                    map[0,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = 1
+                    map[1,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = ((px_r+range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
+                    map[2,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = ((px_a + angle_mod) - self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1] 
+                elif(angle_bin<s):
+                    map[0,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = 1
+                    map[1,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = ((px_r[:,s-angle_bin:] + range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
+                    map[2,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = ((px_a[:,s-angle_bin:] + angle_mod)- self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
+                    
+                elif(angle_bin>=OUTPUT_DIM[2]):
+                    end = s+(OUTPUT_DIM[2]-angle_bin)
+                    map[0,range_bin-s:range_bin+(s+1),angle_bin-s:] = 1
+                    map[1,range_bin-s:range_bin+(s+1),angle_bin-s:] = ((px_r[:,:end] + range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
+                    map[2,range_bin-s:range_bin+(s+1),angle_bin-s:] = ((px_a[:,:end] + angle_mod)- self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
+
+        return map
