@@ -28,6 +28,7 @@ else:
     #bytes_data = uploaded_file.getvalue()
     #st.write(bytes_data)
     im = Image.open(uploaded_file)
+    im = im.resize((600, 400))
     image = np.array(im)
     st.image(image)
 

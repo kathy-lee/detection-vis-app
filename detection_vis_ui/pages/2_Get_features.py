@@ -288,6 +288,7 @@ if 'features_chosen' not in st.session_state:
 
 features_chosen = st.multiselect("Which features would you like to select as input?", features, st.session_state.features_chosen)
 st.session_state.features_chosen = features_chosen
+st.write(features_chosen)
 
 button_click = st.button("Go to train")
 if button_click:
