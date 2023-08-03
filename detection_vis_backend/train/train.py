@@ -23,30 +23,21 @@ from torch.utils.data import Dataset
 import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
-# from data import crud
-# from data.database import SessionLocal
+from data import crud
+from data.database import SessionLocal
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import CreateDataLoaders, run_evaluation, pixor_loss
 
 
 
-# class TrainDataset(Dataset):
-#     def __init__(self, *args):
-#         self.lists = args
-#         for i in range(1, len(self.lists)):
-#             assert len(self.lists[0]) == len(self.lists[i])
-
-#     def __getitem__(self, index):
-#         return tuple(list_[index] for list_ in self.lists)
-
-#     def __len__(self):
-#         return len(self.lists[0])
-
-
-# class TrainDatasetFactory:
-#     def create_dataset(self, *args):
-#         return TrainDataset(*args)
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class TrainDataset(Dataset):
     def __init__(self, data):
@@ -65,7 +56,7 @@ class TrainDatasetFactory:
     
 
 class TrainModelFlow(FlowSpec):
-    data_path = Parameter('data_path',
+    datafiles_str = Parameter('datafiles',
                           help="Serialized data file path",
                           required=True,
                           type=str)
@@ -86,10 +77,11 @@ class TrainModelFlow(FlowSpec):
     def start(self):
         logging.info("Training begins.")
         print("########################### Training begins #############################")
+        self.datafiles = json.loads(self.datafiles_str)
         self.features = json.loads(self.features_str)
         self.model_config = json.loads(self.model_config_str)
         self.train_config = json.loads(self.train_config_str)
-        print(self.data_path)
+        print(self.datafiles)
         print(self.features)
         print(self.model_config)
         print(self.train_config)
@@ -97,35 +89,17 @@ class TrainModelFlow(FlowSpec):
 
     @step
     def train_model(self):
-        # # Create data loaders 
-        # train_loaders = []
-        # val_loaders = []
-        # test_loaders = []
-
-        # for file in self.datafiles:
-        with open(self.data_path, 'rb') as f:
-            data = pickle.load(f)
-        
-        factory = TrainDatasetFactory()
-        train_dataset = factory.create_dataset(data)
-            
-        train_loader, val_loader, test_loader = CreateDataLoaders(train_dataset, self.train_config)
-        # train_loaders.append(train_loader)
-        # val_loaders.append(val_loader)
-        # test_loaders.append(test_loader)
-        
-
-        # with get_db() as db:
-        #     for file in self.datafiles:
-        #         datafile = crud.get_datafile(db, file["id"])
-        #         dataset_factory = DatasetFactory()
-        #         dataset_inst = dataset_factory.get_instance(datafile.parse, file["id"])
-        #         # specify the features as train input data type
-        #         #dataset_inst.set_feature(self.features)
-        #         train_loader, val_loader, test_loader = CreateDataLoaders(dataset_inst, self.train_config)
-        #         train_loaders.append(train_loader)
-        #         val_loaders.append(val_loader)
-        #         test_loaders.append(test_loader)
+    
+        for file in self.datafiles:
+            dataset_factory = DatasetFactory()
+            dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+            dataset_inst.parse(file['path'], file['name'], file['config'])
+            # specify the features as train input data type
+            dataset_inst.set_features(self.features)
+            train_loader, val_loader, test_loader = CreateDataLoaders(dataset_inst, self.train_config)
+            # train_loaders.append(train_loader)
+            # val_loaders.append(val_loader)
+            # test_loaders.append(test_loader)
             
         # Setup random seed
         torch.manual_seed(self.train_config['seed'])
