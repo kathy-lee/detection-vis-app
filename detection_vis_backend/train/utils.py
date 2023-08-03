@@ -161,7 +161,7 @@ def RADIal_collate(batch):
     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
 
-def decode(self,map,threshold):
+def decode(map,threshold):
         geometry = {
             "ranges": [512,896,1],
             "resolution": [0.201171875,0.2],
@@ -184,13 +184,16 @@ def decode(self,map,threshold):
             "reg_mean":[0.4048094369863972,0.3997392847799934],
             "reg_std":[0.6968599580482511,0.6942950877813826]
         }
+        regression_layer = 2
+        INPUT_DIM = (geometry['ranges'][0],geometry['ranges'][1],geometry['ranges'][2])
+        OUTPUT_DIM = (regression_layer + 1, INPUT_DIM[0] // 4 , INPUT_DIM[1] // 4 )
         range_bins,angle_bins = np.where(map[0,:,:]>=threshold)
 
         coordinates = []
 
         for range_bin,angle_bin in zip(range_bins,angle_bins):
-            R = range_bin*4*self.geometry['resolution'][0] + map[1,range_bin,angle_bin] * statistics['reg_std'][0] + statistics['reg_mean'][0]
-            A = (angle_bin-self.OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + map[2,range_bin,angle_bin] * statistics['reg_std'][1] + statistics['reg_mean'][1]
+            R = range_bin*4*geometry['resolution'][0] + map[1,range_bin,angle_bin] * statistics['reg_std'][0] + statistics['reg_mean'][0]
+            A = (angle_bin-OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + map[2,range_bin,angle_bin] * statistics['reg_std'][1] + statistics['reg_mean'][1]
             C = map[0,range_bin,angle_bin]
         
             coordinates.append([R,A,C])
@@ -245,8 +248,7 @@ def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation
 
             for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels,label_freespace):
 
-                metrics.update(pred_map[0],true_map,np.asarray(decode(pred_obj,0.05)),true_obj,
-                            threshold=0.2,range_min=5,range_max=100) 
+                metrics.update(pred_map[0],true_map,np.asarray(decode(pred_obj,0.05)),true_obj,threshold=0.2,range_min=5,range_max=100) 
                 
         kbar.update(i)
         
