@@ -23,21 +23,11 @@ from torch.utils.data import Dataset
 import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
-from data import crud
-from data.database import SessionLocal
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import CreateDataLoaders, run_evaluation, pixor_loss
 
 
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 class TrainDataset(Dataset):
     def __init__(self, data):
@@ -168,7 +158,7 @@ class TrainModelFlow(FlowSpec):
 
         for epoch in range(startEpoch,num_epochs):
             kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
-            
+            print(f'Epoch {epoch+1}/{num_epochs}')
             ###################
             ## Training loop ##
             ###################
@@ -215,6 +205,7 @@ class TrainModelFlow(FlowSpec):
                 running_loss += loss.item() * inputs.size(0)
             
                 kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
+                print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
 
                 global_step += 1
 
