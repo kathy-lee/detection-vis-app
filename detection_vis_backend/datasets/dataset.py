@@ -25,12 +25,12 @@ class DatasetFactory:
 
     def get_instance(self, class_name, id):
         if id in self.instance_dict:
-            logging.error(f"#####################{class_name} instance created already, directly return {id}")
+            # logging.error(f"#####################{class_name} instance created already, directly return {id}")
             return self.instance_dict[id]
         
         class_obj = globals()[class_name]()
         self.instance_dict[id] = class_obj
-        logging.error(f"#######################{class_name} instance not created yet, will create from file {id}")
+        # logging.error(f"#######################{class_name} instance not created yet, will create from file {id}")
         return class_obj
 
 # class DatasetFactory:
@@ -53,8 +53,8 @@ class DatasetFactory:
 class RaDICaL(Dataset):
     name = ""
     features = []
-
     config = ""
+    
     image = []
     depth_image = []
     ADC = []
@@ -94,6 +94,8 @@ class RaDICaL(Dataset):
                 dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
                 self.image.append(image)
+                # # save as npy file
+                # np.save(os.path.join(feature_path, f"image_{idx.npy}"))
             self.image_count = len(self.image)
 
         if "/camera/aligned_depth_to_color/image_raw" in topics_dict:
@@ -210,6 +212,10 @@ class RaDICaL(Dataset):
 
 
 class RADIal(Dataset):
+    name = ""
+    features = []
+    config = ""
+
     image = []
     RAD = []
     RA = []
@@ -367,7 +373,9 @@ class RADIal(Dataset):
 
         return radar_FFT, segmap,out_label,box_labels,image
     
-        
+    def set_features(self, features):
+        self.features = features
+
     def encode(self,labels):
         geometry = {
             "ranges": [512,896,1],
