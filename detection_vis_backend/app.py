@@ -5,13 +5,14 @@ import uvicorn
 import paramiko
 import subprocess
 import json
-import pickle
+import re
 
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
 #from PIL import Image
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
+from metaflow import Flow
 from metaflow.exception import MetaflowException
 from pathlib import Path
 
@@ -214,12 +215,25 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
         train_config_str = json.dumps(train_configs)
 
         train_file = Path("detection_vis_backend/train/train.py")
-        if train_file.is_file():    
-            subprocess.run(["python", "detection_vis_backend/train/train.py", "run", 
-                            "--datafiles", datafiles_str,
-                            "--features", features_str,
-                            "--model_config", model_config_str,
-                            "--train_config", train_config_str])
+        if train_file.is_file():  
+            with open('train_log.txt', 'w') as f:  
+                subprocess.run(["python", "detection_vis_backend/train/train.py", "run", 
+                                "--datafiles", datafiles_str,
+                                "--features", features_str,
+                                "--model_config", model_config_str,
+                                "--train_config", train_config_str])
+            
+            # For now Metaflow doesn't have an API for launching flows programmatically, this is the temporary way to get run id and model checkpoint path
+            with open('modelflow_info.txt', 'r') as f:
+                lines = f.readlines()
+            for line in lines:
+                if "RUN_ID:" in line:
+                    run_id = line.replace("RUN_ID: ", "").strip()
+                elif "EXP_NAME:" in line:
+                    exp_name = line.replace("EXP_NAME: ", "").strip()
+
+            model_data = schemas.ModelCreate(name=exp_name,description="info",flow_run_id=run_id, flow_name="TrainModleFlow")
+            crud.add_model(db=db, mlmodel=model_data)
         else:
             raise FileNotFoundError(f"{train_file} does not exist")
     except FileNotFoundError as fnf_error:
@@ -231,32 +245,72 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
         logging.error(f"An unexpected error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
-
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
+    return {"model_name": exp_name}
 
 
-@app.get("/save/{model_id}")
-async def save_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/models", response_model=List[schemas.Directory])
+def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
-        model = crud.add_model(db, model_id)
+        models = crud.get_models(db)
     except Exception as e:
-        logging.error(f"An error occurred during training the model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during training the model: {str(e)}")
+        logging.error(f"An error occurred during reading the models: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred while getting the models.")
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if not models:
+        raise HTTPException(status_code=404, detail="No models found.")
+    return models
 
 
-
-@app.get("/evaulate/{model_id}")
-async def evaulate_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/model/{id}")
+def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
-        model = crud.get_model(db, model_id)
-    except Exception as e:
-        logging.error(f"An error occurred during evaluating the model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
+        model = crud.get_model(db, id)
+        if not model:
+            raise ValueError("Model not found")
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+        flow_name = model["flow_name"]
+        run_id = model["flow_id"]
+        run = Flow(flow_name)[run_id]
+        parameters = run.data
+        
+        if not parameters:
+            raise ValueError("Parameters are empty")
+
+    except MetaflowException as e:
+        print(f"Metaflow exception occurred: {str(e)}")
+    except ValueError as e:
+        print(f"ValueError occurred: {str(e)}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {str(e)}")
+            
+    return {"datafiles": parameters.datafiles, 
+            "features": parameters.features,
+            "model_config": parameters.model_config, 
+            "train_config": parameters.train_config}
+
+
+
+# @app.get("/save/{model_id}")
+# async def save_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+        
+#     except Exception as e:
+#         logging.error(f"An error occurred during training the model: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An error occurred during training the model: {str(e)}")
+#     return Response(status_code=status.HTTP_204_NO_CONTENT)
+    
+
+
+
+# @app.get("/evaulate/{model_id}")
+# async def evaulate_model(model_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+#         model = crud.get_model(db, model_id)
+#     except Exception as e:
+#         logging.error(f"An error occurred during evaluating the model: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
+
+#     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/predict/{model_id}")
