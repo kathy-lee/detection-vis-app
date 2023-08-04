@@ -25,7 +25,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import CreateDataLoaders, run_evaluation, pixor_loss
+from detection_vis_backend.train.utils import CreateDataLoaders, run_evaluation, pixor_loss, run_FullEvaluation
 
 
 
@@ -47,7 +47,7 @@ class TrainDatasetFactory:
 
 class TrainModelFlow(FlowSpec):
     datafiles_str = Parameter('datafiles',
-                          help="Serialized data file path",
+                          help="Chosen data files",
                           required=True,
                           type=str)
     features_str = Parameter('features',
@@ -55,16 +55,18 @@ class TrainModelFlow(FlowSpec):
                         required=True,
                         type=str)
     model_config_str = Parameter('model_config', 
-                             help="Path to the model configuration file.",
+                             help="Model configurations",
                              required=True,
                              type=str)
     train_config_str = Parameter('train_config', 
-                             help="Path to the train configuration file.",
+                             help="Train configurations",
                              required=True,
                              type=str)
 
     @step
     def start(self):
+        with open('modelflow_info.txt', 'w') as f:
+            f.write(f"RUN_ID: {self.current_run_id}\n")
         logging.info("Training begins.")
         print("########################### Training begins #############################")
         self.datafiles = json.loads(self.datafiles_str)
@@ -86,10 +88,9 @@ class TrainModelFlow(FlowSpec):
             dataset_inst.parse(file['path'], file['name'], file['config'])
             # specify the features as train input data type
             dataset_inst.set_features(self.features)
-            train_loader, val_loader, test_loader = CreateDataLoaders(dataset_inst, self.train_config)
-            # train_loaders.append(train_loader)
-            # val_loaders.append(val_loader)
-            # test_loaders.append(test_loader)
+            train_loader, val_loader, test_loader, train_ids, val_ids, test_ids = CreateDataLoaders(dataset_inst, self.train_config)
+            
+
             
         # Setup random seed
         torch.manual_seed(self.train_config['seed'])
@@ -101,6 +102,8 @@ class TrainModelFlow(FlowSpec):
         curr_date = datetime.now()
         exp_name = self.model_config['type'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
         print(exp_name)
+        with open("modelflow_info.txt", 'a') as f:
+            f.write(f"EXP_NAME: {exp_name}\n")
 
         # Initialize tensorboard
         output_folder = Path("/home/kangle/dataset/trained_models")
@@ -252,12 +255,19 @@ class TrainModelFlow(FlowSpec):
             
             print('')
 
+        print("########################### Training ends sucessfully #############################")
+
+        print("########################### Evaluation begins #############################")
+        eval_path = os.path.join(output_folder, exp_name, "eval_output.txt")
+        run_FullEvaluation(net, test_loader, eval_path)
+        print("########################### Evaluation ends sucessfully #############################")
+
         self.next(self.end)
 
     @step
     def end(self):
 
-        print("########################### Training ends sucessfully #############################")
+        
 
     # def run_flow(self):
     #     from metaflow import get_metadata
