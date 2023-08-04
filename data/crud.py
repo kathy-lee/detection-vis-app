@@ -27,3 +27,9 @@ def add_model(db: Session, mlmodel: schemas.ModelCreate):
     db.commit()
     db.refresh(model)
     return model
+
+def get_models(db: Session):
+    return db.query(models.MLmodel).all()
+
+def get_model(db: Session, model_id: str):
+    return db.query(models.MLmodel).filter(models.MLmodel.id == model_id)
