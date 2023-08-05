@@ -89,9 +89,12 @@ class TrainModelFlow(FlowSpec):
             # specify the features as train input data type
             dataset_inst.set_features(self.features)
             train_loader, val_loader, test_loader, train_ids, val_ids, test_ids = CreateDataLoaders(dataset_inst, self.train_config)
-            
+            with open('samples_split.txt', 'w') as f:
+                f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
+                f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
+                f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
 
-            
+
         # Setup random seed
         torch.manual_seed(self.train_config['seed'])
         np.random.seed(self.train_config['seed'])
@@ -106,7 +109,7 @@ class TrainModelFlow(FlowSpec):
             f.write(f"EXP_NAME: {exp_name}\n")
 
         # Initialize tensorboard
-        output_folder = Path("/home/kangle/dataset/trained_models")
+        output_folder = Path(os.getenv('MODEL_ROOTDIR'))
         output_folder.mkdir(parents=True, exist_ok=True)
         (output_folder / exp_name).mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(output_folder / exp_name)
