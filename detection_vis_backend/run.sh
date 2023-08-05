@@ -10,6 +10,8 @@ fi
 
 echo "Backend running in ${RUN_MODE} mode"
 
+export MODEL_ROOTDIR="/home/kangle/dataset/trained_models"
+export DATASET_ROOTDIR="/home/kangle/dataset"
 
 if [ $RUN_MODE = "prod" ]; then
     # Run commands for prod mode
