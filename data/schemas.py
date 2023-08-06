@@ -47,10 +47,18 @@ class File(BaseModel):
     class Config:
         orm_mode = True
 
-
-class ModelCreate(BaseModel):
-    id: str
+class MLModel(BaseModel):
+    id: int
     name: str
     description: str
-    flow_run_id: int
-    flow_name: int
+    flow_run_id: str
+    flow_name: str
+
+    class Config:
+        orm_mode = True
+
+class MLModelCreate(BaseModel):
+    name: str
+    description: str
+    flow_run_id: str
+    flow_name: str

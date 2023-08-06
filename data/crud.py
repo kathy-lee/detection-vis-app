@@ -21,8 +21,8 @@ def get_datasetfiles(db: Session, dataset_id: int):
 def get_datafile(db: Session, file_id: int):
     return db.query(models.File).filter(models.File.id == file_id).first()
 
-def add_model(db: Session, mlmodel: schemas.ModelCreate):
-    model = models.MLmodel(name=mlmodel.name, description=mlmodel.email, flow_run_id=mlmodel.flow_run_id, flow_name=mlmodel.flow_name)  # Convert UserCreate to User
+def add_model(db: Session, mlmodel: schemas.MLModelCreate):
+    model = models.MLmodel(name=mlmodel.name, description=mlmodel.description, flow_run_id=mlmodel.flow_run_id, flow_name=mlmodel.flow_name)  # Convert UserCreate to User
     db.add(model)
     db.commit()
     db.refresh(model)
@@ -31,5 +31,5 @@ def add_model(db: Session, mlmodel: schemas.ModelCreate):
 def get_models(db: Session):
     return db.query(models.MLmodel).all()
 
-def get_model(db: Session, model_id: str):
-    return db.query(models.MLmodel).filter(models.MLmodel.id == model_id)
+def get_model(db: Session, model_id: int):
+    return db.query(models.MLmodel).filter(models.MLmodel.id == model_id).first()

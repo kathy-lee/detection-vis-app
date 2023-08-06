@@ -63,7 +63,7 @@ class MLmodel(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, unique=True)
     description = Column(String, index=True)
-    flow_run_id = Column(Integer, index=True)
+    flow_run_id = Column(String, index=True)
     flow_name = Column(String, index=True)
     # data_input
     # feature_input
