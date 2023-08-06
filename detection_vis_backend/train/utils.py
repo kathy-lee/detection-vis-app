@@ -6,10 +6,13 @@ import torch.nn.functional as F
 import torch.nn as nn
 import pkbar
 import logging
+import cv2
+import polarTransform
 
 from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from typing import Final
 from shapely.geometry import Polygon
+
 
 
 # class TrainDataset(Dataset):
@@ -292,8 +295,10 @@ def run_FullEvaluation(net, loader, eval_path, iou_threshold=0.5):
                 
 
         kbar.update(i)
+        print(f'Step {i+1}/{len(loader)}')
         
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
+    # Write the metrics into file
     lines = [f'mAP: {mAP}\n', f'mAR: {mAR}\n', f'F1 score: {F1_score}\n']
     with open(eval_path, 'w') as file:
         file.writelines(lines)
@@ -460,23 +465,20 @@ def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_thr
 
     # process targets and perform NMS for each prediction in batch
     final_batch_predictions = None  # store final bounding box predictions
-    
     point_cloud_reg_predictions = RA_to_cartesian_box(batch_predictions)
     point_cloud_reg_predictions = np.asarray(point_cloud_reg_predictions)
     point_cloud_class_predictions = batch_predictions[:,-1]
 
     # get valid detections
     validity_mask = np.where(point_cloud_class_predictions > confidence_threshold, True, False)
-    
+
     valid_box_predictions = point_cloud_reg_predictions[validity_mask]
     valid_class_predictions = point_cloud_class_predictions[validity_mask]
 
-    
     # perform Non-Maximum Suppression
     final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions,
                                                                  nms_threshold)
 
-    
     # concatenate point_cloud_id, confidence score and bounding box prediction | shape: [N_FINAL, 1+1+8]
     final_Object_predictions = np.hstack((final_class_predictions[:, np.newaxis],
                                                final_box_predictions))
@@ -495,7 +497,7 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     out = []
 
     for threshold in np.arange(0.1,0.96,0.1):
-
+        print(f"begin the iteration of threshold = {threshold}")
         iou_threshold.append(threshold)
 
         TP = 0
@@ -509,7 +511,6 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
         nbObjects = 0
 
         for frame_id in range(len(predictions)):
-
             pred= predictions[frame_id]
             labels = object_labels[frame_id]
 
@@ -562,8 +563,6 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
             elif(len(Object_predictions)==0):
                 FN += len(ground_truth_box_corners)
                 
-
-
         if(TP!=0):
             precision.append( TP / (TP+FP)) # When there is a detection, how much I m sure
             recall.append(TP / (TP+FN))
@@ -573,12 +572,12 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
 
         RangeError.append(range_error/nbObjects)
         AngleError.append(angle_error/nbObjects)
+        
 
     perfs['precision']=precision
     perfs['recall']=recall
 
     F1_score = (np.mean(precision)*np.mean(recall))/((np.mean(precision) + np.mean(recall))/2)
-
     print('------- Detection Scores ------------')
     print('  mAP:',np.mean(perfs['precision']))
     print('  mAR:',np.mean(perfs['recall']))
@@ -705,3 +704,70 @@ class Metrics():
 
         return self.precision,self.recall,self.mIoU 
 
+
+
+def DisplayHMI(image, input, model_outputs):
+
+    # Model outputs
+    pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
+    out_seg = torch.sigmoid(model_outputs['Segmentation']).detach().cpu().numpy().copy()[0,0]
+    
+    # Decode the output detection map
+    pred_obj = decode(pred_obj,0.05)
+    pred_obj = np.asarray(pred_obj)
+
+    # process prediction: polar to cartesian, NMS...
+    if(len(pred_obj)>0):
+        pred_obj = process_predictions_FFT(pred_obj,confidence_threshold=0.2)
+
+    ## FFT
+    FFT = np.abs(input[...,:16]+input[...,16:]*1j).mean(axis=2)
+    PowerSpectrum = np.log10(FFT)
+    # rescale
+    PowerSpectrum = (PowerSpectrum -PowerSpectrum.min())/(PowerSpectrum.max()-PowerSpectrum.min())*255
+    PowerSpectrum = cv2.cvtColor(PowerSpectrum.astype('uint8'),cv2.COLOR_GRAY2BGR)
+
+    ## Image
+    for box in pred_obj:
+        box = box[1:]
+        u1,v1 = worldToImage(-box[2],box[1],0)
+        u2,v2 = worldToImage(-box[0],box[1],1.6)
+
+        u1 = int(u1/2)
+        v1 = int(v1/2)
+        u2 = int(u2/2)
+        v2 = int(v2/2)
+
+        image = cv2.rectangle(image, (u1,v1), (u2,v2), (0, 0, 255), 3)
+
+    RA_cartesian,_=polarTransform.convertToCartesianImage(np.moveaxis(out_seg,0,1),useMultiThreading=True,
+        initialAngle=0, finalAngle=np.pi,order=0,hasColor=False)
+    
+    # Make a crop on the angle axis
+    RA_cartesian = RA_cartesian[:,256-100:256+100]
+    
+    RA_cartesian = np.asarray((RA_cartesian*255).astype('uint8'))
+    RA_cartesian = cv2.cvtColor(RA_cartesian, cv2.COLOR_GRAY2BGR)
+    RA_cartesian = cv2.resize(RA_cartesian,dsize=(400,512))
+    RA_cartesian=cv2.flip(RA_cartesian,flipCode=-1)
+
+    return np.hstack((PowerSpectrum,image[:512],RA_cartesian))
+    
+
+def worldToImage(x,y,z):
+    # Camera parameters
+    camera_matrix = np.array([[1.84541929e+03, 0.00000000e+00, 8.55802458e+02],
+                    [0.00000000e+00 , 1.78869210e+03 , 6.07342667e+02],[0.,0.,1]])
+    dist_coeffs = np.array([2.51771602e-01,-1.32561698e+01,4.33607564e-03,-6.94637533e-03,5.95513933e+01])
+    rvecs = np.array([1.61803058, 0.03365624,-0.04003127])
+    tvecs = np.array([0.09138029,1.38369885,1.43674736])
+    ImageWidth = 1920
+    ImageHeight = 1080
+
+    world_points = np.array([[x,y,z]],dtype = 'float32')
+    rotation_matrix = cv2.Rodrigues(rvecs)[0]
+
+    imgpts, _ = cv2.projectPoints(world_points, rotation_matrix, tvecs, camera_matrix, dist_coeffs)
+
+    u = int(min(max(0,imgpts[0][0][0]),ImageWidth-1))
+    v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
