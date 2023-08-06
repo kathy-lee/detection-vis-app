@@ -5,7 +5,10 @@ import uvicorn
 import paramiko
 import subprocess
 import json
-import re
+import torch
+import numpy as np
+from PIL import Image
+import io
 
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
 from fastapi import Response, status
@@ -21,7 +24,10 @@ from pathlib import Path
 
 from data import crud, models, schemas
 from data.database import SessionLocal, engine
-from detection_vis_backend.datasets.dataset import DatasetFactory, RaDICaL, RADIal
+from detection_vis_backend.datasets.dataset import DatasetFactory
+from detection_vis_backend.networks.network import NetworkFactory
+from detection_vis_backend.train.utils import DisplayHMI, GetDetMetrics, decode
+
 
 
 # models.Base.metadata.create_all(bind=engine)
@@ -232,7 +238,9 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
                 elif "EXP_NAME:" in line:
                     exp_name = line.replace("EXP_NAME: ", "").strip()
 
-            model_data = schemas.ModelCreate(name=exp_name,description="info",flow_run_id=run_id, flow_name="TrainModleFlow")
+            # #########################For debugging
+            exp_name = "FFTRadNet___Aug-03-2023___19:57:20" 
+            model_data = schemas.MLModelCreate(name=exp_name,description="info",flow_run_id=run_id, flow_name="TrainModelFlow")
             crud.add_model(db=db, mlmodel=model_data)
         else:
             raise FileNotFoundError(f"{train_file} does not exist")
@@ -248,7 +256,7 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
     return {"model_name": exp_name}
 
 
-@app.get("/models", response_model=List[schemas.Directory])
+@app.get("/models", response_model=List[schemas.MLModel])
 def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         models = crud.get_models(db)
@@ -267,9 +275,8 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
         model = crud.get_model(db, id)
         if not model:
             raise ValueError("Model not found")
-
-        flow_name = model["flow_name"]
-        run_id = model["flow_id"]
+        flow_name = model.flow_name
+        run_id = model.flow_run_id
         run = Flow(flow_name)[run_id]
         parameters = run.data
         
@@ -283,10 +290,8 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
     except Exception as e:
         print(f"An unexpected error occurred: {str(e)}")
             
-    return {"datafiles": parameters.datafiles, 
-            "features": parameters.features,
-            "model_config": parameters.model_config, 
-            "train_config": parameters.train_config}
+    return {"datafiles": parameters.datafiles, "features": parameters.features, 
+            "model_config": parameters.model_config, "train_config": parameters.train_config}
 
 
 
@@ -314,15 +319,116 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, input_data: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+async def predict(model_id: int, sample_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
-        model = crud.get_model(db, model_id)
-        prediction = model.predict(input_data)
-    except Exception as e:
-        logging.error(f"An error occurred during evaluating the model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
+        # Get para infos
+        model_dict = crud.get_model(db, model_id)
+        if not model_dict:
+            raise ValueError("Model not found")
+        flow_name = model_dict["flow_name"]
+        run_id = model_dict["flow_id"]
+        run = Flow(flow_name)[run_id]
+        parameters = run.data
 
-    return {"prediction": prediction}
+        # Get input data
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(parameters.datafiles[0]["parse"], parameters.datafiles[0]["id"])
+        input_data = dataset_inst[sample_id]
+
+        # Initialize the model
+        model_config = parameters.model_config
+        network_factory = NetworkFactory()
+        model_type = model_config['type']
+        model_config.pop('type', None)
+        model = network_factory.get_instance(model_type, model_config)
+
+        # Load the model checkpoint
+        model_rootdir = os.getenv('MODEL_ROOTDIR')
+        model_path = os.path.join(model_rootdir, model_dict["name"])
+        dict = torch.load(model_path)
+        model.load_state_dict(dict['net_state_dict'])  
+
+        # Prediction
+        model.eval()
+        # data is composed of [radar_FFT, segmap,out_label,box_labels,image]
+        input = torch.tensor(input_data[0]).permute(2,0,1).to('cuda').float().unsqueeze(0)
+        with torch.set_grad_enabled(False):
+            output = model(input)
+
+        # Display and evaluate the output
+        obj_labels = input_data[3]
+        # Plan to replace DisplayHMI with a new method: 
+        # GetBoxes(output, obj_labels)
+        # output: 2 lists of boxes-- pred_boxes=[(u1,v1,u2,v2),...]; label_boxes is the same
+        hmi = DisplayHMI(input_data[4], input_data[0], output)
+        pred_obj = output['Detection'].detach().cpu().numpy().copy()
+        obj_pred = np.asarray(decode(pred_obj,0.05))  
+        TP,FP,FN = GetDetMetrics(obj_pred,obj_labels,threshold=0.2,range_min=5,range_max=100)
+    except Exception as e:
+        logging.error(f"An error occurred during model prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
+
+    return {"prediction": hmi.tolist(), "eval": [TP,FP,FN]}
+
+
+@app.get("/predict_newdata/{model_id}")
+async def predict(model_id: int, input_file: UploadFile, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        # Get para infos
+        model_dict = crud.get_model(db, model_id)
+        if not model_dict:
+            raise ValueError("Model not found")
+        flow_name = model_dict["flow_name"]
+        run_id = model_dict["flow_id"]
+        run = Flow(flow_name)[run_id]
+        parameters = run.data
+
+        # Get input data
+        contents = await input_file.read()  # read the file
+        if input_file.filename.endswith('.npy'):
+            input_data = np.load(io.BytesIO(contents))
+        elif input_file.filename.endswith(('.jpg', '.png')):
+            image = Image.open(io.BytesIO(contents))
+            input_data = np.array(image)
+        # elif input_file.filename.endswith('.pcd'):  # assuming a point cloud file with '.pcd' extension
+        #     # process point cloud data
+        #     data = read_pcl(contents)
+        else:
+            raise ValueError("Unsupported file format")
+        
+        # Initialize the model
+        model_config = parameters.model_config
+        network_factory = NetworkFactory()
+        model_type = model_config['type']
+        model_config.pop('type', None)
+        model = network_factory.get_instance(model_type, model_config)
+
+        # Load the model checkpoint
+        model_rootdir = os.getenv('MODEL_ROOTDIR')
+        model_path = os.path.join(model_rootdir, model_dict["name"])
+        dict = torch.load(model_path)
+        model.load_state_dict(dict['net_state_dict'])  
+
+        # Prediction
+        model.eval()
+        # data is composed of [radar_FFT, segmap,out_label,box_labels,image]
+        input = torch.tensor(input_data).permute(2,0,1).to('cuda').float().unsqueeze(0)
+        with torch.set_grad_enabled(False):
+            output = model(input)
+
+        # Display the output
+        # Need to handle multiple files 
+        hmi = DisplayHMI(None, input_data, output)
+        # pred_obj = output['Detection'].detach().cpu().numpy().copy()
+        # obj_pred = np.asarray(decode(pred_obj,0.05))  
+        # TP,FP,FN = GetDetMetrics(obj_pred,obj_labels,threshold=0.2,range_min=5,range_max=100)
+
+    except Exception as e:
+        logging.error(f"An error occurred during model prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
+
+    return {"prediction": hmi.tolist()}
+
 
 
 if __name__ == "__main__":
