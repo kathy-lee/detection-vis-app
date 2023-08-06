@@ -135,7 +135,7 @@ if train_mode == train_modes[0]:
         st.write("Model Performance")
         st.table(df)
 
-    infer_action = st.button("Inference", key="inference_btn")
+    infer_action = st.button("Go to inference", key="inference_btn")
     if infer_action:
       switch_page("inference")
 

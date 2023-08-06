@@ -127,7 +127,7 @@ else:
       st.session_state.datafiles_chosen.remove(file)
     
 
-button_click = st.button("Check feature")
+button_click = st.button("Go to features")
 if button_click:
   #check_datafiles(st.session_state.datafiles_chosen)
   switch_page("get features")
