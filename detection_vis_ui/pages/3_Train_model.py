@@ -4,6 +4,7 @@ import requests
 import os
 import time
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from streamlit_extras.switch_page_button import switch_page
@@ -11,6 +12,7 @@ from streamlit_extras.switch_page_button import switch_page
 
 
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
+model_rootdir = os.getenv('MODEL_ROOTDIR')
 
 st.set_page_config(
     page_title = "Have fun ",
@@ -44,7 +46,7 @@ edit_feature_action = st.button("Edit feature", key="edit_feature_btn")
 if edit_feature_action:
   switch_page("get features")
 
-train_modes = ["Yes", "No, I want to train on a pre-trained model", "No, I want to choose a model and do inference"]
+train_modes = ["Yes", "No, I want to train on a pre-trained model"]
 train_mode = st.radio("Would you like to train a model from scratch?", train_modes)
 
 
@@ -60,6 +62,8 @@ if train_mode == train_modes[0]:
       st.session_state.model_configs = {}
     if "train_configs" not in st.session_state:
       st.session_state.train_configs = {}
+    if "model_chosen" not in st.session_state:
+      st.session_state.model_chosen = None
 
     st.write("Model description")
     modelconfig_expander = st.expander("Model Config")
@@ -108,7 +112,6 @@ if train_mode == train_modes[0]:
       st.session_state.train_configs["test"] = {"batch_size": 1, "num_workers": 1}
     
     train_action = st.button("Train", key="train_btn")
-    evaluation_action = st.button("Evaluation", key="evaluation_btn")
     if train_action:
       with st.spinner(text="Training model in progress..."):
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
@@ -116,20 +119,24 @@ if train_mode == train_modes[0]:
                   "mlmodel_configs": st.session_state.model_configs, 
                   "train_configs": st.session_state.train_configs}
         response = requests.post(f"http://{backend_service}:8001/train", json=params)
-      if response.status_code != 204:
+      if response.status_code != 200:
         st.info("An error occurred in training.")
         st.stop()
-    if evaluation_action:
-      switch_page("evaluation")
+      else:
+        res = response.json()
+        st.session_state.model_chosen = res["model_name"]
+        eval_dict = {}
+        with open(os.path.join(model_rootdir, st.session_state.model_chosen, "eval_output.txt"), 'r') as f:
+          lines = f.readlines()
+        for line in lines:
+          metric, value = line.strip().split(': ')
+          eval_dict[metric] = [float(value)]  
+        df = pd.DataFrame(eval_dict)
+        st.write("Model Performance")
+        st.table(df)
+
+    infer_action = st.button("Inference", key="inference_btn")
+    if infer_action:
+      switch_page("inference")
 
 # Option 2: Train on pre-trained model
-
-
-# Option 3: Do inference
-if train_mode == train_modes[2]:
-  # show data files
-  # show features
-  # show model architecture and config
-  # show training config
-  # show evaluation
-  model = st.selectbox("Choose a model:", model_zoo, index=0)
