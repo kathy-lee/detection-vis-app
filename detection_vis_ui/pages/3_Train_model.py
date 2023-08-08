@@ -125,15 +125,15 @@ if train_mode == train_modes[0]:
       else:
         res = response.json()
         st.session_state.model_chosen = res["model_name"]
-        eval_dict = {}
-        with open(os.path.join(model_rootdir, st.session_state.model_chosen, "eval_output.txt"), 'r') as f:
-          lines = f.readlines()
-        for line in lines:
-          metric, value = line.strip().split(': ')
-          eval_dict[metric] = [float(value)]  
-        df = pd.DataFrame(eval_dict)
-        st.write("Model Performance")
-        st.table(df)
+        # show evaluation result
+        st.write("Model Evaluation")
+        st.write("Val dataset")
+        val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
+        st.table(val_eval)
+        st.write("Test dataset")
+        test_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "test_eval.csv"))
+        st.table(test_eval)
+        
 
     infer_action = st.button("Go to inference", key="inference_btn")
     if infer_action:
