@@ -708,7 +708,7 @@ class Metrics():
 
 
 
-def DisplayHMI(image, input, model_outputs):
+def DisplayHMI(image, input, model_outputs, obj_labels):
 
     # Model outputs
     pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
@@ -743,7 +743,12 @@ def DisplayHMI(image, input, model_outputs):
         v2 = int(v2/2)
 
         image = cv2.rectangle(image, (u1,v1), (u2,v2), (0, 0, 255), 3)
-       
+    
+    for box in obj_labels:
+        box = box[6:]
+        box = [int(x/2) for x in box]
+        image = cv2.rectangle(image, (box[0],box[1]), (box[2],box[3]), (255, 0, 0), 2)
+
     RA_cartesian,_=polarTransform.convertToCartesianImage(np.moveaxis(out_seg,0,1),useMultiThreading=True,
         initialAngle=0, finalAngle=np.pi,order=0,hasColor=False)
     # Make a crop on the angle axis
