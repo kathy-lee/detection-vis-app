@@ -239,7 +239,8 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
                     exp_name = line.replace("EXP_NAME: ", "").strip()
 
             # #########################For debugging
-            exp_name = "FFTRadNet___Aug-03-2023___19:57:20" 
+            # exp_name = "FFTRadNet___Aug-03-2023___19:57:20" 
+
             model_data = schemas.MLModelCreate(name=exp_name,description="info",flow_run_id=run_id, flow_name="TrainModelFlow")
             crud.add_model(db=db, mlmodel=model_data)
         else:
@@ -319,56 +320,62 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, sample_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get para infos
-        model_dict = crud.get_model(db, model_id)
-        if not model_dict:
+        model = crud.get_model(db, model_id)
+        if not model:
             raise ValueError("Model not found")
-        flow_name = model_dict["flow_name"]
-        run_id = model_dict["flow_id"]
+        flow_name = model.flow_name
+        run_id = model.flow_run_id
         run = Flow(flow_name)[run_id]
         parameters = run.data
 
-        # Get input data
+        # Get input data (For now could only handle one datafile case)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(parameters.datafiles[0]["parse"], parameters.datafiles[0]["id"])
+        dataset_inst.parse(parameters.datafiles[0]["path"], parameters.datafiles[0]["name"], parameters.datafiles[0]["config"])
         input_data = dataset_inst[sample_id]
-
+         
         # Initialize the model
         model_config = parameters.model_config
         network_factory = NetworkFactory()
         model_type = model_config['type']
         model_config.pop('type', None)
-        model = network_factory.get_instance(model_type, model_config)
+        net = network_factory.get_instance(model_type, model_config)
 
         # Load the model checkpoint
         model_rootdir = os.getenv('MODEL_ROOTDIR')
-        model_path = os.path.join(model_rootdir, model_dict["name"])
-        dict = torch.load(model_path)
-        model.load_state_dict(dict['net_state_dict'])  
+        model_path = os.path.join(model_rootdir, model.name)
+        checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
+        logging.error(f"checkpoint name: {checkpoint}")
+        dict = torch.load("/home/kangle/dataset/trained_models/FFTRadNet_RA_192_56___Jul-25-2023___09:23:30/FFTRadNet_RA_192_56_epoch99_loss_171313.2668_AP_0.9634_AR_0.9287_IOU_0.6545.pth")
+        #dict = torch.load(os.path.join(model_path, checkpoint))
+        net.load_state_dict(dict['net_state_dict'])  
 
         # Prediction
-        model.eval()
-        # data is composed of [radar_FFT, segmap,out_label,box_labels,image]
-        input = torch.tensor(input_data[0]).permute(2,0,1).to('cuda').float().unsqueeze(0)
+        net.eval()
+        # input_data: [radar_FFT, segmap,out_label,box_labels,image]
+        input = torch.tensor(input_data[0]).permute(2,0,1).unsqueeze(0)
         with torch.set_grad_enabled(False):
-            output = model(input)
-
+            output = net(input)
+        
         # Display and evaluate the output
         obj_labels = input_data[3]
         # Plan to replace DisplayHMI with a new method: 
         # GetBoxes(output, obj_labels)
         # output: 2 lists of boxes-- pred_boxes=[(u1,v1,u2,v2),...]; label_boxes is the same
+        print(f"network output shape: {output['Detection'].shape}, {output['Segmentation'].shape}")
+        print(f"input image and rd shape: {input_data[4].shape}, {input_data[0].shape}")
         hmi = DisplayHMI(input_data[4], input_data[0], output)
-        pred_obj = output['Detection'].detach().cpu().numpy().copy()
-        obj_pred = np.asarray(decode(pred_obj,0.05))  
-        TP,FP,FN = GetDetMetrics(obj_pred,obj_labels,threshold=0.2,range_min=5,range_max=100)
+        # pred_obj = output['Detection']
+        # obj_pred = np.asarray(decode(pred_obj,0.05))  
+        # TP,FP,FN = GetDetMetrics(obj_pred,obj_labels,threshold=0.2,range_min=5,range_max=100)
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
-    return {"prediction": hmi.tolist(), "eval": [TP,FP,FN]}
+    return {"prediction": hmi.tolist()} #, "eval": [TP,FP,FN]
 
 
 @app.get("/predict_newdata/{model_id}")
