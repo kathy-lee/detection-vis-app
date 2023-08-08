@@ -10,9 +10,9 @@ import logging
 import subprocess
 import json
 import pickle
+import pandas as pd
 
-from metaflow import FlowSpec, Parameter, step
-from metaflow import Metaflow, FlowSpec, Parameter, step, IncludeFile
+from metaflow import FlowSpec, Parameter, step, current
 from metaflow.cli_args import cli_args
 from pathlib import Path
 from datetime import datetime
@@ -65,8 +65,10 @@ class TrainModelFlow(FlowSpec):
 
     @step
     def start(self):
+        # save flow run id info
         with open('modelflow_info.txt', 'w') as f:
-            f.write(f"RUN_ID: {self.current_run_id}\n")
+            f.write(f"RUN_ID: {current.run_id}\n")
+
         logging.info("Training begins.")
         print("########################### Training begins #############################")
         self.datafiles = json.loads(self.datafiles_str)
@@ -89,10 +91,6 @@ class TrainModelFlow(FlowSpec):
             # specify the features as train input data type
             dataset_inst.set_features(self.features)
             train_loader, val_loader, test_loader, train_ids, val_ids, test_ids = CreateDataLoaders(dataset_inst, self.train_config)
-            with open('samples_split.txt', 'w') as f:
-                f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
-                f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
-                f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
 
 
         # Setup random seed
@@ -105,6 +103,8 @@ class TrainModelFlow(FlowSpec):
         curr_date = datetime.now()
         exp_name = self.model_config['type'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
         print(exp_name)
+
+        # save model path(also model name)
         with open("modelflow_info.txt", 'a') as f:
             f.write(f"EXP_NAME: {exp_name}\n")
 
@@ -114,8 +114,17 @@ class TrainModelFlow(FlowSpec):
         (output_folder / exp_name).mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(output_folder / exp_name)
 
-        # save model path
-        self.model_path = os.path.join(output_folder, exp_name)
+        # save sample split info
+        split_info_path = os.path.join(output_folder, exp_name, 'samples_split.txt')
+        with open(split_info_path, 'w') as f:
+            f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
+            f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
+            f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+
+        # save the evaluation of val dataset and test dataset
+        val_eval_path = os.path.join(output_folder, exp_name, "val_eval.csv")
+        test_eval_path = os.path.join(output_folder, exp_name, "test_eval.csv")
+        df_val_eval = pd.DataFrame(columns=['loss', 'mAP', 'mAR', 'mIoU'])
 
         # set device
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -233,6 +242,9 @@ class TrainModelFlow(FlowSpec):
             history['mAR'].append(eval['mAR'])
             history['mIoU'].append(eval['mIoU'])
 
+            df_val_eval = df_val_eval.append(pd.Series([eval['loss', eval['mAP'], eval['mAR'], eval['mIoU']]], 
+                                                       index=['loss', 'mAP', 'mAR', 'mIoU']), ignore_index=True)
+
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
 
 
@@ -258,17 +270,18 @@ class TrainModelFlow(FlowSpec):
             
             print('')
 
+        df_val_eval.to_csv(val_eval_path)
         print("########################### Training ends sucessfully #############################")
 
         print("########################### Evaluation begins #############################")
-        eval_path = os.path.join(output_folder, exp_name, "eval_output.txt")
-        run_FullEvaluation(net, test_loader, eval_path)
+        run_FullEvaluation(net, test_loader, test_eval_path)
         print("########################### Evaluation ends sucessfully #############################")
 
         self.next(self.end)
 
     @step
     def end(self):
+        print("TrainModelFlow ends.")
 
         
 
