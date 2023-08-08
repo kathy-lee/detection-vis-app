@@ -337,8 +337,7 @@ class RADIal(Dataset):
 
         # Labels contains following parameters:
         # x1_pix	y1_pix	x2_pix	y2_pix	laser_X_m	laser_Y_m	laser_Z_m radar_X_m	radar_Y_m	radar_R_m
-
-        # format as following [Range, Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix	,y2_pix]
+        # format as following [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
 

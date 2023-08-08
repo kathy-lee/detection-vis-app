@@ -7,13 +7,10 @@ import torch.nn.functional as F
 import torch.nn as nn
 import os
 import logging
-import subprocess
 import json
-import pickle
 import pandas as pd
 
 from metaflow import FlowSpec, Parameter, step, current
-from metaflow.cli_args import cli_args
 from pathlib import Path
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
@@ -25,7 +22,8 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import CreateDataLoaders, run_evaluation, pixor_loss, run_FullEvaluation
+from detection_vis_backend.train.utils import CreateDataLoaders, pixor_loss
+from detection_vis_backend.train.evaluate import run_evaluation, run_FullEvaluation
 
 
 
@@ -131,8 +129,9 @@ class TrainModelFlow(FlowSpec):
         
         network_factory = NetworkFactory()
         model_type = self.model_config['type']
-        self.model_config.pop('type', None)
-        net = network_factory.get_instance(model_type, self.model_config)
+        model_config = self.model_config.copy()
+        model_config.pop('type', None)
+        net = network_factory.get_instance(model_type, model_config)
         net.to('cuda')
 
         # Optimizer
@@ -242,9 +241,8 @@ class TrainModelFlow(FlowSpec):
             history['mAR'].append(eval['mAR'])
             history['mIoU'].append(eval['mIoU'])
 
-            df_val_eval = df_val_eval.append(pd.Series([eval['loss', eval['mAP'], eval['mAR'], eval['mIoU']]], 
-                                                       index=['loss', 'mAP', 'mAR', 'mIoU']), ignore_index=True)
-
+            df_val_eval = pd.concat([df_val_eval, pd.DataFrame([eval['loss'], eval['mAP'], eval['mAR'], eval['mIoU']])], ignore_index=True)
+            
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
 
 
