@@ -65,6 +65,14 @@ for line in lines:
     sample_ids["Test data"] = list(map(int, line.replace("TEST_SAMPLE_IDS: ", "").strip().split(',')))  
 
 
+@st.cache_data
+def predict(model_id, checkpoint_id, sample_id):
+  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id}
+  response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
+  res = response.json()
+  return res["prediction"]
+
+
 radio_options = ["Train data", "Val data", "Test data", "I want to upload my own data file to do inference"]
 radio_select = st.radio("Which data you want to check the detection model from?", radio_options)
 
@@ -82,8 +90,9 @@ else:
   frame_end = len(sample_ids[radio_select])
   frame_id = st.slider('Choose a data frame', frame_begin, frame_end, frame_begin)
   st.write(f"No. {sample_ids[radio_select][frame_id]} sample")
-  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_ids[radio_select][frame_id]}
-  response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
-  res = response.json()
-  pred_image = np.array(res["prediction"])
-  st.image(pred_image, caption="Ground Truth & predicted objects")
+  res = predict(model_id, checkpoint_id, sample_ids[radio_select][frame_id])
+  pred_image = np.array(res)
+  st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
+
+
+

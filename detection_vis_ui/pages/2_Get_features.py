@@ -145,7 +145,7 @@ def show_last(i, length):
   if st.session_state[i] < 0:
     st.session_state[i] = length-1
 
-
+@st.cache_data(experimental_allow_widgets=True)
 def show_feature(feature, counter, frame_id, config=None):
   ###################### test code
   # fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
@@ -219,8 +219,8 @@ if feature in features:
   expander_image = st.expander("RGB images", expanded=True)
   with expander_image:
     show_feature(feature, counter, frame_id)
-
-
+    
+    
 feature = "depth_image"
 counter = f"counter_{feature}" 
 if feature in features:
