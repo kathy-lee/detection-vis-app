@@ -193,6 +193,7 @@ def decode(map,threshold):
         regression_layer = 2
         INPUT_DIM = (geometry['ranges'][0],geometry['ranges'][1],geometry['ranges'][2])
         OUTPUT_DIM = (regression_layer + 1, INPUT_DIM[0] // 4 , INPUT_DIM[1] // 4 )
+        
         range_bins,angle_bins = np.where(map[0,:,:]>=threshold)
 
         coordinates = []
@@ -299,9 +300,8 @@ def run_FullEvaluation(net, loader, eval_path, iou_threshold=0.5):
         
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
     # Write the metrics into file
-    lines = [f'mAP: {mAP}\n', f'mAR: {mAR}\n', f'F1 score: {F1_score}\n']
-    with open(eval_path, 'w') as file:
-        file.writelines(lines)
+    df = pd.DataFrame({'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score]})
+    df.to_csv(eval_path, index=False)
 
     mIoU = []
     for i in range(len(predictions['prediction']['freespace'])):
@@ -406,7 +406,7 @@ def RA_to_cartesian_box(data):
         x = np.sin(np.radians(data[i][1])) * data[i][0]
         y = np.cos(np.radians(data[i][1])) * data[i][0]
 
-        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L])
+        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L,data[i][0],data[i][1]])
               
     return boxes
 
@@ -421,7 +421,7 @@ def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
         # get the IOUs of all boxes with the currently most certain bounding box
         try:
             ious = np.zeros((sorted_box_predictions.shape[0]))
-            ious[i + 1:] = bbox_iou(sorted_box_predictions[i, :], sorted_box_predictions[i + 1:, :])
+            ious[i + 1:] = bbox_iou(sorted_box_predictions[i, :8], sorted_box_predictions[i + 1:, :8])
         except ValueError:
             break
         except IndexError:
@@ -461,30 +461,32 @@ def bbox_iou(box1, boxes):
 
     return ious
 
+
 def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_threshold=0.05):
 
     # process targets and perform NMS for each prediction in batch
     final_batch_predictions = None  # store final bounding box predictions
+    
     point_cloud_reg_predictions = RA_to_cartesian_box(batch_predictions)
     point_cloud_reg_predictions = np.asarray(point_cloud_reg_predictions)
     point_cloud_class_predictions = batch_predictions[:,-1]
 
     # get valid detections
     validity_mask = np.where(point_cloud_class_predictions > confidence_threshold, True, False)
-
     valid_box_predictions = point_cloud_reg_predictions[validity_mask]
     valid_class_predictions = point_cloud_class_predictions[validity_mask]
 
     # perform Non-Maximum Suppression
-    final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions,
-                                                                 nms_threshold)
+    print(f"shape before perform nms: {valid_class_predictions.shape}, {valid_box_predictions.shape}")
+    final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions,nms_threshold)
+    print(f"shape should be: {final_class_predictions.shape}, {final_box_predictions.shape}")
 
     # concatenate point_cloud_id, confidence score and bounding box prediction | shape: [N_FINAL, 1+1+8]
-    final_Object_predictions = np.hstack((final_class_predictions[:, np.newaxis],
+    final_point_cloud_predictions = np.hstack((final_class_predictions[:, np.newaxis],
                                                final_box_predictions))
 
+    return final_point_cloud_predictions
 
-    return final_Object_predictions
 
 def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_threshold=0.5):
     perfs = {}
@@ -711,10 +713,13 @@ def DisplayHMI(image, input, model_outputs):
     # Model outputs
     pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
     out_seg = torch.sigmoid(model_outputs['Segmentation']).detach().cpu().numpy().copy()[0,0]
-    
+    print(f"pred_obj before decode: {pred_obj.shape}")
     # Decode the output detection map
     pred_obj = decode(pred_obj,0.05)
+    print(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
     pred_obj = np.asarray(pred_obj)
+    print(f"pred_obj -> np.asarry: {pred_obj.shape}")
+    print(pred_obj[0,0:3])
 
     # process prediction: polar to cartesian, NMS...
     if(len(pred_obj)>0):
@@ -726,7 +731,6 @@ def DisplayHMI(image, input, model_outputs):
     # rescale
     PowerSpectrum = (PowerSpectrum -PowerSpectrum.min())/(PowerSpectrum.max()-PowerSpectrum.min())*255
     PowerSpectrum = cv2.cvtColor(PowerSpectrum.astype('uint8'),cv2.COLOR_GRAY2BGR)
-
     ## Image
     for box in pred_obj:
         box = box[1:]
@@ -739,10 +743,9 @@ def DisplayHMI(image, input, model_outputs):
         v2 = int(v2/2)
 
         image = cv2.rectangle(image, (u1,v1), (u2,v2), (0, 0, 255), 3)
-
+       
     RA_cartesian,_=polarTransform.convertToCartesianImage(np.moveaxis(out_seg,0,1),useMultiThreading=True,
         initialAngle=0, finalAngle=np.pi,order=0,hasColor=False)
-    
     # Make a crop on the angle axis
     RA_cartesian = RA_cartesian[:,256-100:256+100]
     
@@ -750,7 +753,6 @@ def DisplayHMI(image, input, model_outputs):
     RA_cartesian = cv2.cvtColor(RA_cartesian, cv2.COLOR_GRAY2BGR)
     RA_cartesian = cv2.resize(RA_cartesian,dsize=(400,512))
     RA_cartesian=cv2.flip(RA_cartesian,flipCode=-1)
-
     return np.hstack((PowerSpectrum,image[:512],RA_cartesian))
     
 
@@ -766,8 +768,8 @@ def worldToImage(x,y,z):
 
     world_points = np.array([[x,y,z]],dtype = 'float32')
     rotation_matrix = cv2.Rodrigues(rvecs)[0]
-
     imgpts, _ = cv2.projectPoints(world_points, rotation_matrix, tvecs, camera_matrix, dist_coeffs)
 
     u = int(min(max(0,imgpts[0][0][0]),ImageWidth-1))
     v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
+    return u, v
