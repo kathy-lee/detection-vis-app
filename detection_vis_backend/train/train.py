@@ -241,7 +241,8 @@ class TrainModelFlow(FlowSpec):
             history['mAR'].append(eval['mAR'])
             history['mIoU'].append(eval['mIoU'])
 
-            df_val_eval = pd.concat([df_val_eval, pd.DataFrame([eval['loss'], eval['mAP'], eval['mAR'], eval['mIoU']])], ignore_index=True)
+            new_row = pd.Series({'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
+            df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
             
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
 
