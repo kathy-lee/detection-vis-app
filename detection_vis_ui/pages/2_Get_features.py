@@ -176,17 +176,18 @@ def show_feature(feature, counter, frame_id, config=None):
   feature_image = np.array(serialized_feature)
   if feature == "lidarPC" or feature == "radarPC":
     plt.figure(figsize=(8, 6))
-    plt.plot(-feature_image[:,1], feature_image[:,0], '.')
+    plt.plot(feature_image[:,1], feature_image[:,0], '.')
     plt.xlim(-20,20)
     plt.ylim(0,100)
     plt.grid()
+    #plt.gca().set_aspect('equal', adjustable='box')
     plt.title(f"index: {st.session_state[counter]}", y=-0.1)
     st.pyplot(plt)
   elif feature == "RD":
     rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
     power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
-    plt.figure(figsize=(10,10))
-    plt.imshow(np.log10(power_spectrum))
+    plt.figure(figsize=(8,6))
+    plt.imshow(np.log10(power_spectrum), aspect='auto')
     plt.title(f"index: {st.session_state[counter]}", y=-0.1)
     st.pyplot(plt)
   else:
@@ -220,7 +221,7 @@ if feature in features:
   with expander_image:
     show_feature(feature, counter, frame_id)
     
-    
+
 feature = "depth_image"
 counter = f"counter_{feature}" 
 if feature in features:
