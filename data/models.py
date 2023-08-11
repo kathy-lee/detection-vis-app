@@ -65,7 +65,4 @@ class MLmodel(Base):
     description = Column(String, index=True)
     flow_run_id = Column(String, index=True)
     flow_name = Column(String, index=True)
-    # data_input
-    # feature_input
-    # model_config
-    # train_config
+    parent_id = Column(Integer, index=True)

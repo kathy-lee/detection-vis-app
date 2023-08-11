@@ -22,7 +22,7 @@ def get_datafile(db: Session, file_id: int):
     return db.query(models.File).filter(models.File.id == file_id).first()
 
 def add_model(db: Session, mlmodel: schemas.MLModelCreate):
-    model = models.MLmodel(name=mlmodel.name, description=mlmodel.description, flow_run_id=mlmodel.flow_run_id, flow_name=mlmodel.flow_name)  # Convert UserCreate to User
+    model = models.MLmodel(name=mlmodel.name, description=mlmodel.description, flow_run_id=mlmodel.flow_run_id, flow_name=mlmodel.flow_name, parent_id=mlmodel.parent_id)  # Convert UserCreate to User
     db.add(model)
     db.commit()
     db.refresh(model)

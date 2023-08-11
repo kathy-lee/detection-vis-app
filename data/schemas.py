@@ -53,6 +53,7 @@ class MLModel(BaseModel):
     description: str
     flow_run_id: str
     flow_name: str
+    parent_id: Optional[int]
 
     class Config:
         orm_mode = True
@@ -62,3 +63,4 @@ class MLModelCreate(BaseModel):
     description: str
     flow_run_id: str
     flow_name: str
+    parent_id: Optional[int]
