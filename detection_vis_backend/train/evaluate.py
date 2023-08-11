@@ -3,8 +3,10 @@ import pandas as pd
 import pkbar
 import torch
 
-from utils import decode
 from shapely.geometry import Polygon
+
+from detection_vis_backend.train.utils import decode
+
 
 
 

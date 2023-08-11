@@ -1,0 +1,10 @@
+{
+    "fftradnet": {
+        "blocks": [3, 6, 6, 3],
+        "channels": [32,40,48,56],
+        "mimo_layer": 192,
+        "detection_head": "True",
+        "segmentation_head": "True"
+    }
+
+}

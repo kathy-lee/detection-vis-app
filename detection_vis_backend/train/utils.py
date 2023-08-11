@@ -108,7 +108,6 @@ def CreateDataLoaders(dataset,config=None,seed=0):
         val_ids = [dict_index_to_keys[k] for k in Val_indexes]
         test_ids = [dict_index_to_keys[k] for k in Test_indexes]
         train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))
-        logging.error(f"train ids: {train_ids}")
 
         train_dataset = Subset(dataset,train_ids)
         val_dataset = Subset(dataset,val_ids)

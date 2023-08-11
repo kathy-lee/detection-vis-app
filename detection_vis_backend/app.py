@@ -27,6 +27,8 @@ from data.database import SessionLocal
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import DisplayHMI
+from detection_vis_backend.train.train import train
+
 
 
 
@@ -212,44 +214,17 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
 
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    try:
-        # Convert the parameter values to strings
-        datafiles_str = json.dumps(datafiles_chosen)
-        logging.error(f"datafiles_chosen:{datafiles_chosen}")
-        features_str = json.dumps(features_chosen)
-        model_config_str = json.dumps(mlmodel_configs)
-        train_config_str = json.dumps(train_configs)
+    # 
+    try: 
+        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
+        with open('exp_info.txt', 'r') as f:
+            exp_name = f.read()
 
-        train_file = Path("detection_vis_backend/train/train.py")
-        if train_file.is_file():  
-            with open('train_log.txt', 'w') as f:  
-                subprocess.run(["python", "detection_vis_backend/train/train.py", "run", 
-                                "--datafiles", datafiles_str,
-                                "--features", features_str,
-                                "--model_config", model_config_str,
-                                "--train_config", train_config_str])
-            
-            # For now Metaflow doesn't have an API for launching flows programmatically, this is the temporary way to get run id and model checkpoint path
-            with open('modelflow_info.txt', 'r') as f:
-                lines = f.readlines()
-            for line in lines:
-                if "RUN_ID:" in line:
-                    run_id = line.replace("RUN_ID: ", "").strip()
-                elif "EXP_NAME:" in line:
-                    exp_name = line.replace("EXP_NAME: ", "").strip()
-
-            model_data = schemas.MLModelCreate(name=exp_name,description="info",flow_run_id=run_id, flow_name="TrainModelFlow")
-            crud.add_model(db=db, mlmodel=model_data)
-        else:
-            raise FileNotFoundError(f"{train_file} does not exist")
-    except FileNotFoundError as fnf_error:
-        logging.error(f"File not found error: {str(fnf_error)}")
-        raise HTTPException(status_code=500, detail=f"File not found: {str(fnf_error)}")
-    except MetaflowException as e:
-        print(f"Metaflow exception occurred: {e}")
+        model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=None)
+        crud.add_model(db=db, mlmodel=model_meta)
     except Exception as e:
-        logging.error(f"An unexpected error occurred: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        logging.error(f"An unexpected error occurred during training: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
 
     return {"model_name": exp_name}
 
@@ -395,6 +370,23 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
     return None
+
+
+@app.post("/retrain/{model_id}")
+async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try: 
+        model = crud.get_model(db, model_id)
+        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, model.name)
+        with open('exp_info.txt', 'r') as f:
+            exp_name = f.read()
+
+        model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
+        crud.add_model(db=db, mlmodel=model_meta)
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during training: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+
+    return {"model_name": exp_name}
 
 
 

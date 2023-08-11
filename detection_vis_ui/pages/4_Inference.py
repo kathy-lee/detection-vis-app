@@ -7,6 +7,7 @@ import numpy as np
 
 from PIL import Image
 
+from streamlit_extras.no_default_selectbox import selectbox
 
 
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
@@ -29,15 +30,16 @@ else:
 model_chosen = st.selectbox("Choose a model", [item["name"] for item in models], index=model_index)
 model_id = [item['id'] for item in models if item['name'] == model_chosen][0]
 
-st.subheader(f"{model_chosen} model")
-st.write(model_id) # for debug
+st.subheader(f"Model: {model_chosen}")
+# st.write(model_id) # for debug
+# show model lineage(datafiles, features, model config, train config, performance)
 
 model_path = os.path.join(model_rootdir, model_chosen)
 
 # in default choose the last epoch checkpoint model
 files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f))]
 checkpoint_count = len(files) - 4
-st.write(checkpoint_count) # for debug
+# st.write(checkpoint_count) # for debug
 checkpoint_id = st.selectbox("Choose a checkpoint(In default from the last epoch)", list(range(1,checkpoint_count+1)), index=checkpoint_count-1) - 1
 st.write(checkpoint_id)
 
