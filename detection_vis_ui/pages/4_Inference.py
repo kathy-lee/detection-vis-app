@@ -38,7 +38,7 @@ model_path = os.path.join(model_rootdir, model_chosen)
 
 # in default choose the last epoch checkpoint model
 files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f))]
-checkpoint_count = len(files) - 4
+checkpoint_count = len(files) - 5
 # st.write(checkpoint_count) # for debug
 checkpoint_id = st.selectbox("Choose a checkpoint(In default from the last epoch)", list(range(1,checkpoint_count+1)), index=checkpoint_count-1) - 1
 st.write(checkpoint_id)
@@ -91,7 +91,7 @@ else:
   frame_begin = 0
   frame_end = len(sample_ids[radio_select])
   frame_id = st.slider('Choose a data frame', frame_begin, frame_end, frame_begin)
-  st.write(f"No. {sample_ids[radio_select][frame_id]} sample")
+  st.write(f"No. {sample_ids[radio_select][frame_id]} sample of the whole dataset")
   res = predict(model_id, checkpoint_id, sample_ids[radio_select][frame_id])
   pred_image = np.array(res)
   st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
