@@ -51,8 +51,8 @@ class MLModel(BaseModel):
     id: int
     name: str
     description: str
-    flow_run_id: str
-    flow_name: str
+    # flow_run_id: str
+    # flow_name: str
     parent_id: Optional[int]
 
     class Config:
@@ -61,6 +61,6 @@ class MLModel(BaseModel):
 class MLModelCreate(BaseModel):
     name: str
     description: str
-    flow_run_id: str
-    flow_name: str
-    parent_id: Optional[int]
+    # flow_run_id: str
+    # flow_name: str
+    parent_id: Optional[int] = None
