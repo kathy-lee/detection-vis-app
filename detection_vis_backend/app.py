@@ -220,7 +220,7 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
         with open('exp_info.txt', 'r') as f:
             exp_name = f.read()
 
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=None)
+        model_meta = schemas.MLModelCreate(name=exp_name,description="info")
         crud.add_model(db=db, mlmodel=model_meta)
     except Exception as e:
         logging.error(f"An unexpected error occurred during training: {str(e)}")
@@ -248,23 +248,28 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
         model = crud.get_model(db, id)
         if not model:
             raise ValueError("Model not found")
-        flow_name = model.flow_name
-        run_id = model.flow_run_id
-        run = Flow(flow_name)[run_id]
-        parameters = run.data
         
+        # flow_name = model.flow_name
+        # run_id = model.flow_run_id
+        # run = Flow(flow_name)[run_id]
+        # parameters = run.data
+        
+        model_rootdir = os.getenv('MODEL_ROOTDIR')
+        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
+        with open(parameter_path, 'r') as f:
+            parameters = json.load(f)
         if not parameters:
             raise ValueError("Parameters are empty")
 
-    except MetaflowException as e:
-        print(f"Metaflow exception occurred: {str(e)}")
+    # except MetaflowException as e:
+    #     print(f"Metaflow exception occurred: {str(e)}")
     except ValueError as e:
         print(f"ValueError occurred: {str(e)}")
     except Exception as e:
         print(f"An unexpected error occurred: {str(e)}")
             
-    return {"datafiles": parameters.datafiles, "features": parameters.features, 
-            "model_config": parameters.model_config, "train_config": parameters.train_config}
+    return {"datafiles": parameters["datafiles"], "features": parameters["features"], 
+            "model_config": parameters["model_config"], "train_config": parameters["train_config"]}
 
 
 
@@ -298,19 +303,27 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int =
         model = crud.get_model(db, model_id)
         if not model:
             raise ValueError("Model not found")
-        flow_name = model.flow_name
-        run_id = model.flow_run_id
-        run = Flow(flow_name)[run_id]
-        parameters = run.data
+        
+        # flow_name = model.flow_name
+        # run_id = model.flow_run_id
+        # run = Flow(flow_name)[run_id]
+        # parameters = run.data
+
+        model_rootdir = os.getenv('MODEL_ROOTDIR')
+        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
+        with open(parameter_path, 'r') as f:
+            parameters = json.load(f)
+        if not parameters:
+            raise ValueError("Parameters are empty")
 
         # Get input data (For now could only handle one datafile case)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parameters.datafiles[0]["parse"], parameters.datafiles[0]["id"])
-        dataset_inst.parse(parameters.datafiles[0]["path"], parameters.datafiles[0]["name"], parameters.datafiles[0]["config"])
+        dataset_inst = dataset_factory.get_instance(parameters["datafiles"][0]["parse"], parameters["datafiles"][0]["id"])
+        dataset_inst.parse(parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
         input_data = dataset_inst[sample_id]
 
         # Initialize the model
-        model_config = parameters.model_config
+        model_config = parameters["model_config"]
         network_factory = NetworkFactory()
         model_type = model_config['type']
         model_config.pop('type', None)
@@ -376,7 +389,19 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
 async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try: 
         model = crud.get_model(db, model_id)
-        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, model.name)
+        model_rootdir = os.getenv('MODEL_ROOTDIR')
+        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
+        with open(parameter_path, 'r') as f:
+            parameters = json.load(f)
+        if not parameters:
+            raise ValueError("Parameters are empty")
+        
+
+        pattern = "epoch" + str(parameters["train_config"]["num_epochs"] - 1)
+        for file in os.listdir(os.path.join(model_rootdir, model.name)):
+            if pattern in file and file.endswith(".pth"):  
+                checkpoint = os.path.join(model_rootdir, model.name, file)
+        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
         with open('exp_info.txt', 'r') as f:
             exp_name = f.read()
 
