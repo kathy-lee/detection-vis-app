@@ -104,7 +104,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         model_config = model_config.copy()
         model_config.pop('type', None)
         net = network_factory.get_instance(model_type, model_config)
-        net.to('cuda')
+        net.to(device)
 
         # Optimizer
         lr = float(train_config['optimizer']['lr'])
@@ -151,10 +151,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             running_loss = 0.0
 
             for i, data in enumerate(train_loader):
-                inputs = data[0].to('cuda').float()
-                label_map = data[1].to('cuda').float()
+                inputs = data[0].to(device).float()
+                label_map = data[1].to(device).float()
                 if(model_config['segmentation_head']=='True'):
-                    seg_map_label = data[2].to('cuda').double()
+                    seg_map_label = data[2].to(device).double()
 
                 # reset the gradient
                 optimizer.zero_grad()
@@ -205,7 +205,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             ## validation phase ##
             ######################
             eval = run_evaluation(net,val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
-                                        segmentation_loss=freespace_loss, losses_params=train_config['losses'])
+                                        segmentation_loss=freespace_loss, losses_params=train_config['losses'],
+                                        device=device)
                 
             history['val_loss'].append(eval['loss'])
             history['mAP'].append(eval['mAP'])
@@ -239,7 +240,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             torch.save(checkpoint,filename)
 
         df_val_eval.to_csv(val_eval_path)
-        run_FullEvaluation(net, test_loader, test_eval_path)
+        run_FullEvaluation(net, test_loader, test_eval_path, device=device)
 
     return 
 
@@ -434,8 +435,8 @@ class TrainModelFlow(FlowSpec):
             ######################
             ## validation phase ##
             ######################
-            eval = run_evaluation(net,val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
-                                        segmentation_loss=freespace_loss, losses_params=self.train_config['losses'])
+            eval = run_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
+                                        segmentation_loss=freespace_loss, losses_params=self.train_config['losses'], device=device)
                 
             history['val_loss'].append(eval['loss'])
             history['mAP'].append(eval['mAP'])
@@ -474,7 +475,7 @@ class TrainModelFlow(FlowSpec):
         print("########################### Training ends sucessfully #############################")
 
         print("########################### Evaluation begins #############################")
-        run_FullEvaluation(net, test_loader, test_eval_path)
+        run_FullEvaluation(net, test_loader, test_eval_path, device=device)
         print("########################### Evaluation ends sucessfully #############################")
 
         self.next(self.end)
@@ -484,23 +485,6 @@ class TrainModelFlow(FlowSpec):
         print("TrainModelFlow ends.")
 
         
-
-    # def run_flow(self):
-    #     from metaflow import get_metadata
-    #     print("Using metaflow version %s" % Metaflow().version)
-
-    #     print("Using metadata provider: %s" % get_metadata())
-    #     self.datastore(None, mode='local')
-    #     self.environment(None, mode='conda')
-
-    #     self.run(id='TrainModelFlow',
-    #              metadata=None,
-    #              datastore=None,
-    #              environment=None,
-    #              logger=logging.getLogger(),
-    #              graph_learnings=None,
-    #              termination_value=None,
-    #              attempt=0)
 
 
 if __name__ == '__main__':

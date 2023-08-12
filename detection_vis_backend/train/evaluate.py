@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pkbar
 import torch
+import logging
 
 from shapely.geometry import Polygon
 
@@ -10,7 +11,7 @@ from detection_vis_backend.train.utils import decode
 
 
 
-def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None):
+def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
 
     metrics = Metrics()
     metrics.reset()
@@ -23,9 +24,9 @@ def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation
     for i, data in enumerate(loader):
 
         # input, out_label,segmap,labels
-        inputs = data[0].to('cuda').float()
-        label_map = data[1].to('cuda').float()
-        seg_map_label = data[2].to('cuda').double()
+        inputs = data[0].to(device).float()
+        label_map = data[1].to(device).float()
+        seg_map_label = data[2].to(device).double()
 
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
@@ -66,7 +67,7 @@ def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def run_FullEvaluation(net, loader, eval_path, iou_threshold=0.5):
+def run_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
 
     net.eval()
     
@@ -77,7 +78,7 @@ def run_FullEvaluation(net, loader, eval_path, iou_threshold=0.5):
     for i, data in enumerate(loader):
 
         # input, out_label,segmap,labels
-        inputs = data[0].to('cuda').float()
+        inputs = data[0].to(device).float()
 
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
@@ -205,8 +206,9 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
             precision.append( 0) # When there is a detection, how much I m sure
             recall.append(0)
 
-        RangeError.append(range_error/nbObjects)
-        AngleError.append(angle_error/nbObjects)
+        if nbObjects > 0:
+            RangeError.append(range_error/nbObjects)
+            AngleError.append(angle_error/nbObjects)
         
 
     perfs['precision']=precision
