@@ -2,11 +2,13 @@
 import streamlit as st
 import requests
 import os
-import re
+import json
 import numpy as np 
+import pandas as pd
 
 from PIL import Image
 
+from streamlit_ace import st_ace
 from streamlit_extras.no_default_selectbox import selectbox
 
 
@@ -46,13 +48,43 @@ st.write(checkpoint_id)
 # Get data&model&train info of the chosen model 
 response = requests.get(f"http://{backend_service}:8001/model/{model_id}")  
 model_paras = response.json()
-# st.json(model_paras["datafiles"])
-# st.json(model_paras["features"])
-# st.json(model_paras["model_config"])
-# st.json(model_paras["train_config"])
-
-# Get eval performance info of the chosen model
-
+tabs = st.tabs(["Data info", "Model info", "Train info", "Performance"])
+for idx,tab in enumerate(tabs):
+  with tab:
+    if idx == 0:
+      # Show data files
+      st.write("Train data file(s):")
+      s = ''
+      for i in model_paras["datafiles"]:
+        s += "- " + i["name"] + "\n"
+      st.markdown(s)
+      # Show features
+      features_chosen = st.write("Train feature(s):")
+      s = ''
+      for i in model_paras["features"]:
+        s += "- " + i + "\n"
+      st.markdown(s)
+    elif idx == 1 or idx == 2:
+      cfg = ["", "model_config", "train_config"]
+      formatted_configs = json.dumps(model_paras[cfg[idx]], indent=2)
+      formatted_configs = st_ace(value=formatted_configs,theme="solarized_dark",
+                keybinding="vscode",
+                min_lines=20,
+                max_lines=None,
+                font_size=14,
+                tab_size=4,
+                wrap=False,
+                show_gutter=True,
+                show_print_margin=False,
+                readonly=True,
+                annotations=None)
+    else:
+      st.write("Val dataset")
+      val_eval = pd.read_csv(os.path.join(model_path, "val_eval.csv"))
+      st.table(val_eval)
+      st.write("Test dataset")
+      test_eval = pd.read_csv(os.path.join(model_path, "test_eval.csv"))
+      st.table(test_eval)
 
 # Get sample split info of the chosen model
 with open(os.path.join(model_path, "samples_split.txt"), 'r') as f:
