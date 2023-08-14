@@ -146,7 +146,7 @@ class RaDICaL(Dataset):
         
 
     def get_RAD(self, idx=None):
-        return self.RAD if idx else self.RAD
+        return self.RAD if idx is not None else self.RAD
     
     def get_RA(self, idx=None):
         if not self.RA:
@@ -156,7 +156,7 @@ class RaDICaL(Dataset):
                 beamformed_range_azimuth = rf.compute_range_azimuth(x) 
                 beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))
                 self.RA.append(beamformed_range_azimuth)
-        return self.RA[idx] if idx else self.RA
+        return self.RA[idx] if idx is not None else self.RA
 
     def get_RD(self, idx=None):
         if not self.RD:
@@ -168,7 +168,7 @@ class RaDICaL(Dataset):
                 range_doppler = np.transpose(range_doppler)
                 range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
                 self.RD.append(range_doppler)
-        return self.RD[idx] if idx else self.RD
+        return self.RD[idx] if idx is not None else self.RD
 
     def get_radarpointcloud(self, idx=None):
         for x in self.RA:
@@ -177,7 +177,7 @@ class RaDICaL(Dataset):
             # rf = RadarFrame(radar_config)
             y = np.random.rand(30,20)
             self.radarpointcloud.append(y)
-        return self.radarpointcloud[idx] if idx else self.radarpointcloud
+        return self.radarpointcloud[idx] if idx is not None else self.radarpointcloud
 
     def get_lidarpointcloud():
         return None
@@ -190,13 +190,13 @@ class RaDICaL(Dataset):
             #, tfa = signal.stft()
             tfa = np.random.rand(30,20)
             self.spectrogram.append(tfa)
-        return self.spectrogram[idx] if idx else self.spectrogram
+        return self.spectrogram[idx] if idx is not None else self.spectrogram
 
     def get_image(self, idx=None):
-        return self.image[idx] if idx else self.image
+        return self.image[idx] if idx is not None else self.image
     
     def get_depthimage(self, idx=None):
-        return self.depth_image[idx] if idx else self.depth_image
+        return self.depth_image[idx] if idx is not None else self.depth_image
 
     def __len__(self):
         return self.frame_sync

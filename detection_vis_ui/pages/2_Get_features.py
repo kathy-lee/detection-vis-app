@@ -146,7 +146,7 @@ def show_last(i, length):
     st.session_state[i] = length-1
 
 @st.cache_data(experimental_allow_widgets=True)
-def show_feature(feature, counter, frame_id, config=None):
+def show_feature(file_id, feature, counter, frame_id, config=None):
   ###################### test code
   # fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
   # st.write(f"Total frames: {len(fileset)}")
@@ -160,7 +160,7 @@ def show_feature(feature, counter, frame_id, config=None):
   # st.image(photo,caption=st.session_state[counter])
 
 
-  response = requests.get(f"http://{backend_service}:8001/feature/{datafile_chosen['id']}/{feature}/size")
+  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/size")
   feature_size = response.json()
   st.write(f"Total frames: {feature_size}")
   forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), 
@@ -170,7 +170,7 @@ def show_feature(feature, counter, frame_id, config=None):
   if st.session_state.frame_sync:
     st.session_state[counter] = frame_id
 
-  response = requests.get(f"http://{backend_service}:8001/feature/{datafile_chosen['id']}/{feature}/{st.session_state[counter]}")
+  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/{st.session_state[counter]}")
   feature_data = response.json()
   serialized_feature = feature_data["serialized_feature"]
   feature_image = np.array(serialized_feature)
@@ -219,7 +219,7 @@ if feature in features:
     st.session_state[counter] = frame_id
   expander_image = st.expander("RGB images", expanded=True)
   with expander_image:
-    show_feature(feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id)
     
 
 feature = "depth_image"
@@ -229,7 +229,7 @@ if feature in features:
     st.session_state[counter] = frame_id
   expander_depthimage = st.expander("Depth images", expanded=True)
   with expander_depthimage:
-    show_feature(feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id)
 
 
 feature = "lidarPC"
@@ -239,7 +239,7 @@ if feature in features:
     st.session_state[counter] = frame_id
   expander_lidarpc = st.expander("Lidar Point Cloud", expanded=True)
   with expander_lidarpc:
-    show_feature(feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id)
 
 
 feature = "RD"
@@ -250,7 +250,7 @@ if feature in features and (features_show[features.index("RD")] or fft_config in
     st.session_state[counter] = frame_id
   with expander_RD:
     cfg = None if features_show[features.index("RD")] else fft_config
-    show_feature(feature, counter, frame_id, config=cfg)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=cfg)
 
 
 feature = "RA" 
@@ -260,7 +260,7 @@ if feature in features and aoa_config in ("Barlett", "Capon"):
   if counter not in st.session_state:
     st.session_state[counter] = frame_id
   with expander_RA:
-    show_feature(feature, counter, frame_id, config=aoa_config)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=aoa_config)
 
 
 feature = "spectrogram" 
@@ -270,7 +270,7 @@ if feature in features and tfa_config in ("STFT", "WV"):
   if counter not in st.session_state:
     st.session_state[counter] = frame_id
   with expander_tfa:
-    show_feature(feature, counter, frame_id, config=tfa_config)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=tfa_config)
 
 
 feature = "radarPC" 
@@ -281,7 +281,7 @@ if feature in features and (features_show[features.index("radarPC")] or cfar_con
     st.session_state[counter] = frame_id
   with expander_radarpc:
     cfg = None if features_show[features.index("radarPC")] else cfar_config
-    show_feature(feature, counter, frame_id, config=cfg)
+    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=cfg)
 
 
 if 'features_chosen' not in st.session_state:
