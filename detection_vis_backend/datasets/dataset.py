@@ -56,15 +56,6 @@ class RaDICaL(Dataset):
     features = []
     feature_path = ""
     config = ""
-    
-    # image = []
-    # depth_image = []
-    # ADC = []
-    # RAD = []
-    # RA = []
-    # RD = []
-    # radarpointcloud = []
-    # spectrogram = []
 
     image_count = 0
     depthimage_count = 0
@@ -173,8 +164,10 @@ class RaDICaL(Dataset):
         rf = RadarFrame(radar_config)
         rf.raw_cube = self.get_ADC(idx)
         range_doppler = rf.range_doppler
+        range_doppler = np.fft.fftshift(range_doppler, axes=1)
         range_doppler = np.transpose(range_doppler)
         range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
+        # rd = np.concatenate([range_doppler.real,range_doppler.imag], axis=2)
         return range_doppler
 
     def get_radarpointcloud(self, idx=None):
@@ -215,13 +208,6 @@ class RADIal(Dataset):
     name = ""
     features = []
     config = ""
-
-    image = []
-    RAD = []
-    RA = []
-    RD = []
-    radar_pointcloud = []
-    lidar_pointcloud = []
 
     image_count = 8252
     lidarframe_count = 8252
@@ -267,49 +253,22 @@ class RADIal(Dataset):
         return None
 
     def get_RD(self, idx=None):
-        if idx is not None:
-            rd = np.load(self.RD_filenames[idx])
-            rd = np.concatenate([rd.real,rd.imag], axis=2)
-            return rd
-        else:
-            for i in self.RD_filenames:
-                rd = np.load(self.RD_filenames[i])['arr_0']
-                rd = np.concatenate([rd.real,rd.imag],axis=2)
-                self.RD.append(rd)
-            return self.RD
+        rd = np.load(self.RD_filenames[idx])
+        rd = np.concatenate([rd.real,rd.imag], axis=2)
+        return rd
 
     def get_radarpointcloud(self, idx=None):
-        if idx is not None:
-            pc = np.load(self.radarpointcloud_filenames[idx], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
-            pc = np.rollaxis(pc,1,0)
-            pc[:,1] *= -1
-            return pc
-        else:
-            for i in self.radarpointcloud_filenames:
-                pc = np.load(self.radarpointcloud_filenames[i], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
-                pc = np.rollaxis(pc,1,0)
-                pc[:,1] *= -1
-                self.radar_pointcloud.append(pc)
-            return self.radar_pointcloud
+        pc = np.load(self.radarpointcloud_filenames[idx], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
+        pc = np.rollaxis(pc,1,0)
+        pc[:,1] *= -1
+        return pc
 
     def get_lidarpointcloud(self, idx=None):
-        if idx is not None:
-            return np.load(self.lidarpointcloud_filenames[idx], allow_pickle=True)[:,:3]
-        else:
-            for i in self.lidarpointcloud_filenames:
-                pc = np.load(self.lidarpointcloud_filenames[i], allow_pickle=True)[:,:3]
-                self.lidar_pointcloud.append(pc)
-            return self.lidar_pointcloud
+        return np.load(self.lidarpointcloud_filenames[idx], allow_pickle=True)[:,:3]
 
     def get_image(self, idx=None): 
-        if idx is not None:
-            image = np.asarray(Image.open(self.image_filenames[idx]))
-            return image
-        else:
-            for i in self.image_filenames:
-                image = np.asarray(Image.open(self.image_filenames[i]))
-                self.image.append(image)
-            return self.image
+        image = np.asarray(Image.open(self.image_filenames[idx]))
+        return image
 
     def get_depthimage(self, idx=None):
         return None
@@ -340,7 +299,6 @@ class RADIal(Dataset):
         # format as following [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
-
         ######################
         #  Encode the labels #
         ######################
@@ -349,9 +307,10 @@ class RADIal(Dataset):
         out_label = self.encode(box_labels).copy()      
 
         # Read the Radar FFT data
-        radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
-        input = np.load(radar_name,allow_pickle=True)
-        radar_FFT = np.concatenate([input.real,input.imag],axis=2)
+        # radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
+        # input = np.load(radar_name,allow_pickle=True)
+        # radar_FFT = np.concatenate([input.real,input.imag],axis=2)
+        radar_FFT = self.get_RD(index)
         if(self.statistics is not None):
             for i in range(len(self.statistics['input_mean'])):
                 radar_FFT[...,i] -= self.statistics['input_mean'][i]
@@ -367,9 +326,10 @@ class RADIal(Dataset):
         segmap = np.asarray(self.resize(segmap))==255
 
         # Read the camera image
-        img_name = os.path.join(self.root_dir,'camera',"image_{:06d}.jpg".format(sample_id))
-        image = np.asarray(Image.open(img_name))
-
+        # img_name = os.path.join(self.root_dir,'camera',"image_{:06d}.jpg".format(sample_id))
+        # image = np.asarray(Image.open(img_name))
+        image = self.get_image(index)
+        
         return radar_FFT, segmap,out_label,box_labels,image
     
     def set_features(self, features):
