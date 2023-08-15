@@ -144,7 +144,7 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        dataset_inst.parse(datafile.path, datafile.name, datafile.config)
+        dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
     except Exception as e:
         logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
@@ -214,18 +214,18 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
 
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    # 
-    try: 
-        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
-        with open('exp_info.txt', 'r') as f:
-            exp_name = f.read()
+    # try: 
+    #     train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
+    #     with open('exp_info.txt', 'r') as f:
+    #         exp_name = f.read()
 
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info")
-        crud.add_model(db=db, mlmodel=model_meta)
-    except Exception as e:
-        logging.error(f"An unexpected error occurred during training: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+    #     model_meta = schemas.MLModelCreate(name=exp_name,description="info")
+    #     crud.add_model(db=db, mlmodel=model_meta)
+    # except Exception as e:
+    #     logging.error(f"An unexpected error occurred during training: {str(e)}")
+    #     raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
 
+    exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
     return {"model_name": exp_name}
 
 
@@ -319,7 +319,7 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int =
         # Get input data (For now could only handle one datafile case)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(parameters["datafiles"][0]["parse"], parameters["datafiles"][0]["id"])
-        dataset_inst.parse(parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
+        dataset_inst.parse(parameters["datafiles"][0]["id"], parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
         input_data = dataset_inst[sample_id]
 
         # Initialize the model
@@ -340,6 +340,8 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int =
         net.eval()
         # input_data: [radar_FFT, segmap,out_label,box_labels,image]
         input = torch.tensor(input_data[0]).permute(2,0,1).unsqueeze(0)
+        # torch.tensor(data[0]).permute(2,0,1).to('cuda').float().unsqueeze(0)
+
         with torch.set_grad_enabled(False):
             output = net(input)
         
