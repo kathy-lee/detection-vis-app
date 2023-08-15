@@ -4,6 +4,7 @@ import logging
 import numpy as np
 import torchvision.transforms as transform
 import pandas as pd
+from pathlib import Path
 
 
 from detection_vis_backend.datasets.radarframe import RadarFrame
@@ -53,16 +54,17 @@ class DatasetFactory:
 class RaDICaL(Dataset):
     name = ""
     features = []
+    feature_path = ""
     config = ""
     
-    image = []
-    depth_image = []
-    ADC = []
-    RAD = []
-    RA = []
-    RD = []
-    radarpointcloud = []
-    spectrogram = []
+    # image = []
+    # depth_image = []
+    # ADC = []
+    # RAD = []
+    # RA = []
+    # RD = []
+    # radarpointcloud = []
+    # spectrogram = []
 
     image_count = 0
     depthimage_count = 0
@@ -73,7 +75,7 @@ class RaDICaL(Dataset):
     def __init__(self, features=None):
         self.name = "RaDICaL dataset instance"
 
-    def parse(self, file_path, file_name, config):
+    def parse(self, file_id, file_path, file_name, config):
         self.config = config
         file = os.path.join(file_path, file_name)
         try:
@@ -82,8 +84,13 @@ class RaDICaL(Dataset):
             print(f"No file found at {file}")
         topics_dict = bag.get_type_and_topic_info()[1]
 
-        if "/camera/color/image_raw" in topics_dict:
-            for topic, msg, t in bag.read_messages(topics=['/camera/color/image_raw']):
+        feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
+        feature_path.mkdir(parents=True, exist_ok=True)
+        self.feature_path = feature_path
+
+        if "/camera/color/image_raw" in topics_dict:    
+            (feature_path / "image").mkdir(parents=True, exist_ok=True)
+            for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/camera/color/image_raw'])):
                 # print(t.secs)
                 # print(t.nsecs)
                 # print(msg.header.stamp.secs)
@@ -93,13 +100,13 @@ class RaDICaL(Dataset):
                 dtype = np.dtype("uint8")  # 8-bit color image
                 dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
-                self.image.append(image)
-                # # save as npy file
-                # np.save(os.path.join(feature_path, f"image_{idx.npy}"))
-            self.image_count = len(self.image)
+                # self.image.append(image)
+                np.save(os.path.join(feature_path, "image", f"image_{idx}.npy"), image)
+            self.image_count = idx + 1
 
         if "/camera/aligned_depth_to_color/image_raw" in topics_dict:
-            for topic, msg, t in bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw']):
+            (feature_path / "depth_image").mkdir(parents=True, exist_ok=True)
+            for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw'])):
                 # print(t.secs)
                 # print(t.nsecs)
                 # print(msg.header.stamp.secs)
@@ -109,11 +116,13 @@ class RaDICaL(Dataset):
                 dtype = np.dtype("uint16")  # 16-bit grayscale image
                 dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
-                self.depth_image.append(image)
-            self.depthimage_count = len(self.depth_image)
+                # self.depth_image.append(image)
+                np.save(os.path.join(feature_path, "depth_image", f"depth_image_{idx}.npy"), image)
+            self.depthimage_count = idx + 1
 
         if "/radar_data" in topics_dict:
-            for topic, msg, t in bag.read_messages(topics=['/radar_data']):
+            (feature_path / "adc").mkdir(parents=True, exist_ok=True)
+            for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/radar_data'])):
                 #   print(t.secs)
                 #   print(t.nsecs  print(t.secs + t.nsecs*1e-9)
                 # if(count > 0):
@@ -121,15 +130,12 @@ class RaDICaL(Dataset):
                 # last = t.secs + t.nsecs*1e-9
                 # print("\nProcessing no.", count, "th radar msg:")
                 
-                #print(len(msg.data))
                 arr = np.array(msg.data)
-                #print(arr[0])
                 complex_arr = reshape_frame(arr,304,4,2,64)
-                #print(complex_arr.shape) # (32, 304, 8)
-                transformed = np.swapaxes(complex_arr, 1, 2)
-                #print(transformed.shape)
-                self.ADC.append(transformed)
-            self.radarframe_count = len(self.ADC)
+                adc = np.swapaxes(complex_arr, 1, 2)
+                # self.ADC.append(transformed)
+                np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
+            self.radarframe_count = idx + 1
         
         bag.close()
         
@@ -143,60 +149,54 @@ class RaDICaL(Dataset):
                 self.frame_sync = non_zero_lengths[0]
             else:
                 self.frame_sync = 0
+        return
         
 
     def get_RAD(self, idx=None):
-        return self.RAD if idx is not None else self.RAD
+        return None
+    
+    def get_ADC(self, idx=None):
+        adc_file = os.path.join(self.feature_path,'adc',f"adc_{idx}.npy")
+        adc = np.load(adc_file)
+        return adc
     
     def get_RA(self, idx=None):
-        if not self.RA:
-            radar_config = read_radar_params(self.config) 
-            rf = RadarFrame(radar_config)
-            for x in self.ADC:
-                beamformed_range_azimuth = rf.compute_range_azimuth(x) 
-                beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))
-                self.RA.append(beamformed_range_azimuth)
-        return self.RA[idx] if idx is not None else self.RA
+        radar_config = read_radar_params(self.config) 
+        rf = RadarFrame(radar_config)
+        adc = self.get_ADC(idx)
+        beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
+        beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))        
+        return beamformed_range_azimuth
 
     def get_RD(self, idx=None):
-        if not self.RD:
-            radar_config = read_radar_params(self.config)
-            rf = RadarFrame(radar_config)
-            for i,x in enumerate(self.ADC): 
-                rf.raw_cube = x
-                range_doppler = rf.range_doppler
-                range_doppler = np.transpose(range_doppler)
-                range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
-                self.RD.append(range_doppler)
-        return self.RD[idx] if idx is not None else self.RD
+        radar_config = read_radar_params(self.config)
+        rf = RadarFrame(radar_config)
+        rf.raw_cube = self.get_ADC(idx)
+        range_doppler = rf.range_doppler
+        range_doppler = np.transpose(range_doppler)
+        range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
+        return range_doppler
 
     def get_radarpointcloud(self, idx=None):
-        for x in self.RA:
-            # radar_config = read_radar_params(config)
-            # radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
-            # rf = RadarFrame(radar_config)
-            y = np.random.rand(30,20)
-            self.radarpointcloud.append(y)
-        return self.radarpointcloud[idx] if idx is not None else self.radarpointcloud
+        return None
 
     def get_lidarpointcloud():
         return None
     
     def get_spectrogram(self, idx=None):
-        for x in self.ADC:
-            # radar_config = read_radar_params(config)
-            # radar_config = read_radar_params("indoor_human_rcs.cfg") # for local test
-            # rf = RadarFrame(radar_config)
-            #, tfa = signal.stft()
-            tfa = np.random.rand(30,20)
-            self.spectrogram.append(tfa)
-        return self.spectrogram[idx] if idx is not None else self.spectrogram
+        return None
 
     def get_image(self, idx=None):
-        return self.image[idx] if idx is not None else self.image
+        #return self.image[idx] if idx is not None else self.image
+        image_file = os.path.join(self.feature_path,'image',f"image_{idx}.npy")
+        image = np.load(image_file)
+        return image
     
     def get_depthimage(self, idx=None):
-        return self.depth_image[idx] if idx is not None else self.depth_image
+        # return self.depth_image[idx] if idx is not None else self.depth_image
+        image_file = os.path.join(self.feature_path,'depth_image',f"depth_image_{idx}.npy")
+        image = np.load(image_file)
+        return image
 
     def __len__(self):
         return self.frame_sync
@@ -228,7 +228,7 @@ class RADIal(Dataset):
     radarframe_count = 8252
     frame_sync = 8252
 
-    def parse(self, file_path, file_name, config, difficult=True):
+    def parse(self, file_id, file_path, file_name, config, difficult=True):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
