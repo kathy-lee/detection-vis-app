@@ -54,8 +54,13 @@ if datafile_parsed not in st.session_state:
 if 'frame_sync' not in st.session_state:
   st.session_state.frame_sync = False
 
-response = requests.get(f"http://{backend_service}:8001/sync/{datafile_chosen['id']}")
-sync = response.json()
+@st.cache_data
+def check_sync(file_id):
+  response = requests.get(f"http://{backend_service}:8001/sync/{file_id}")
+  sync = response.json()
+  return sync
+
+sync = check_sync(datafile_chosen["id"])
 frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync, disabled=not sync)
 frame_begin = 0
 frame_end = sync
@@ -132,6 +137,19 @@ if "radarPC" in features and not features_show[features.index("radarPC")]:
   st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
 
 
+@st.cache_data
+def get_feature(file_id, feature, idx):
+  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/{idx}")
+  feature_data = response.json()
+  serialized_feature = feature_data["serialized_feature"]
+  return serialized_feature
+
+@st.cache_data
+def get_feature_size(file_id, feature):
+  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/size")
+  feature_size = response.json()
+  return feature_size
+
 def show_next(i, length):
   # Increments the counter to get next photo
   st.session_state[i] += 1
@@ -145,7 +163,7 @@ def show_last(i, length):
   if st.session_state[i] < 0:
     st.session_state[i] = length-1
 
-@st.cache_data(experimental_allow_widgets=True)
+
 def show_feature(file_id, feature, counter, frame_id, config=None):
   ###################### test code
   # fileset = [os.path.join("detection_vis_ui/image",f) for f in os.listdir("detection_vis_ui/image")]
@@ -159,9 +177,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
   # photo = fileset[st.session_state[counter]]
   # st.image(photo,caption=st.session_state[counter])
 
-
-  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/size")
-  feature_size = response.json()
+  feature_size = get_feature_size(file_id, feature)
   st.write(f"Total frames: {feature_size}")
   forward_btn = st.button("Show next frame ⏭️",on_click=show_next,args=([counter,feature_size]), 
                           key=f"{feature}_forward_btn", disabled=st.session_state.frame_sync)
@@ -170,9 +186,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
   if st.session_state.frame_sync:
     st.session_state[counter] = frame_id
 
-  response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/{st.session_state[counter]}")
-  feature_data = response.json()
-  serialized_feature = feature_data["serialized_feature"]
+  serialized_feature = get_feature(file_id, feature, st.session_state[counter])
   feature_image = np.array(serialized_feature)
   if feature == "lidarPC" or feature == "radarPC":
     plt.figure(figsize=(8, 6))
@@ -195,22 +209,6 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     feature_image = feature_image / np.max(feature_image)
     st.image(feature_image, caption=f"index: {st.session_state[counter]}")
   
-  # if feature == "RAD":
-  #   serialized_feature = feature_data["serialized_feature"]
-  #   complex_feature = np.array([[[complex(real, imag) for real, imag in y] for y in z] for z in serialized_feature])
-  #   feature_image = np.abs(complex_feature[:, 0, :])
-  #   feature_image = feature_image - np.min(feature_image)
-  #   feature_image = feature_image / np.max(feature_image)
-  #   st.image(feature_image, caption=f"{feature_image.shape}")
-  # else:
-  #   serialized_feature = feature_data["serialized_feature"]
-  #   feature_image = np.array(serialized_feature)
-  #   feature_image = feature_image - np.min(feature_image)
-  #   feature_image = feature_image / np.max(feature_image)
-  #   st.image(feature_image, caption=f"{feature_image.shape}")
-
-  # st.write(f"Index : {st.session_state[counter]}")
-
 
 feature = "image"
 counter = f"counter_{feature}" 
