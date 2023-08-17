@@ -1,19 +1,23 @@
 import rosbag
 import os
 import logging
+import struct
+import cv2
+import mkl_fft
+import torch
+import math
 import numpy as np
 import torchvision.transforms as transform
 import pandas as pd
+
 from pathlib import Path
-
-
-from detection_vis_backend.datasets.radarframe import RadarFrame
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame
 from scipy import signal
 from torchvision.transforms import Resize,CenterCrop
 from torch.utils.data import Dataset
 from PIL import Image
 
+from detection_vis_backend.datasets.radarframe import RadarFrame
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame
 
 
 class DatasetFactory:
@@ -278,7 +282,7 @@ class RADIal(Dataset):
 
     def __init__(self):
         # RADIal data has two formats: raw and ready-to-use
-        self.name = "RADIal dataset instance" 
+        self.name = "RADIal ready-to-use dataset instance" 
 
     def __len__(self):
         return len(self.label_dict)
@@ -329,7 +333,7 @@ class RADIal(Dataset):
         # img_name = os.path.join(self.root_dir,'camera',"image_{:06d}.jpg".format(sample_id))
         # image = np.asarray(Image.open(img_name))
         image = self.get_image(index)
-        
+
         return radar_FFT, segmap,out_label,box_labels,image
     
     def set_features(self, features):
@@ -408,3 +412,571 @@ class RADIal(Dataset):
                     map[2,range_bin-s:range_bin+(s+1),angle_bin-s:] = ((px_a[:,:end] + angle_mod)- self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
 
         return map
+    
+
+
+class RADIalRaw(Dataset):
+    name = ""
+    features = []
+    feature_path = ""
+    config = ""
+
+    image_count = 0
+    depthimage_count = 0
+    radarframe_count = 0
+    frame_sync = 0
+
+    def __init__(self, features=None):
+        self.name = "RADIal raw dataset instance"
+        self.features = ['image', 'lidarPC', 'adc']
+
+        # Radar parameters
+        self.numSamplePerChirp = 512
+        self.numRxPerChip = 4
+        self.numChirps = 256
+        self.numRxAnt = 16
+        self.numTxAnt = 12
+        self.numReducedDoppler = 16
+        self.numChirpsPerLoop = 16
+    
+    def parse_recording(folder):
+        recorder_folder_path = Path(folder)
+        
+        list_files = [file for file in os.listdir(recorder_folder_path) if os.isfile(os.path.join(recorder_folder_path, file))]
+        
+        # list the number of sensor recorded
+        list_of_sensors = []
+        list_files2 = []
+        offsetTable = {'camera':0,'scala':-40000,'radar_ch0':-180000,'radar_ch1':-180000,'radar_ch2':-180000,'radar_ch3':-180000,'gps':0,'can':0}
+        for file in list_files:
+            sensor = file[len(recorder_folder_path.name)+1:]
+            sensor = sensor[:sensor.rfind('.')]
+
+            if(sensor in list(offsetTable.keys())):
+                list_of_sensors.append(sensor)
+                list_files2.append(file)
+
+        list_files = list_files2
+        dict_sensor = {s:{'filename':recorder_folder_path/list_files[i],'timestamp': [],'timeofissue': [],'sample': [], 'offset': [], 'datasize' :[]} for i,s in enumerate(list_of_sensors)}
+
+        # 1. Open the REC file
+        rec_file_name = recorder_folder_path.name+'_events_log.rec'
+        rec_file_path = recorder_folder_path/rec_file_name
+        
+        df = pd.read_csv(rec_file_path,header=None)
+        data = df.values
+        
+        for line in data:
+            elt = line[0].split()
+            timestamp = int(elt[1])
+            timeofissue = int(elt[4])
+            sample = int(elt[7])
+            sensor = elt[10]
+
+            if(sensor not in dict_sensor.keys()):
+                continue
+            
+            dict_sensor[sensor]['timestamp'].append(timestamp)
+            dict_sensor[sensor]['timeofissue'].append(timeofissue)
+            dict_sensor[sensor]['sample'].append(sample)
+            
+            if(len(elt)==17):
+                # timestamp - sample - sensor - offset - datasize
+                dict_sensor[sensor]['offset'].append(int(elt[13]))
+                dict_sensor[sensor]['datasize'].append(int(elt[16]))
+                
+        for sensor in dict_sensor:
+            if(len(dict_sensor[sensor]['timeofissue'])>0 and len(dict_sensor[sensor]['timestamp'])>0):
+
+                offset = dict_sensor[sensor]['timeofissue'][0] - dict_sensor[sensor]['timestamp'][0] + offsetTable[sensor]
+                for i in range(len(dict_sensor[sensor]['timestamp'])):
+                    dict_sensor[sensor]['timestamp'][i] += offset
+
+            dict_sensor[sensor]['timestamp'] = np.asarray(dict_sensor[sensor]['timestamp'])
+            dict_sensor[sensor]['timeofissue'] = np.asarray(dict_sensor[sensor]['timeofissue'])
+            dict_sensor[sensor]['sample'] = np.asarray(dict_sensor[sensor]['sample'])
+            dict_sensor[sensor]['offset'] = np.asarray(dict_sensor[sensor]['offset'])
+            dict_sensor[sensor]['datasize'] = np.asarray(dict_sensor[sensor]['datasize'])
+
+        return dict_sensor
+
+
+    def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False): 
+        # 1. Open the REC file
+        self.rec_file_name = file_name +'_events_log.rec'
+        self.rec_file_path = os.path.join(file_path, file_name, self.rec_file_name)
+        
+        labls = np.array([str(i) for i in range(22)]) # create some row names
+        df = pd.read_csv(self.rec_file_path,header=None,names=labls,sep='[-|\s+]',engine='python')
+        nbColumn = df.shape[1]
+        self.df = df.iloc[:, np.arange(1,nbColumn,4)]
+        self.df.columns = ['timestamp', 'timeofissue','data_sample', 'sensor', 'offset','datasize']
+        self.sensorsFilters = self.df['sensor'].unique()
+        self.filters = []
+        self.df_filtered = self.df
+
+        id_to_del = []
+        nb_corrupted = 0
+        nb_tolerance = 0
+
+        self.dicts = self.parse_recording(os.path.join(file_path, file_name).name)
+        # for Each radar sample, find the clostest sample for each sensor
+        if(master is None):
+            # by default, we use the Radar as Matser sensor
+            if('radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts 
+               or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts):
+                print('Error: recording does not contains the 4 radar chips')
+            
+            keys =list(self.dicts.keys())
+            self.keys = keys
+            
+            if('gps' in self.dicts):
+                keys.remove('gps')
+            if('preview' in self.dicts):
+                keys.remove('preview')
+            if('None' in self.dicts):
+                keys.remove('None')
+            keys.remove('radar_ch0')
+            keys.remove('radar_ch1')
+            keys.remove('radar_ch2')
+            keys.remove('radar_ch3')
+            
+            self.table=[]
+            
+            # Check the length of all radar recordings!
+            NbSample = len(self.dicts['radar_ch3']['timestamp'])
+            print(f"NbSample: ")
+            # Sequence is radar_ch3 radar_ch0 radar_ch2 radar_ch1
+            for i in range(NbSample):
+                timestamp = self.dicts['radar_ch3']['timestamp'][i]
+                timeofissue = self.dicts['radar_ch3']['timeofissue'][i]
+                FrameNumber = self.dicts['radar_ch3']['sample'][i]
+
+                idx0 = np.where(self.dicts['radar_ch0']['sample']==(FrameNumber+1))[0]
+                idx2 = np.where(self.dicts['radar_ch2']['sample']==(FrameNumber+2))[0]
+                idx1 = np.where(self.dicts['radar_ch1']['sample']==(FrameNumber+3))[0]
+                match={}
+
+                match['radar_ch3'] = i
+
+                if(len(idx0)==0 or len(idx1)==0 or len(idx2)==0):
+                    id_to_del.append(i)
+                    nb_corrupted+=1
+                    match['radar_ch0'] = -1
+                    match['radar_ch1'] = -1
+                    match['radar_ch2'] = -1
+                else:
+                    match['radar_ch0'] = idx0[0]
+                    match['radar_ch1'] = idx1[0]
+                    match['radar_ch2'] = idx2[0]
+
+                
+                if(self.sync_mode=='timestamp'):
+                    for k in keys:
+                        if(len(self.dicts[k]['timestamp'])>0):
+                            time_diff = np.abs(np.asarray(self.dicts[k]['timestamp']) - timestamp)
+                            vmin = time_diff.min()
+                            index_min = time_diff.argmin()
+
+                            if(vmin>tolerance):
+                                index_min=-1
+                        else:
+                            index_min=-1
+                        
+                        if(index_min==-1):
+                            nb_tolerance+=1
+                            id_to_del.append(i)
+
+                        match[k] = index_min
+                else:
+                    for k in keys:
+                        if(len(self.dicts[k]['timeofissue'])>0):
+                            time_diff = np.abs(np.asarray(self.dicts[k]['timeofissue']) - timeofissue)
+                            vmin = time_diff.min()
+                            index_min = time_diff.argmin()
+                            if(vmin>tolerance):
+                                index_min=-1
+                        else:
+                            index_min=-1
+                        
+                        if(index_min==-1):
+                            nb_tolerance+=1
+                            id_to_del.append(i)
+
+                        match[k] = index_min
+            
+                self.table.append(match)
+
+            self.table = np.asarray(self.table)
+
+            # Keep only sync samples
+            id_to_del = np.unique(np.asarray(id_to_del))
+            id_total = np.arange(len(self.table))
+            self.id_valid = np.setdiff1d(id_total, id_to_del)
+            if(not self.silent):
+            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
+            	print('Total corrupted frames: ',nb_corrupted/len(self.table)*100,'%')
+            self.table = self.table[self.id_valid]
+
+
+        elif(master=='camera'):
+            # we discard the radar, and consider only camera, laser, can
+            if('camera' not in self.dicts):
+                print('Error: recording does not contains camera')
+            
+            keys =list(self.dicts.keys())
+
+            if('gps' in self.dicts):
+                keys.remove('gps')
+            if('radar_ch0' in self.dicts):
+                keys.remove('radar_ch0')                
+            if('radar_ch1' in self.dicts):
+                keys.remove('radar_ch1')  
+            if('radar_ch2' in self.dicts):
+                keys.remove('radar_ch2')  
+            if('radar_ch3' in self.dicts):
+                keys.remove('radar_ch3')  
+            if('preview' in self.dicts):
+                keys.remove('preview')
+            if('None' in self.dicts):
+                keys.remove('None')
+
+            self.keys = keys
+
+            self.table=[]
+            for i in range(len(self.dicts['camera']['timestamp'])):
+
+                timestamp = self.dicts['camera']['timestamp'][i]  
+                timeofissue = self.dicts['camera']['timeofissue'][i]
+
+                match={}
+                match['camera'] = i
+                
+                if(self.sync_mode=='timestamp'):
+                    for k in keys:
+                        if(len(self.dicts[k]['timestamp'])>0):
+                            time_diff = np.abs(np.asarray(self.dicts[k]['timestamp']) - timestamp)
+                            vmin = time_diff.min()
+                            index_min = time_diff.argmin()
+                        
+                            if(vmin>tolerance):
+                                nb_tolerance+=1
+                                index_min = -1
+                                id_to_del.append(i)
+                        else:
+                            index_min = -1
+                        
+                        match[k] = index_min
+                else:
+                    for k in keys:
+                        if(len(self.dicts[k]['timeofissue'])>0):
+                            time_diff = np.abs(np.asarray(self.dicts[k]['timeofissue']) - timeofissue)
+                            vmin = time_diff.min()
+                            index_min = time_diff.argmin()
+                        
+                            if(vmin>tolerance):
+                                nb_tolerance+=1
+                                id_to_del.append(i)
+                                index_min = -1
+                        else:
+                            index_min = -1
+                        
+                        match[k] = index_min
+            
+                self.table.append(match)
+
+            self.table = np.asarray(self.table)
+            # Keep only sync samples
+            id_to_del = np.unique(np.asarray(id_to_del))
+            id_total = np.arange(len(self.table))
+            id_to_keep = np.setdiff1d(id_total, id_to_del)
+            if(not self.silent):
+            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
+            self.table = self.table[id_to_keep]
+
+        else:
+            print('Mode not supported')
+            return
+
+
+        self.can_frames={'timestamp':[],'ID':[],'data':[]}
+        if('can' in self.dicts):
+            A = []
+            for i in range(len(self.readers['can'].dict['offset'])):
+                A.append(self.readers['can'].GetData(i))
+            
+            A=np.concatenate(A)
+            
+            for i in range(len(A)):
+                self.can_frames['timestamp'].append(A[i]['timestamp'])
+                self.can_frames['ID'].append(A[i]['ID'])
+                self.can_frames['data'].append(A[i]['DATA'])
+            self.can_frames['ID'] = np.asarray(self.can_frames['ID'])
+            self.can_frames['timestamp'] = np.asarray(self.can_frames['timestamp'])
+
+        # parse into feature_path
+        feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
+        feature_path.mkdir(parents=True, exist_ok=True)
+        self.feature_path = feature_path
+
+        (feature_path / "image").mkdir(parents=True, exist_ok=True)
+        (feature_path / "adc").mkdir(parents=True, exist_ok=True)
+        (feature_path / "lidarPC").mkdir(parents=True, exist_ok=True)
+        if(np.shape(self.dicts['camera']['offset'])[0]>0):
+            f = open(str(self.dicts['camera']['filename']),'rb')
+        else:
+            f = cv2.VideoCapture(str(self.dicts['camera']['filename']))
+        fd = open(str(self.dicts['scala']['filename']),'rb')
+        fd_ch0 = open(str(self.dicts['radar_ch0']['filename']),'rb')
+        fd_ch1 = open(str(self.dicts['radar_ch1']['filename']),'rb')
+        fd_ch2 = open(str(self.dicts['radar_ch2']['filename']),'rb')
+        fd_ch3 = open(str(self.dicts['radar_ch3']['filename']),'rb')
+        struct_fmt = '=7f4B'
+        struct_len = struct.calcsize(struct_fmt)
+        struct_unpack = struct.Struct(struct_fmt).unpack_from
+        for idx in self.table:
+            # MJPG mode
+            if(np.shape(self.dicts['camera']['offset'])[0]>0):
+                offset = int(self.dicts['camera']['offset'][idx])
+                length = int(self.dicts['camera']['datasize'][idx])
+                f.seek(offset)
+                data = f.read(length)
+                image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            # AVI MOde
+            else:
+                f.set(cv2.CAP_PROP_POS_FRAMES,idx)
+                ret, image = f.read()
+            cv2.imwrite(os.path.join(feature_path, "image", f"image_{idx}.jpg"), image)
+
+            # lidar pc
+            offset = self.dicts['scala']['offset'][idx]
+            datasize = self.dicts['scala']['datasize'][idx]
+            fd.seek(offset)
+            pts3d=[]
+            for i in range(int(datasize/struct_len)):
+                pts3d.append(struct_unpack(fd.read(struct_len)))
+            pts3d = np.asarray(pts3d)
+            np.save(os.path.join(feature_path, "lidarpc", f"lidarpc_{idx}.npy"), pts3d)
+
+            # radar adc
+            offset = int(self.dicts['radar_ch0']['offset'][idx])
+            datasize = self.dicts['radar_ch0']['datasize'][idx]
+            fd_ch0.seek(offset)
+            adc0 = np.fromfile(fd_ch0, dtype=np.int16, count=int(datasize/2))
+
+            offset = int(self.dicts['radar_ch1']['offset'][idx])
+            datasize = self.dicts['radar_ch1']['datasize'][idx]
+            fd_ch1.seek(offset)
+            adc1 = np.fromfile(fd_ch1, dtype=np.int16, count=int(datasize/2))
+
+            offset = int(self.dicts['radar_ch2']['offset'][idx])
+            datasize = self.dicts['radar_ch2']['datasize'][idx]
+            fd_ch2.seek(offset)
+            adc2 = np.fromfile(fd_ch2, dtype=np.int16, count=int(datasize/2))
+
+            offset = int(self.dicts['radar_ch3']['offset'][idx])
+            datasize = self.dicts['radar_ch3']['datasize'][idx]
+            fd_ch3.seek(offset)
+            adc3 = np.fromfile(fd_ch3, dtype=np.int16, count=int(datasize/2))
+
+            frame0 = np.reshape(adc0[0::2] + 1j*adc0[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            frame1 = np.reshape(adc1[0::2] + 1j*adc1[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            frame2 = np.reshape(adc2[0::2] + 1j*adc2[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            frame3 = np.reshape(adc3[0::2] + 1j*adc3[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            adc = np.concatenate([frame3,frame0,frame1,frame2],axis=2)
+            np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
+
+        self.AoA_mat = np.load(os.path.join(file_path, "CalibrationTable.npy"),allow_pickle=True).item()
+
+        if(self.method == 'PC'):
+            self.CFAR_fct = CA_CFAR(win_param=(9,9,3,3), threshold=2, rd_size=(self.numSamplePerChirp,16))
+            self.CalibMat = np.rollaxis(self.AoA_mat['Signal'],2,1).reshape(self.AoA_mat['Signal'].shape[0]*self.AoA_mat['Signal'].shape[2],self.AoA_mat['Signal'].shape[1])
+        else:
+            # For RA map estimation, we consider only one elevation, the one parallel to the road plan (index=5)
+            self.CalibMat=self.AoA_mat['Signal'][...,5]
+        
+        if(self.device =='cuda'):
+            # if(self.lib=='CuPy'):
+            #     print('CuPy on GPU will be used to execute the processing')
+            #     cp.cuda.Device(0).use()
+            #     self.CalibMat = cp.array(self.CalibMat,dtype='complex64')
+            #     self.window = cp.array(self.AoA_mat['H'][0])
+            # else:
+            print('PyTorch on GPU will be used to execute the processing')
+            self.CalibMat = torch.from_numpy(self.CalibMat).to('cuda')
+            self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')   
+        else:
+            print('CPU will be used to execute the processing')
+            self.window = self.AoA_mat['H'][0]
+            
+        # Build hamming window table to reduce side lobs
+        hanningWindowRange = (0.54 - 0.46*np.cos(((2*math.pi*np.arange(self.numSamplePerChirp ))/(self.numSamplePerChirp -1))))
+        hanningWindowDoppler = (0.54 - 0.46*np.cos(((2*math.pi*np.arange(self.numChirps ))/(self.numChirps -1))))
+        self.range_fft_coef = np.expand_dims(np.repeat(np.expand_dims(hanningWindowRange,1), repeats=self.numChirps, axis=1),2)
+        self.doppler_fft_coef = np.expand_dims(np.repeat(np.expand_dims(hanningWindowDoppler, 1).transpose(), repeats=self.numSamplePerChirp, axis=0),2)
+    
+        ## indexes shift to find Tx spots
+        self.dividend_constant_arr = np.arange(0, self.numReducedDoppler*self.numChirpsPerLoop ,self.numReducedDoppler)
+
+
+
+    def __len__(self):
+        return len(self.table)
+
+    def set_features(self, features):
+        self.features = features
+
+    def __getitem__(self, index):   
+        frame = () 
+        for f in self.features:
+            if f == 'image':
+                file = os.path.join(self.feature_path,"image",f"image_{index}.jpg")
+                data = np.asarray(Image.open(file))
+            elif f == 'lidarPC':
+                file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{index}.npy")
+                data = np.load(file)
+            elif f == 'adc':
+                file = os.path.join(self.feature_path,"adc",f"adc_{index}.npy")
+                data = np.load(file)
+            frame = frame + (data,)
+        return data
+    
+    def get_RD(self, idx=None):
+        file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
+        complex_adc = np.load(file)
+        # 2- Remoce DC offset
+        complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
+
+        # 3- Range FFTs
+        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
+    
+        # 4- Doppler FFts
+        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+        return RD_spectrums
+    
+    def get_RA(self, idx=None):
+        file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
+        complex_adc = np.load(file)
+        # 2- Remoce DC offset
+        complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
+
+        # 3- Range FFTs
+        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
+    
+        # 4- Doppler FFts
+        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+
+        doppler_indexes = []
+        for doppler_bin in range(self.numChirps):
+            DopplerBinSeq = np.remainder(doppler_bin+ self.dividend_constant_arr, self.numChirps)
+            DopplerBinSeq = np.concatenate([[DopplerBinSeq[0]],DopplerBinSeq[5:]])
+            doppler_indexes.append(DopplerBinSeq)
+        
+        MIMO_Spectrum = RD_spectrums[:,doppler_indexes,:].reshape(RD_spectrums.shape[0]*RD_spectrums.shape[1],-1)
+
+        if(self.device=='cpu'):
+            # Multiply with Hamming window to reduce side lobes
+            MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
+
+            Azimuth_spec = np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+            Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
+
+            RA_map = np.sum(np.abs(Azimuth_spec),axis=2)          
+            return RA_map.transpose()
+        else:      
+            # if(self.lib=='CuPy'):
+            #     MIMO_Spectrum = cp.array(MIMO_Spectrum)
+            #     # Multiply with Hamming window to reduce side lobes
+            #     MIMO_Spectrum = cp.multiply(MIMO_Spectrum,self.window).transpose()
+            #     Azimuth_spec = cp.abs(cp.dot(self.CalibMat,MIMO_Spectrum))
+            #     Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
+            #     RA_map = np.sum(np.abs(Azimuth_spec),axis=2)
+            #     return RA_map.transpose().get()
+            # else:
+            MIMO_Spectrum = torch.from_numpy(MIMO_Spectrum).to('cuda')
+            # Multiply with Hamming window to reduce side lobes
+            MIMO_Spectrum = torch.transpose(torch.multiply(MIMO_Spectrum,self.window),1,0).cfloat()
+            Azimuth_spec = torch.abs(torch.matmul(self.CalibMat,MIMO_Spectrum))
+            Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
+            RA_map = torch.sum(torch.abs(Azimuth_spec),axis=2)
+            return RA_map.detach().cpu().numpy().transpose()
+
+
+    def __find_TX0_position(self,power_spectrum,range_bins,reduced_doppler_bins):        
+        doppler_idx = np.tile(reduced_doppler_bins,(self.numReducedDoppler,1)).transpose()+np.repeat(np.expand_dims(np.arange(0,self.numChirps,self.numReducedDoppler),0),len(range_bins),axis=0)
+        doppler_idx = np.concatenate([doppler_idx,doppler_idx[:,:4]],axis=1)
+        range_bins = [[r] for r in range_bins]
+        cumsum = np.cumsum(power_spectrum[range_bins,doppler_idx],axis=1) 
+        N = 4
+        mat = (cumsum[:,N:] - cumsum[:,:-N]) / N
+        section_idx = np.argmin(mat,axis=1)
+        doppler_bins = section_idx*self.numReducedDoppler+reduced_doppler_bins
+        return doppler_bins
+    
+
+    def get_radarpointcloud(self, idx=None):
+        file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
+        complex_adc = np.load(file)
+        # 2- Remoce DC offset
+        complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
+
+        # 3- Range FFTs
+        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
+    
+        # 4- Doppler FFts
+        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+
+        # 1- Compute power spectrum
+        power_spectrum = np.sum(np.abs(RD_spectrums),axis=2)
+
+        # 2- Apply CFAR
+        # But because Tx are phase shifted of DopplerShift=16, then reduce spectrum to MaxDoppler/16 on Doppler axis
+        reduced_power_spectrum = np.sum(power_spectrum.reshape(512,16,16),axis=1)
+        peaks = self.CFAR_fct(reduced_power_spectrum)
+        RangeBin,DopplerBin_conv = np.where(peaks>0)
+
+        # 3- Need to find TX0 position to rebuild the MIMO spectrum in the correct order
+        DopplerBin_candidates = self.__find_TX0_position(power_spectrum, RangeBin, DopplerBin_conv)
+        RangeBin_candidates = [[i] for i in RangeBin]
+        doppler_indexes = []
+        for doppler_bin in DopplerBin_candidates:
+            DopplerBinSeq = np.remainder(doppler_bin+ self.dividend_constant_arr, self.numChirps)
+            DopplerBinSeq = np.concatenate([[DopplerBinSeq[0]],DopplerBinSeq[5:]]).astype('int')
+            doppler_indexes.append(DopplerBinSeq)
+            
+
+        # 4- Extract and reshape the Rx * Tx matrix into the MIMO spectrum
+        MIMO_Spectrum = RD_spectrums[RangeBin_candidates,doppler_indexes,:].reshape(len(DopplerBin_candidates),-1)
+        MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
+        
+        # 5- AoA: maker a cross correlation between the recieved signal vs. the calibration matrix 
+        # to identify azimuth and elevation angles
+        ASpec=np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+        
+        # 6- Extract maximum per (Range,Doppler) bins
+        x,y = np.where(np.isnan(ASpec))
+        ASpec[x,y] = 0
+        az,el = np.unravel_index(np.argmax(ASpec,axis=0),(self.AoA_mat['Signal'].shape[0],self.AoA_mat['Signal'].shape[2]))
+        az = np.deg2rad(self.AoA_mat['Azimuth_table'][az])
+        el = np.deg2rad(self.AoA_mat['Elevation_table'][el])
+        
+        RangeBin = RangeBin/self.numSamplePerChirp*103.
+        
+        return np.vstack([RangeBin,DopplerBin_candidates,az,el]).transpose()
+
+    def get_lidarpointcloud(self, idx=None):
+        file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{idx}.npy")
+        pc = np.load(file)
+        return pc
+
+    def get_image(self, idx=None): 
+        file = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
+        image = np.asarray(Image.open(file))
+        return image
+
+    def get_depthimage(self, idx=None):
+        return None
+      
+    def get_spectrogram(self, idx=None):
+        return None
+
