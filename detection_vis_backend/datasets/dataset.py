@@ -11,7 +11,6 @@ import torchvision.transforms as transform
 import pandas as pd
 
 from pathlib import Path
-from scipy import signal
 from torchvision.transforms import Resize,CenterCrop
 from torch.utils.data import Dataset
 from PIL import Image
@@ -235,6 +234,12 @@ class RADIal(Dataset):
     radarframe_count = 8252
     frame_sync = 8252
 
+    def __init__(self):
+        # RADIal data has two formats: raw and ready-to-use
+        self.name = "RADIal ready-to-use dataset instance" 
+        self.features = ['image', 'lidarPC', 'adc', 'radarPC']
+        
+
     def parse(self, file_id, file_path, file_name, config, difficult=True):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
@@ -296,11 +301,6 @@ class RADIal(Dataset):
       
     def get_spectrogram(self, idx=None):
         return None
-
-    def __init__(self):
-        # RADIal data has two formats: raw and ready-to-use
-        self.name = "RADIal ready-to-use dataset instance" 
-        self.features = ['image', 'lidarPC', 'adc']
 
     def __len__(self):
         return len(self.label_dict)
@@ -837,7 +837,6 @@ class RADIalRaw(Dataset):
         self.dividend_constant_arr = np.arange(0, self.numReducedDoppler*self.numChirpsPerLoop ,self.numReducedDoppler)
 
 
-
     def __len__(self):
         return len(self.table)
 
@@ -933,16 +932,7 @@ class RADIalRaw(Dataset):
     
 
     def get_radarpointcloud(self, idx=None):
-        file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
-        complex_adc = np.load(file)
-        # 2- Remoce DC offset
-        complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
-
-        # 3- Range FFTs
-        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
-    
-        # 4- Doppler FFts
-        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+        RD_spectrums = self.get_RD(idx)
 
         # 1- Compute power spectrum
         power_spectrum = np.sum(np.abs(RD_spectrums),axis=2)
