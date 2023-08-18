@@ -306,3 +306,39 @@ command_handlers = {
     'adcCfg': adcStr_to_dict,
     'lowPower': power_to_dict,
 }
+
+
+def gen_steering_vec(ang_est_range, ang_est_resolution, num_ant):
+    """Generate a steering vector for AOA estimation given the theta range, theta resolution, and number of antennas
+
+    Defines a method for generating steering vector data input --Python optimized Matrix format
+    The generated steering vector will span from -angEstRange to angEstRange with increments of ang_est_resolution
+    The generated steering vector should be used for all further AOA estimations (bartlett/capon)
+
+    Args:
+        ang_est_range (int): The desired span of thetas for the angle spectrum.
+        ang_est_resolution (float): The desired resolution in terms of theta
+        num_ant (int): The number of Vrx antenna signals captured in the RDC
+
+    Returns:
+        num_vec (int): Number of vectors generated (integer divide angEstRange/ang_est_resolution)
+        steering_vectors (ndarray): The generated 2D-array steering vector of size (num_vec,num_ant)
+
+    Example:
+        >>> #This will generate a numpy array containing the steering vector with 
+        >>> #angular span from -90 to 90 in increments of 1 degree for a 4 Vrx platform
+        >>> _, steering_vec = gen_steering_vec(90,1,4)
+
+    """
+    num_vec = (2 * ang_est_range / ang_est_resolution + 1)
+    num_vec = int(round(num_vec))
+    steering_vectors = np.zeros((num_vec, num_ant), dtype='complex64')
+    for kk in range(num_vec):
+        for jj in range(num_ant):
+            mag = -1 * np.pi * jj * np.sin((-ang_est_range + kk * ang_est_resolution) * np.pi / 180)
+            real = np.cos(mag)
+            imag = np.sin(mag)
+
+            steering_vectors[kk, jj] = complex(real, imag)
+
+    return [num_vec, steering_vectors]

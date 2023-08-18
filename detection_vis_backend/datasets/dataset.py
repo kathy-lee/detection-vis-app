@@ -15,9 +15,10 @@ from scipy import signal
 from torchvision.transforms import Resize,CenterCrop
 from torch.utils.data import Dataset
 from PIL import Image
+from mmwave import dsp
 
-from detection_vis_backend.datasets.radarframe import RadarFrame
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec
+from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
 class DatasetFactory:
@@ -69,6 +70,8 @@ class RaDICaL(Dataset):
 
     def __init__(self, features=None):
         self.name = "RaDICaL dataset instance"
+        self.features = ['image', 'depthimage', 'adc']
+
 
     def parse(self, file_id, file_path, file_name, config):
         self.config = config
@@ -144,6 +147,16 @@ class RaDICaL(Dataset):
                 self.frame_sync = non_zero_lengths[0]
             else:
                 self.frame_sync = 0
+
+        # parse radar config
+        self.radar_cfg = read_radar_params(self.config) 
+        self.bins_processed = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
+        self.virt_ant = self.radar_cfg['numLanes'] * len(self.radar_cfg['chirps']) #radar_cube.shape[1]
+        self.__doppler_bins = self.radar_cfg['numChirps'] // len(self.radar_cfg['chirps']) #radar_cube.shape[2]
+        self.angle_res = 1
+        self.angle_range = 90
+        self.angle_bins = (self.angle_range * 2) // self.angle_res + 1
+        self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_res, self.virt_ant)
         return
         
 
@@ -156,18 +169,22 @@ class RaDICaL(Dataset):
         return adc
     
     def get_RA(self, idx=None):
-        radar_config = read_radar_params(self.config) 
-        rf = RadarFrame(radar_config)
         adc = self.get_ADC(idx)
-        beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
-        beamformed_range_azimuth = np.log(np.abs(beamformed_range_azimuth))        
-        return beamformed_range_azimuth
+        # rf = RadarFrame(radar_config)
+        # beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
+        ra = np.zeros((self.bins_processed, self.angle_bins), dtype=complex)
+        for i in range(self.bins_processed):
+            ra[i,:], _ = dsp.aoa_capon(adc[i], self.steering_vec)
+        np.flipud(np.fliplr(ra))
+        ra = np.log(np.abs(ra))        
+        return ra
 
     def get_RD(self, idx=None):
-        radar_config = read_radar_params(self.config)
-        rf = RadarFrame(radar_config)
-        rf.raw_cube = self.get_ADC(idx)
-        range_doppler = rf.range_doppler
+        # rf = RadarFrame(radar_config)
+        # rf.raw_cube = self.get_ADC(idx)
+        # range_doppler = rf.range_doppler
+        adc = self.get_ADC(idx)
+        range_doppler, _ = dsp.doppler_processing(adc, interleaved=False)
         range_doppler = np.fft.fftshift(range_doppler, axes=1)
         range_doppler = np.transpose(range_doppler)
         range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
@@ -283,6 +300,7 @@ class RADIal(Dataset):
     def __init__(self):
         # RADIal data has two formats: raw and ready-to-use
         self.name = "RADIal ready-to-use dataset instance" 
+        self.features = ['image', 'lidarPC', 'adc']
 
     def __len__(self):
         return len(self.label_dict)
