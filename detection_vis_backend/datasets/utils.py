@@ -342,3 +342,79 @@ def gen_steering_vec(ang_est_range, ang_est_resolution, num_ant):
             steering_vectors[kk, jj] = complex(real, imag)
 
     return [num_vec, steering_vectors]
+
+
+def peak_search_full_variance(doa_spectrum, steering_vec_size, sidelobe_level=0.251188643150958, gamma=1.2):
+    """ Performs peak search (TI's full search) will retaining details about each peak including
+    each peak's width, location, and value.
+
+    Args:
+        doa_spectrum (ndarray): a 1D numpy array containing the power spectrum generated via some aoa method (naive,
+        bartlett, or capon)
+        steering_vec_size (int): Size of the steering vector in terms of number of theta bins
+        sidelobe_level (float): A low value threshold used to avoid sidelobe detections as peaks
+        gamma (float): Weight to determine when a peak will pass as a true peak
+
+    Returns:
+        peak_data (ndarray): A 1D numpy array of custom data types with length numberOfPeaksDetected.
+        Each detected peak is organized as [peak_location, peak_value, peak_width]
+        total_power (float): The total power of the spectrum. Used for variance calculations
+    """
+    peak_threshold = max(doa_spectrum) * sidelobe_level
+
+    # Multiple Peak Search
+    running_index = 0
+    num_max = 0
+    extend_loc = 0
+    init_stage = True
+    max_val = 0
+    total_power = 0
+    max_loc = 0
+    max_loc_r = 0
+    min_val = np.inf
+    locate_max = False
+
+    peak_data = []
+
+    while running_index < (steering_vec_size + extend_loc):
+        if running_index >= steering_vec_size:
+            local_index = running_index - steering_vec_size
+        else:
+            local_index = running_index
+
+        # Pull local_index values
+        current_val = doa_spectrum[local_index]
+        # Record Min & Max locations
+        if current_val > max_val:
+            max_val = current_val
+            max_loc = local_index
+            max_loc_r = running_index
+
+        if current_val < min_val:
+            min_val = current_val
+
+        if locate_max:
+            if current_val < max_val / gamma:
+                if max_val > peak_threshold:
+                    bandwidth = running_index - max_loc_r
+                    obj = dict.fromkeys(['peakLoc', 'peakVal', 'peakWid'])
+                    obj['peakLoc'] = max_loc
+                    obj['peakVal'] = max_val
+                    obj['peakWid'] = bandwidth
+                    peak_data.append(obj)
+                    total_power += max_val
+                    num_max += 1
+                min_val = current_val
+                locate_max = False
+        else:
+            if current_val > min_val * gamma:
+                locate_max = True
+                max_val = current_val
+                if init_stage:
+                    extend_loc = running_index
+                    init_stage = False
+
+        running_index += 1
+
+    peak_data = np.array(peak_data)
+    return peak_data, total_power

@@ -15,8 +15,9 @@ from torchvision.transforms import Resize,CenterCrop
 from torch.utils.data import Dataset
 from PIL import Image
 from mmwave import dsp
+from mmwave.dsp.utils import Window
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -70,6 +71,13 @@ class RaDICaL(Dataset):
     def __init__(self, features=None):
         self.name = "RaDICaL dataset instance"
         self.features = ['image', 'depthimage', 'adc']
+        
+        self.numTxAntennas = 2
+        self.numDopplerBins = 32
+        self.numRangeBins = 304
+        self.range_resolution, bandwidth = dsp.range_resolution(self.numRangeBins)
+        self.doppler_resolution = dsp.doppler_resolution(bandwidth, start_freq_const=77, ramp_end_time=62, idle_time_const=100, 
+                                                         num_loops_per_frame=32, num_tx_antennas=2)
 
 
     def parse(self, file_id, file_path, file_name, config):
@@ -191,7 +199,75 @@ class RaDICaL(Dataset):
         return range_doppler
 
     def get_radarpointcloud(self, idx=None):
-        return None
+        adc = self.get_ADC(idx)
+        # 1. range fft
+        radar_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
+        # 2. doppler fft
+        det_matrix, aoa_input = dsp.doppler_processing(radar_cube, interleaved=False, num_tx_antennas=2, clutter_removal_enabled=True, window_type_2d=Window.HAMMING)
+        # 3. 2D CFAR
+        fft2d_sum = det_matrix.astype(np.int64)
+        thresholdDoppler, noiseFloorDoppler = np.apply_along_axis(func1d=dsp.ca_, axis=0, arr=fft2d_sum.T, l_bound=1.5, guard_len=4, noise_len=16)
+        thresholdRange, noiseFloorRange = np.apply_along_axis(func1d=dsp.ca_, axis=0, arr=fft2d_sum, l_bound=2.5, guard_len=4, noise_len=16)
+        thresholdDoppler, noiseFloorDoppler = thresholdDoppler.T, noiseFloorDoppler.T
+        det_doppler_mask = (det_matrix > thresholdDoppler)
+        det_range_mask = (det_matrix > thresholdRange)
+
+        # Get indices of detected peaks
+        full_mask = (det_doppler_mask & det_range_mask)
+        det_peaks_indices = np.argwhere(full_mask == True)
+
+        # peakVals and SNR calculation
+        peakVals = fft2d_sum[det_peaks_indices[:, 0], det_peaks_indices[:, 1]]
+        snr = peakVals - noiseFloorRange[det_peaks_indices[:, 0], det_peaks_indices[:, 1]]
+
+        dtype_location = '(' + str(self.numTxAntennas) + ',)<f4'
+        dtype_detObj2D = np.dtype({'names': ['rangeIdx', 'dopplerIdx', 'peakVal', 'location', 'SNR'],
+                                   'formats': ['<i4', '<i4', '<f4', dtype_location, '<f4']})
+        detObj2DRaw = np.zeros((det_peaks_indices.shape[0],), dtype=dtype_detObj2D)
+        detObj2DRaw['rangeIdx'] = det_peaks_indices[:, 0].squeeze()
+        detObj2DRaw['dopplerIdx'] = det_peaks_indices[:, 1].squeeze()
+        detObj2DRaw['peakVal'] = peakVals.flatten()
+        detObj2DRaw['SNR'] = snr.flatten()
+
+        # Further peak pruning. This increases the point cloud density but helps avoid having too many detections around one object.
+        detObj2DRaw = dsp.prune_to_peaks(detObj2DRaw, det_matrix, self.numDopplerBins, reserve_neighbor=True)
+
+        # --- Peak Grouping
+        detObj2D = dsp.peak_grouping_along_doppler(detObj2DRaw, det_matrix, self.numDopplerBins)
+        SNRThresholds2 = np.array([[2, 23], [10, 11.5], [35, 16.0]])
+        peakValThresholds2 = np.array([[4, 275], [1, 400], [500, 0]])
+        detObj2D = dsp.range_based_pruning(detObj2D, SNRThresholds2, peakValThresholds2, self.numRangeBins, 0.5, self.range_resolution)
+
+        azimuthInput = aoa_input[detObj2D['rangeIdx'], :, detObj2D['dopplerIdx']]
+        # 4. AoA
+        est_range=90 # need to check
+        est_resolution=1 # need to check
+        num_vec, steering_vec = gen_steering_vec(est_range, est_resolution, 8)
+
+        points = []
+        method = 'Bartlett'
+        for i, inputSignal in enumerate(azimuthInput):
+            if method == 'Capon':
+                doa_spectrum, _ = dsp.aoa_capon(np.reshape(inputSignal[:8], (8, 1)).T, steering_vec)
+                doa_spectrum = np.abs(doa_spectrum)
+            elif method == 'Bartlett':
+                doa_spectrum = dsp.aoa_bartlett(steering_vec, np.reshape(inputSignal[:8], (8, 1)), axis=0)
+                doa_spectrum = np.abs(doa_spectrum).squeeze()
+            else:
+                doa_spectrum = None
+
+            # Find Max Values and Max Indices
+
+            # num_out, max_theta, total_power = peak_search(doa_spectrum)
+            obj_dict, total_power = peak_search_full_variance(doa_spectrum, steering_vec.shape[0], sidelobe_level=0.9)
+            range = detObj2D['rangeIdx'][i]* self.range_resolution
+            doppler = detObj2D['dopplerIdx'][i] * self.doppler_resolution
+            for j in obj_dict:
+                azimuth = obj_dict[j]['peakLoc']/180 * np.pi
+                # points.append([range, doppler, azimuth])
+                points.append([range * np.sin(azimuth), range * np.cos(azimuth), doppler]) # [x, y, doppler]
+            
+        return np.array(points) 
 
     def get_lidarpointcloud():
         return None
