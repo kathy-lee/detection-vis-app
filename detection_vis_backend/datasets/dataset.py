@@ -57,19 +57,18 @@ class DatasetFactory:
 
 
 class RaDICaL(Dataset):
-    name = ""
+    name = "RaDICaL dataset instance"
     features = []
     feature_path = ""
     config = ""
 
-    image_count = 0
-    depthimage_count = 0
-    radarframe_count = 0
+    frames_count = {} 
+    timestamps = {} # dict of list
+    sync_indices = [] # list of dict
     frame_sync = 0
 
 
     def __init__(self, features=None):
-        self.name = "RaDICaL dataset instance"
         self.features = ['image', 'depthimage', 'adc']
 
 
@@ -88,56 +87,55 @@ class RaDICaL(Dataset):
 
         if "/camera/color/image_raw" in topics_dict:    
             (feature_path / "image").mkdir(parents=True, exist_ok=True)
+            self.timestamps['image'] = []
             for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/camera/color/image_raw'])):
                 # print(t.secs)
                 # print(t.nsecs)
                 # print(msg.header.stamp.secs)
                 # print(msg.header.stamp.nsecs)
                 # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
+                self.timestamps['image'].append(t.secs + t.nsecs*1e-9)
                 assert msg.encoding == "rgb8"
                 dtype = np.dtype("uint8")  # 8-bit color image
                 dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, 3)  # 3 for RGB
                 # self.image.append(image)
                 np.save(os.path.join(feature_path, "image", f"image_{idx}.npy"), image)
-            self.image_count = idx + 1
+            self.frames_count['image'] = idx + 1
 
         if "/camera/aligned_depth_to_color/image_raw" in topics_dict:
             (feature_path / "depth_image").mkdir(parents=True, exist_ok=True)
+            self.timestamps['depth_image'] = []
             for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/camera/aligned_depth_to_color/image_raw'])):
                 # print(t.secs)
                 # print(t.nsecs)
                 # print(msg.header.stamp.secs)
                 # print(msg.header.stamp.nsecs)
                 # print(msg.header.stamp.secs + msg.header.stamp.nsecs*1e-9)
+                self.timestamps['depth_image'].append(t.secs + t.nsecs*1e-9)
                 assert msg.encoding == "16UC1"
                 dtype = np.dtype("uint16")  # 16-bit grayscale image
                 dtype = dtype.newbyteorder('>' if msg.is_bigendian else '<')
                 image = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width)
                 # self.depth_image.append(image)
                 np.save(os.path.join(feature_path, "depth_image", f"depth_image_{idx}.npy"), image)
-            self.depthimage_count = idx + 1
+            self.frames_count['depth_image'] = idx + 1
 
         if "/radar_data" in topics_dict:
             (feature_path / "adc").mkdir(parents=True, exist_ok=True)
+            self.timestamps['adc'] = []
             for idx, (topic, msg, t) in enumerate(bag.read_messages(topics=['/radar_data'])):
-                #   print(t.secs)
-                #   print(t.nsecs  print(t.secs + t.nsecs*1e-9)
-                # if(count > 0):
-                #   print(t.secs + t.nsecs*1e-9 - last)
-                # last = t.secs + t.nsecs*1e-9
-                # print("\nProcessing no.", count, "th radar msg:")
-                
+                self.timestamps['adc'].append(t.secs + t.nsecs*1e-9)
                 arr = np.array(msg.data)
                 complex_arr = reshape_frame(arr,304,4,2,64)
                 adc = np.swapaxes(complex_arr, 1, 2)
                 # self.ADC.append(transformed)
                 np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
-            self.radarframe_count = idx + 1
+            self.frames_count['adc'] = idx + 1
         
         bag.close()
         
-        non_zero_lengths = [l for l in [self.image_count, self.depthimage_count, self.radarframe_count] if l != 0]
+        non_zero_lengths = [l for l in self.frames_count.values() if l != 0]
         if len(non_zero_lengths) == 0:
             self.frame_sync = 0
         elif len(non_zero_lengths) == 1:
@@ -147,7 +145,21 @@ class RaDICaL(Dataset):
                 self.frame_sync = non_zero_lengths[0]
             else:
                 self.frame_sync = 0
-
+                # get current feature set and create sync indices
+                feature_timestamps = [self.timestamps[f] for f in self.features]
+                feature_frames_count = [self.frames_count[f] for f in self.features]
+                reference_feature = self.features[feature_frames_count.index(min(feature_frames_count))]
+                for i,ti in enumerate(self.timestamps[reference_feature]):
+                    index = {}
+                    for f in self.features:
+                        if f == reference_feature:
+                            index[f] = i
+                        else:
+                            time_diff = [abs(ti-t) for t in feature_timestamps[f]]
+                            idx_closest = time_diff.index(min(time_diff))
+                            index[f] = idx_closest
+                    self.sync_indices.append(index)
+        
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
