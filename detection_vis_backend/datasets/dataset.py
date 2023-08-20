@@ -150,23 +150,24 @@ class RaDICaL(Dataset):
 
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
-        self.bins_processed = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
+        self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
         self.virt_ant = self.radar_cfg['numLanes'] * len(self.radar_cfg['chirps']) #radar_cube.shape[1]
-        self.__doppler_bins = self.radar_cfg['numChirps'] // len(self.radar_cfg['chirps']) #radar_cube.shape[2]
-        self.angle_res = 1
-        self.angle_range = 90
-        self.angle_bins = (self.angle_range * 2) // self.angle_res + 1
-        self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_res, self.virt_ant)
+        self.numDopplerBins = self.radar_cfg['numChirps'] // len(self.radar_cfg['chirps']) #radar_cube.shape[2]
 
-
-        self.numTxAntennas = 2
-        self.numDopplerBins = 32
-        self.numRangeBins = 304
-        self.range_resolution, bandwidth = dsp.range_resolution(self.numRangeBins)
-        self.doppler_resolution = dsp.doppler_resolution(bandwidth, start_freq_const=77, ramp_end_time=62, idle_time_const=100, 
-                                                         num_loops_per_frame=32, num_tx_antennas=2)
-        self.est_range=90 # est_range (int): The desired span of thetas for the angle spectrum. Used for gen_steering_vec
-        self.est_resolution=1 # est_resolution (float): The desired angular resolution for gen_steering_vec
+        # self.numTxAntennas = 2, self.numRxAntennas = 4
+        self.range_resolution, bandwidth = dsp.range_resolution(self.radar_cfg['profiles'][0]['adcSamples'],
+                                             self.radar_cfg['profiles'][0]['adcSampleRate'] / 1000,
+                                             self.radar_cfg['profiles'][0]['freqSlopeConst'] / 1e12)
+        self.doppler_resolution = dsp.doppler_resolution(bandwidth,
+                                      start_freq_const=self.radar_cfg['profiles'][0]['start_frequency'] / 1e9,
+                                      ramp_end_time=self.radar_cfg['profiles'][0]['rampEndTime'] * 1e6,
+                                      idle_time_const=self.radar_cfg['profiles'][0]['idle'] * 1e6,
+                                      num_loops_per_frame=self.radar_cfg['numChirps'] / len(self.radar_cfg['chirps']),
+                                      num_tx_antennas=self.radar_cfg['numTx'])
+        self.angle_range = 90 #  (int): The desired span of thetas for the angle spectrum. Used for gen_steering_vec
+        self.angle_resolution = 1 #  (float): The desired angular resolution for gen_steering_vec
+        self.angle_bins = (self.angle_range * 2) // self.angle_resolution + 1
+        self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_resolution, self.virt_ant)
         return
         
 
@@ -184,8 +185,8 @@ class RaDICaL(Dataset):
         # beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
         range_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
         range_cube = np.swapaxes(range_cube, 0, 2)
-        ra = np.zeros((self.bins_processed, self.angle_bins), dtype=complex)
-        for i in range(self.bins_processed):
+        ra = np.zeros((self.numRangeBins, self.angle_bins), dtype=complex)
+        for i in range(self.numRangeBins):
             ra[i,:], _ = dsp.aoa_capon(range_cube[i], self.steering_vec)
         np.flipud(np.fliplr(ra))
         ra = np.log(np.abs(ra))  
@@ -227,9 +228,8 @@ class RaDICaL(Dataset):
         peakVals = fft2d_sum[det_peaks_indices[:, 0], det_peaks_indices[:, 1]]
         snr = peakVals - noiseFloorRange[det_peaks_indices[:, 0], det_peaks_indices[:, 1]]
 
-        dtype_location = '(' + str(self.numTxAntennas) + ',)<f4'
         dtype_detObj2D = np.dtype({'names': ['rangeIdx', 'dopplerIdx', 'peakVal', 'location', 'SNR'],
-                                   'formats': ['<i4', '<i4', '<f4', dtype_location, '<f4']})
+                                   'formats': ['<i4', '<i4', '<f4', '(2,)<f4', '<f4']})
         detObj2DRaw = np.zeros((det_peaks_indices.shape[0],), dtype=dtype_detObj2D)
         detObj2DRaw['rangeIdx'] = det_peaks_indices[:, 0].squeeze()
         detObj2DRaw['dopplerIdx'] = det_peaks_indices[:, 1].squeeze()
@@ -241,8 +241,8 @@ class RaDICaL(Dataset):
         logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
         # --- Peak Grouping
         detObj2D = dsp.peak_grouping_along_doppler(detObj2DRaw, det_matrix, self.numDopplerBins)
-        SNRThresholds2 = np.array([[2, 15], [10, 10], [35, 5]])
-        peakValThresholds2 = np.array([[2, 50], [1, 400], [500, 0]])
+        SNRThresholds2 = np.array([[2, 15], [10, 10], [35, 10]])
+        peakValThresholds2 = np.array([[2, 50]])
         detObj2D = dsp.range_based_pruning(detObj2D, SNRThresholds2, peakValThresholds2, 
                                            max_range=self.numRangeBins, min_range=0.5, range_resolution=self.range_resolution)
         logging.error(f"detObj2D:{detObj2D.shape}")
@@ -250,7 +250,7 @@ class RaDICaL(Dataset):
         logging.error(f"azimuthInput:{azimuthInput.shape}")
 
         # 4. AoA
-        num_vec, steering_vec = gen_steering_vec(self.est_range, self.est_resolution, 8)
+        num_vec, steering_vec = gen_steering_vec(self.angle_range, self.angle_resolution, 8)
 
         points = []
         method = 'Bartlett'
