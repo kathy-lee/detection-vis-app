@@ -3,7 +3,7 @@ import os
 import logging
 import struct
 import cv2
-import mkl_fft
+#import mkl_fft
 import torch
 import math
 import numpy as np
@@ -71,13 +71,6 @@ class RaDICaL(Dataset):
     def __init__(self, features=None):
         self.name = "RaDICaL dataset instance"
         self.features = ['image', 'depthimage', 'adc']
-        
-        self.numTxAntennas = 2
-        self.numDopplerBins = 32
-        self.numRangeBins = 304
-        self.range_resolution, bandwidth = dsp.range_resolution(self.numRangeBins)
-        self.doppler_resolution = dsp.doppler_resolution(bandwidth, start_freq_const=77, ramp_end_time=62, idle_time_const=100, 
-                                                         num_loops_per_frame=32, num_tx_antennas=2)
 
 
     def parse(self, file_id, file_path, file_name, config):
@@ -155,7 +148,7 @@ class RaDICaL(Dataset):
             else:
                 self.frame_sync = 0
 
-        # parse radar config
+        # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.bins_processed = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
         self.virt_ant = self.radar_cfg['numLanes'] * len(self.radar_cfg['chirps']) #radar_cube.shape[1]
@@ -164,6 +157,16 @@ class RaDICaL(Dataset):
         self.angle_range = 90
         self.angle_bins = (self.angle_range * 2) // self.angle_res + 1
         self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_res, self.virt_ant)
+
+
+        self.numTxAntennas = 2
+        self.numDopplerBins = 32
+        self.numRangeBins = 304
+        self.range_resolution, bandwidth = dsp.range_resolution(self.numRangeBins)
+        self.doppler_resolution = dsp.doppler_resolution(bandwidth, start_freq_const=77, ramp_end_time=62, idle_time_const=100, 
+                                                         num_loops_per_frame=32, num_tx_antennas=2)
+        self.est_range=90 # est_range (int): The desired span of thetas for the angle spectrum. Used for gen_steering_vec
+        self.est_resolution=1 # est_resolution (float): The desired angular resolution for gen_steering_vec
         return
         
 
@@ -179,19 +182,22 @@ class RaDICaL(Dataset):
         adc = self.get_ADC(idx)
         # rf = RadarFrame(radar_config)
         # beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
+        range_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
+        range_cube = np.swapaxes(range_cube, 0, 2)
         ra = np.zeros((self.bins_processed, self.angle_bins), dtype=complex)
         for i in range(self.bins_processed):
-            ra[i,:], _ = dsp.aoa_capon(adc[i], self.steering_vec)
+            ra[i,:], _ = dsp.aoa_capon(range_cube[i], self.steering_vec)
         np.flipud(np.fliplr(ra))
-        ra = np.log(np.abs(ra))        
-        return ra
+        ra = np.log(np.abs(ra))  
+        return ra 
 
     def get_RD(self, idx=None):
         # rf = RadarFrame(radar_config)
         # rf.raw_cube = self.get_ADC(idx)
         # range_doppler = rf.range_doppler
         adc = self.get_ADC(idx)
-        range_doppler, _ = dsp.doppler_processing(adc, interleaved=False)
+        range_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
+        range_doppler, _ = dsp.doppler_processing(range_cube, interleaved=False, num_tx_antennas=2, clutter_removal_enabled=True, window_type_2d=Window.HAMMING)
         range_doppler = np.fft.fftshift(range_doppler, axes=1)
         range_doppler = np.transpose(range_doppler)
         range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
@@ -200,6 +206,7 @@ class RaDICaL(Dataset):
 
     def get_radarpointcloud(self, idx=None):
         adc = self.get_ADC(idx)
+        logging.error("#########################################")
         # 1. range fft
         radar_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
         # 2. doppler fft
@@ -228,25 +235,27 @@ class RaDICaL(Dataset):
         detObj2DRaw['dopplerIdx'] = det_peaks_indices[:, 1].squeeze()
         detObj2DRaw['peakVal'] = peakVals.flatten()
         detObj2DRaw['SNR'] = snr.flatten()
-
+        logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
         # Further peak pruning. This increases the point cloud density but helps avoid having too many detections around one object.
         detObj2DRaw = dsp.prune_to_peaks(detObj2DRaw, det_matrix, self.numDopplerBins, reserve_neighbor=True)
-
+        logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
         # --- Peak Grouping
         detObj2D = dsp.peak_grouping_along_doppler(detObj2DRaw, det_matrix, self.numDopplerBins)
-        SNRThresholds2 = np.array([[2, 23], [10, 11.5], [35, 16.0]])
-        peakValThresholds2 = np.array([[4, 275], [1, 400], [500, 0]])
-        detObj2D = dsp.range_based_pruning(detObj2D, SNRThresholds2, peakValThresholds2, self.numRangeBins, 0.5, self.range_resolution)
-
+        SNRThresholds2 = np.array([[2, 15], [10, 10], [35, 5]])
+        peakValThresholds2 = np.array([[2, 50], [1, 400], [500, 0]])
+        detObj2D = dsp.range_based_pruning(detObj2D, SNRThresholds2, peakValThresholds2, 
+                                           max_range=self.numRangeBins, min_range=0.5, range_resolution=self.range_resolution)
+        logging.error(f"detObj2D:{detObj2D.shape}")
         azimuthInput = aoa_input[detObj2D['rangeIdx'], :, detObj2D['dopplerIdx']]
+        logging.error(f"azimuthInput:{azimuthInput.shape}")
+
         # 4. AoA
-        est_range=90 # need to check
-        est_resolution=1 # need to check
-        num_vec, steering_vec = gen_steering_vec(est_range, est_resolution, 8)
+        num_vec, steering_vec = gen_steering_vec(self.est_range, self.est_resolution, 8)
 
         points = []
         method = 'Bartlett'
         for i, inputSignal in enumerate(azimuthInput):
+            #logging.error(f"{i} loop ---")
             if method == 'Capon':
                 doa_spectrum, _ = dsp.aoa_capon(np.reshape(inputSignal[:8], (8, 1)).T, steering_vec)
                 doa_spectrum = np.abs(doa_spectrum)
@@ -259,14 +268,16 @@ class RaDICaL(Dataset):
             # Find Max Values and Max Indices
 
             # num_out, max_theta, total_power = peak_search(doa_spectrum)
-            obj_dict, total_power = peak_search_full_variance(doa_spectrum, steering_vec.shape[0], sidelobe_level=0.9)
-            range = detObj2D['rangeIdx'][i]* self.range_resolution
+            obj_dict, total_power = peak_search_full_variance(doa_spectrum, steering_vec.shape[0], sidelobe_level=0.25)
+            #logging.error(f"obj_dict:{obj_dict}")
+            range = detObj2D['rangeIdx'][i] * self.range_resolution
             doppler = detObj2D['dopplerIdx'][i] * self.doppler_resolution
-            for j in obj_dict:
-                azimuth = obj_dict[j]['peakLoc']/180 * np.pi
+            for obj in obj_dict:
+                azimuth = obj['peakLoc']/180 * np.pi
                 # points.append([range, doppler, azimuth])
-                points.append([range * np.sin(azimuth), range * np.cos(azimuth), doppler]) # [x, y, doppler]
-            
+                points.append([range * np.sin(azimuth), range * np.cos(azimuth), doppler]) # [y, x, doppler]
+                #logging.error(points)
+        logging.error(f"Total points: {len(points)}, range resolution: {self.range_resolution}")   
         return np.array(points) 
 
     def get_lidarpointcloud():
@@ -360,6 +371,7 @@ class RADIal(Dataset):
         return rd
 
     def get_radarpointcloud(self, idx=None):
+        # range,azimuth,elevation,power,doppler,x,y,z,v
         pc = np.load(self.radarpointcloud_filenames[idx], allow_pickle=True)[[5,6,7],:]   # Keeps only x,y,z
         pc = np.rollaxis(pc,1,0)
         pc[:,1] *= -1
@@ -941,10 +953,10 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
+        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
         return RD_spectrums
     
     def get_RA(self, idx=None):
@@ -954,10 +966,10 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = mkl_fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0)
+        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = mkl_fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1)
+        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
 
         doppler_indexes = []
         for doppler_bin in range(self.numChirps):
