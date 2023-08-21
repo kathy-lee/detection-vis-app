@@ -65,11 +65,12 @@ class RaDICaL(Dataset):
     frames_count = {} 
     timestamps = {} # dict of list
     sync_indices = [] # list of dict
+    sync_mode = False
     frame_sync = 0
 
 
     def __init__(self, features=None):
-        self.features = ['image', 'depthimage', 'adc']
+        self.features = ['image', 'depth_image', 'adc']
 
 
     def parse(self, file_id, file_path, file_name, config):
@@ -132,6 +133,13 @@ class RaDICaL(Dataset):
                 # self.ADC.append(transformed)
                 np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
             self.frames_count['adc'] = idx + 1
+            # Other radar features have the same frames as ADC
+            self.frames_count['RD'] = self.frames_count['adc']
+            self.frames_count['RA'] = self.frames_count['adc']
+            self.frames_count['RAD'] = self.frames_count['adc']
+            self.frames_count['radarPC'] = self.frames_count['adc']
+            self.frames_count['spectrogram'] = self.frames_count['adc']
+
         
         bag.close()
         
@@ -146,7 +154,9 @@ class RaDICaL(Dataset):
             else:
                 self.frame_sync = 0
                 # get current feature set and create sync indices
-                feature_timestamps = [self.timestamps[f] for f in self.features]
+                #feature_timestamps = [self.timestamps[f] for f in self.features]
+                feature_timestamps = {k: self.timestamps[k] for k in self.features if k in self.timestamps}
+
                 feature_frames_count = [self.frames_count[f] for f in self.features]
                 reference_feature = self.features[feature_frames_count.index(min(feature_frames_count))]
                 for i,ti in enumerate(self.timestamps[reference_feature]):
@@ -159,7 +169,7 @@ class RaDICaL(Dataset):
                             idx_closest = time_diff.index(min(time_diff))
                             index[f] = idx_closest
                     self.sync_indices.append(index)
-        
+
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
@@ -187,7 +197,11 @@ class RaDICaL(Dataset):
         return None
     
     def get_ADC(self, idx=None):
-        adc_file = os.path.join(self.feature_path,'adc',f"adc_{idx}.npy")
+        if self.sync_mode:
+            index = self.sync_indices[idx]['adc']
+        else:
+            index = idx
+        adc_file = os.path.join(self.feature_path,'adc',f"adc_{index}.npy")
         adc = np.load(adc_file)
         return adc
     
@@ -219,7 +233,7 @@ class RaDICaL(Dataset):
 
     def get_radarpointcloud(self, idx=None):
         adc = self.get_ADC(idx)
-        logging.error("#########################################")
+        logging.error(f"#########################################")
         # 1. range fft
         radar_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
         # 2. doppler fft
@@ -296,17 +310,24 @@ class RaDICaL(Dataset):
         return None
     
     def get_spectrogram(self, idx=None):
+        adc = self.get_ADC(idx)
         return None
 
     def get_image(self, idx=None):
-        #return self.image[idx] if idx is not None else self.image
-        image_file = os.path.join(self.feature_path,'image',f"image_{idx}.npy")
+        if self.sync_mode:
+            index = self.sync_indices[idx]['image']
+        else:
+            index = idx
+        image_file = os.path.join(self.feature_path,'image',f"image_{index}.npy")
         image = np.load(image_file)
         return image
     
     def get_depthimage(self, idx=None):
-        # return self.depth_image[idx] if idx is not None else self.depth_image
-        image_file = os.path.join(self.feature_path,'depth_image',f"depth_image_{idx}.npy")
+        if self.sync_mode:
+            index = self.sync_indices[idx]['depth_image']
+        else:
+            index = idx
+        image_file = os.path.join(self.feature_path,'depth_image',f"depth_image_{index}.npy")
         image = np.load(image_file)
         return image
 
@@ -328,9 +349,6 @@ class RADIal(Dataset):
     features = []
     config = ""
 
-    image_count = 8252
-    lidarframe_count = 8252
-    radarframe_count = 8252
     frame_sync = 8252
 
     def __init__(self):
@@ -539,9 +557,6 @@ class RADIalRaw(Dataset):
     feature_path = ""
     config = ""
 
-    image_count = 0
-    depthimage_count = 0
-    radarframe_count = 0
     frame_sync = 0
 
     def __init__(self, features=None):
