@@ -151,16 +151,31 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.get("/sync/{file_id}")
-async def get_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+@app.get("/sync_check/{file_id}")
+async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        frame_sync = dataset_inst.frame_sync
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to retrieve sync mode.")
 
-    return dataset_inst.frame_sync
+    return frame_sync
+
+
+@app.get("/sync_set/{file_id}")
+async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try:
+        datafile = crud.get_datafile(db, file_id)
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        dataset_inst.sync_mode = True
+        sync_frames = len(dataset_inst.sync_indices)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to set sync mode.")
+
+    return sync_frames
 
 
 @app.get("/feature/{file_id}/{feature_name}/size")
@@ -170,14 +185,15 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
 
-        if feature_name in ("RD", "RA", "spectrogram", "radarPC"):
-            count = dataset_inst.radarframe_count
-        elif feature_name == "lidarPC":
-            count = dataset_inst.lidarframe_count
-        elif feature_name == "image":
-            count = dataset_inst.image_count
-        else:
-            count = dataset_inst.depthimage_count
+        count = dataset_inst.frames_count[feature_name]
+        # if feature_name in ("image", "depth_image", "lidarPC"):
+        #     count = dataset_inst.frames_count[feature_name]
+        # else:
+        #     radar_features = ("adc", "RD", "RA", "spectrogram", "radarPC")
+        #     for f in radar_features:
+        #         if f in dataset_inst.frames_count.keys():
+        #             count = dataset_inst.frames_count[f]
+        #             break       
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to retrieve feature size.")
 
