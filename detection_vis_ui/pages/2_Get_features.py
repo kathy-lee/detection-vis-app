@@ -56,20 +56,23 @@ if 'frame_sync' not in st.session_state:
 
 @st.cache_data
 def check_sync(file_id):
-  response = requests.get(f"http://{backend_service}:8001/sync/{file_id}")
+  response = requests.get(f"http://{backend_service}:8001/sync_check/{file_id}")
   sync = response.json()
   return sync
 
 sync = check_sync(datafile_chosen["id"])
-frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync, disabled=not sync)
+frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync)
 frame_begin = 0
 frame_end = sync
 frame_id = 0
 if frame_sync:
   st.session_state.frame_sync = True
+  if sync == 0:
+    response = requests.get(f"http://{backend_service}:8001/sync_set/{datafile_chosen['id']}")
+    sync_frames = response.json()
+    frame_end = sync_frames
   frame_id = st.slider('Choose a frame', frame_begin, frame_end, frame_begin)
 else:
-  #st.slider('Choose a frame', frame_begin, frame_end, frame_begin, disabled=True)
   st.session_state.frame_sync = False
   
 
@@ -94,8 +97,9 @@ for idx, f in enumerate(featureset):
     features.append(f)
     features_show.append(False)
 
-st.info(features)
-st.info(features_show)
+# # for debug
+# st.info(features)
+# st.info(features_show)
 
 
 if "RD" in features and not features_show[features.index("RD")]:
@@ -191,17 +195,25 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
   if feature == "lidarPC" or feature == "radarPC":
     plt.figure(figsize=(8, 6))
     plt.plot(feature_image[:,1], feature_image[:,0], '.')
-    plt.xlim(-20,20)
-    plt.ylim(0,100)
+    plt.xlim(-max(abs(feature_image[:,1])), max(abs(feature_image[:,1]))) # plt.xlim(-20,20)
+    plt.ylim(0, max(feature_image[:,0])) # plt.ylim(0,100)
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
     plt.title(f"index: {st.session_state[counter]}", y=-0.1)
     st.pyplot(plt)
   elif feature == "RD":
-    rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
-    power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
+    #rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
+    #power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
+    #power_spectrum = np.abs(rangedoppler)
+    #plt.figure(figsize=(8,6))
+    #plt.imshow(np.log10(power_spectrum), aspect='auto')
     plt.figure(figsize=(8,6))
-    plt.imshow(np.log10(power_spectrum), aspect='auto')
+    plt.imshow(feature_image) #, aspect='auto'
+    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    st.pyplot(plt)
+  elif feature == "RA":
+    plt.figure(figsize=(8,6))
+    plt.imshow(feature_image, aspect='auto')
     plt.title(f"index: {st.session_state[counter]}", y=-0.1)
     st.pyplot(plt)
   else:
