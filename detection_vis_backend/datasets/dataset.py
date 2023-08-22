@@ -3,6 +3,7 @@ import os
 import logging
 import struct
 import cv2
+import imageio
 #import mkl_fft
 import torch
 import math
@@ -180,6 +181,7 @@ class RaDICaL(Dataset):
         self.range_resolution, bandwidth = dsp.range_resolution(self.radar_cfg['profiles'][0]['adcSamples'],
                                              self.radar_cfg['profiles'][0]['adcSampleRate'] / 1000,
                                              self.radar_cfg['profiles'][0]['freqSlopeConst'] / 1e12)
+        self.Rmax = self.range_resolution * self.numRangeBins
         self.doppler_resolution = dsp.doppler_resolution(bandwidth,
                                       start_freq_const=self.radar_cfg['profiles'][0]['start_frequency'] / 1e9,
                                       ramp_end_time=self.radar_cfg['profiles'][0]['rampEndTime'] * 1e6,
@@ -191,7 +193,51 @@ class RaDICaL(Dataset):
         self.angle_bins = (self.angle_range * 2) // self.angle_resolution + 1
         self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_resolution, self.virt_ant)
         return
+
+    def frames_to_video(self, features):
+        stack_frames = []
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        for idx in range(50): #len(self.sync_indices):
+            lst = []
+            for f in features:
+                feature_data = function_dict[f](idx)
+                logging.error(f"{f}: {feature_data.shape}")
+                if f == 'depth_image':
+                    feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
+                elif f == 'RD' or f == 'RA' or f == 'spectrogram':
+                    feature_data = cv2.cvtColor(feature_data, cv2.COLOR_GRAY2BGR)
+                    feature_data = cv2.resize(feature_data, dsize=(512, feature_data.shape(1)))
+                
+                
+                logging.error(f"{f}:{feature_data.shape}")
+                lst.append(feature_data)
+                
+                
+            frame = np.hstack(lst)
+            #logging.error(f"stacked:{frame.shape}, {frame.dtype}, {frame.max()}, {frame.min()}")
+            stack_frames.append(frame)
         
+        # PowerSpectrum = (PowerSpectrum -PowerSpectrum.min())/(PowerSpectrum.max()-PowerSpectrum.min())*255
+        # RA_cartesian = np.asarray((RA_cartesian*255).astype('uint8'))
+        # RA_cartesian = cv2.cvtColor(RA_cartesian, cv2.COLOR_GRAY2BGR)
+        # RA_cartesian = cv2.resize(RA_cartesian,dsize=(400,512))
+        # RA_cartesian=cv2.flip(RA_cartesian,flipCode=-1)
+
+        output_path = os.path.join(self.feature_path, '_'.join(features) + '.mp4')
+        with imageio.get_writer(output_path, mode='I', fps=5) as writer:
+            for img in stack_frames:
+                writer.append_data(img)
+
+        return output_path
 
     def get_RAD(self, idx=None):
         return None
