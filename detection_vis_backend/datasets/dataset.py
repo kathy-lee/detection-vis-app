@@ -4,12 +4,15 @@ import logging
 import struct
 import cv2
 import imageio
+import io
 #import mkl_fft
 import torch
 import math
 import numpy as np
 import torchvision.transforms as transform
 import pandas as pd
+import matplotlib.pyplot as plt
+
 
 from pathlib import Path
 from torchvision.transforms import Resize,CenterCrop
@@ -17,6 +20,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 from mmwave import dsp
 from mmwave.dsp.utils import Window
+
 
 from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance
 from detection_vis_backend.datasets.cfar import CA_CFAR
@@ -194,6 +198,17 @@ class RaDICaL(Dataset):
         self.num_vec, self.steering_vec = gen_steering_vec(self.angle_range, self.angle_resolution, self.virt_ant)
         return
 
+    def plot_to_array(self, plt):
+        # Convert the Matplotlib plot to a NumPy array
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        buf.seek(0)
+        plot_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
+        buf.close()
+        plot_img = cv2.imdecode(plot_arr, 1)
+        plot_img = cv2.cvtColor(plot_img, cv2.COLOR_BGR2RGB) # Convert to RGB from BGR
+        return plot_img
+
     def frames_to_video(self, features):
         stack_frames = []
         function_dict = {
@@ -210,15 +225,28 @@ class RaDICaL(Dataset):
             lst = []
             for f in features:
                 feature_data = function_dict[f](idx)
-                logging.error(f"{f}: {feature_data.shape}")
-                if f == 'depth_image':
+                logging.error(f"raw {f}: {feature_data.shape}")
+                
+                if f == 'RD' or f == 'RA' or f == 'spectrogram': 
+                    feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+                    feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+                    feature_data = cv2.resize(feature_data, dsize=(80, 720))
+                    feature_data = cv2.flip(feature_data, flipCode=-1)
+                    #logging.error(f"converted {f}->:{feature_data.shape}")
+                elif f == 'depth_image':
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
-                elif f == 'RD' or f == 'RA' or f == 'spectrogram':
-                    feature_data = cv2.cvtColor(feature_data, cv2.COLOR_GRAY2BGR)
-                    feature_data = cv2.resize(feature_data, dsize=(512, feature_data.shape(1)))
-                
-                
-                logging.error(f"{f}:{feature_data.shape}")
+                elif f == 'radarPC' or f == 'lidarPC': # point cloud
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(feature_data[:,1], feature_data[:,0], '.')
+                    plt.xlim(-20, 20)
+                    plt.ylim(0, 20)
+                    plt.grid()
+                    plot_arr = self.plot_to_array(plt)
+                    logging.error(f"raw plot: {plot_arr.shape}")
+                    plt.close()
+                    feature_data = cv2.resize(plot_arr, dsize=(1024, 720))
+                    logging.error(f"converted {f}->:{feature_data.shape}")
+
                 lst.append(feature_data)
                 
                 
