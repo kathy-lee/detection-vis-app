@@ -89,17 +89,18 @@ for idx, f in enumerate(featureset):
       features_show.append(True)
   elif f in ("RAD", "RA", "RD", "spectrogram", "radarPC") and datafile_chosen["ADC"]:
     features.append(f)
-    if f != "RAD":
-      features_show.append(False)
-    else:
-      features_show.append(True)
+    features_show.append(False)
+    # if f != "RAD":
+    #   features_show.append(False)
+    # else:
+    #   features_show.append(True) # Do not support 3d array display
   elif f in ("RA", "RD", "spectrogram", "radarPC") and "RAD" in features:
     features.append(f)
     features_show.append(False)
 
-# # for debug
-# st.info(features)
-# st.info(features_show)
+# for debug
+st.info(features)
+st.info(features_show)
 
 
 if "RD" in features and not features_show[features.index("RD")]:
@@ -294,12 +295,33 @@ if feature in features and (features_show[features.index("radarPC")] or cfar_con
     show_feature(datafile_chosen['id'], feature, counter, frame_id, config=cfg)
 
 
+if st.session_state.frame_sync:
+  auto_display = st.checkbox("Auto display")
+  if auto_display:
+    # get current shown features' names
+    feature_list = [f for f, b in zip(features, features_show) if b]
+    if st.session_state.cfar_cfg > 0 and 'radarPC' not in feature_list:
+      feature_list.append('radarPC')
+    if st.session_state.aoa_cfg > 0 and 'RA' not in feature_list:
+      feature_list.append('RA')
+    if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
+      feature_list.append('spectrogram')
+    if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
+      feature_list.append('RD')
+    #video_path = get_feature_video(datafile_chosen['id'], feature_list)
+    param = {"feature_list": feature_list}
+    response = requests.get(f"http://{backend_service}:8001/video/{datafile_chosen['id']}", params=param)
+    video_path = response.json()
+    #video_path = "/home/kangle/Downloads/star.mp4"
+    st.video(video_path)
+
+
 if 'features_chosen' not in st.session_state:
   st.session_state.features_chosen = []
 
 features_chosen = st.multiselect("Which features would you like to select as input?", features, st.session_state.features_chosen)
 st.session_state.features_chosen = features_chosen
-st.write(features_chosen)
+# st.write(features_chosen)
 
 button_click = st.button("Go to train")
 if button_click:
