@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 import io
 
-from fastapi import FastAPI, Depends, File, UploadFile, HTTPException
+from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
 from fastapi import Response, status
 #from PIL import Image
 from typing import List, Dict, Any
@@ -227,6 +227,22 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
 
     return {"serialized_feature": serialized_feature}
     
+
+@app.get("/video/{file_id}")
+async def get_feature_video(file_id: int, feature_list: list[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try:
+        datafile = crud.get_datafile(db, file_id)
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        video_filepath = dataset_inst.frames_to_video(feature_list)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to retrieve feature video.")
+    return video_filepath    
+
+# @app.get("/video/{file_id}")
+# async def get_feature_video(file_id: int, feature_list: List[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     query_items = {"q": feature_list}
+#     return query_items   
 
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
