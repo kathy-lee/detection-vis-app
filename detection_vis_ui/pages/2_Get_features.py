@@ -314,7 +314,10 @@ if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
   feature_list.append('RD')
 
 if st.session_state.frame_sync:
-  video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], key="video_features")
+  if 'video_features' not in st.session_state:
+    video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, feature_list, key="video_features")
+  else:
+    video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], key="video_features")
   auto_display = st.checkbox("Auto display")
   if auto_display:
     video_path = get_feature_video(datafile_chosen['id'], st.session_state['video_features'])
@@ -324,8 +327,10 @@ if st.session_state.frame_sync:
     st.video(video_path)
 
 
-
-features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], key="features_chosen")
+if 'features_chosen' not in st.session_state:
+  features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, key="features_chosen")
+else:
+  features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], key="features_chosen")
 
 button_click = st.button("Go to train")
 if button_click:
