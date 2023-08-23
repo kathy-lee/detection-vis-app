@@ -302,43 +302,34 @@ def get_feature_video(file_id, features):
   video_path = response.json()
   return video_path
 
-
+# get current shown features' names
 feature_list = [f for f, b in zip(features, features_show) if b]
-if 'video_features_chosen' not in st.session_state:
-  st.session_state.video_features_chosen = feature_list
+if st.session_state.cfar_cfg > 0 and 'radarPC' not in feature_list:
+  feature_list.append('radarPC')
+if st.session_state.aoa_cfg > 0 and 'RA' not in feature_list:
+  feature_list.append('RA')
+if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
+  feature_list.append('spectrogram')
+if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
+  feature_list.append('RD')
 
 if st.session_state.frame_sync:
-  # get current shown features' names
-  if st.session_state.cfar_cfg > 0 and 'radarPC' not in feature_list:
-    feature_list.append('radarPC')
-  if st.session_state.aoa_cfg > 0 and 'RA' not in feature_list:
-    feature_list.append('RA')
-  if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
-    feature_list.append('spectrogram')
-  if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
-    feature_list.append('RD')
-  video_feature_list = st.multiselect("Deselect the features you don't want to autodisplay:", feature_list, st.session_state.video_features_chosen)
-  st.session_state.video_features_chosen = video_feature_list
-
+  video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], key="video_features")
   auto_display = st.checkbox("Auto display")
   if auto_display:
-    video_path = get_feature_video(datafile_chosen['id'], video_feature_list)
+    video_path = get_feature_video(datafile_chosen['id'], st.session_state['video_features'])
     # param = {"feature_list": feature_list}
     # response = requests.get(f"http://{backend_service}:8001/video/{datafile_chosen['id']}", params=param)
     # video_path = response.json()
     st.video(video_path)
 
 
-if 'features_chosen' not in st.session_state:
-  st.session_state.features_chosen = []
 
-features_chosen = st.multiselect("Which features would you like to select as train input?", features, st.session_state.features_chosen)
-st.session_state.features_chosen = features_chosen
-# st.write(features_chosen)
+features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], key="features_chosen")
 
 button_click = st.button("Go to train")
 if button_click:
-  if features_chosen:
+  if features_chosen_val:
     #check_datafiles(st.session_state.datafiles_chosen)
     switch_page("train model")
   else:
