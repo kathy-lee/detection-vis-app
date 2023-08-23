@@ -234,7 +234,11 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        video_filepath = dataset_inst.frames_to_video(feature_list)
+        filepath = os.path.join(dataset_inst.feature_path, '_'.join(feature_list) + '.mp4')
+        if os.path.exists(filepath):
+            video_filepath = filepath
+        else:
+            video_filepath = dataset_inst.frames_to_video(feature_list)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to retrieve feature video.")
     return video_filepath    
