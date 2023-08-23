@@ -227,12 +227,20 @@ class RaDICaL(Dataset):
                 feature_data = function_dict[f](idx)
                 logging.error(f"raw {f}: {feature_data.shape}")
                 
-                if f == 'RD' or f == 'RA' or f == 'spectrogram': 
+                if f == 'RD': 
                     feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
-                    feature_data = cv2.resize(feature_data, dsize=(80, 720))
-                    feature_data = cv2.flip(feature_data, flipCode=-1)
+                    feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+                    feature_data = cv2.transpose(feature_data)
+                    feature_data = cv2.flip(feature_data, flipCode=0)
+                    feature_data = cv2.resize(feature_data, dsize=(192, 720))
                     #logging.error(f"converted {f}->:{feature_data.shape}")
+                elif f == 'RA' or f == 'spectrogram': 
+                    feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+                    feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+                    feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+                    feature_data = cv2.flip(feature_data, flipCode=-1)
+                    feature_data = cv2.resize(feature_data, dsize=(432, 720))
                 elif f == 'depth_image':
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
                 elif f == 'radarPC' or f == 'lidarPC': # point cloud
