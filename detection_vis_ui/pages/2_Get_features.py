@@ -26,9 +26,17 @@ datafiles_chosen = st.session_state.datafiles_chosen
 if 'datafile_chosen' not in st.session_state:
   st.session_state.datafile_chosen = 0
 
-datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
-                             index=st.session_state.datafile_chosen)
-st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) if d["name"] == datafile_name), None)
+# old
+# datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
+#                              index=st.session_state.datafile_chosen)
+# st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) if d["name"] == datafile_name), None)
+
+##### new
+datafile_selectbox_val = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
+                             index=st.session_state.datafile_chosen, key='datafile_selectbox')
+st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) 
+                                         if d["name"] == st.session_state['datafile_selectbox']), None)
+#### 
 
 # get the chosen data file
 datafile_chosen = {}
@@ -313,11 +321,31 @@ if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
 if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
   feature_list.append('RD')
 
+# ###### old video widget
+# if st.session_state.frame_sync:
+#   if 'video_features' not in st.session_state:
+#     video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, feature_list, key="video_features")
+#   else:
+#     video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], key="video_features")
+#   auto_display = st.checkbox("Auto display")
+#   if auto_display:
+#     video_path = get_feature_video(datafile_chosen['id'], st.session_state['video_features'])
+#     # param = {"feature_list": feature_list}
+#     # response = requests.get(f"http://{backend_service}:8001/video/{datafile_chosen['id']}", params=param)
+#     # video_path = response.json()
+#     st.video(video_path)
+# ######
+
+##### new video widget
+if 'video_features' not in st.session_state:
+  st.session_state.video_features = feature_list
+
+def set_video_features():
+  st.session_state['video_features'] = st.session_state['video_features_selectbox']
+
 if st.session_state.frame_sync:
-  if 'video_features' not in st.session_state:
-    video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, feature_list, key="video_features")
-  else:
-    video_feature_list_val = st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], key="video_features")
+  st.multiselect("Ajust the features you would like to autodisplay:", feature_list, st.session_state['video_features'], 
+                 key="video_features_selectbox", on_change=set_video_features)
   auto_display = st.checkbox("Auto display")
   if auto_display:
     video_path = get_feature_video(datafile_chosen['id'], st.session_state['video_features'])
@@ -325,20 +353,45 @@ if st.session_state.frame_sync:
     # response = requests.get(f"http://{backend_service}:8001/video/{datafile_chosen['id']}", params=param)
     # video_path = response.json()
     st.video(video_path)
+#####
 
 
+##### old train feature wideget
+# if 'features_chosen' not in st.session_state:
+#   st.write("'features_chosen' not in st.session_state")
+#   features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, key="features_chosen")
+# else:
+#   features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], key="features_chosen")
+
+# button_click = st.button("Go to train")
+# if button_click:
+#   if features_chosen_val:
+#     #check_datafiles(st.session_state.datafiles_chosen)
+#     switch_page("train model")
+#   else:
+#     st.info("Please choose features first")
+######
+
+
+##### new train feature wideget
 if 'features_chosen' not in st.session_state:
-  features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, key="features_chosen")
-else:
-  features_chosen_val = st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], key="features_chosen")
+  st.session_state['features_chosen'] = None
 
-button_click = st.button("Go to train")
+def set_train_features():
+  st.session_state['features_chosen'] = st.session_state['train_features_selectbox']
+
+st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], 
+               key="train_features_selectbox", on_change=set_train_features)
+
+button_click = st.button("Go to train", key='switch_train_page')
 if button_click:
-  if features_chosen_val:
+  if st.session_state.features_chosen:
     #check_datafiles(st.session_state.datafiles_chosen)
     switch_page("train model")
   else:
     st.info("Please choose features first")
+######
+
 
 # #############################################
 # expanders = [None]*len(features)
