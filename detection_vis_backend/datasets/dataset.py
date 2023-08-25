@@ -221,56 +221,65 @@ class RaDICaL(Dataset):
             'image': self.get_image,
             'depth_image': self.get_depthimage,
         }
-        for idx in range(50): #len(self.sync_indices):
+        logging.error(f"total frames: {len(self.sync_indices)}")
+        for idx in range(len(self.sync_indices)):
             lst = []
             for f in features:
                 feature_data = function_dict[f](idx)
-                logging.error(f"raw {f}: {feature_data.shape}")
+                #logging.error(f"raw {f}: {feature_data.shape}")
                 
                 if f == 'RD': 
+                    #logging.error('RD begin->')
                     feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
                     feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
                     feature_data = cv2.transpose(feature_data)
                     feature_data = cv2.flip(feature_data, flipCode=0)
                     feature_data = cv2.resize(feature_data, dsize=(192, 720))
+                    #logging.error('RD created')
                     #logging.error(f"converted {f}->:{feature_data.shape}")
                 elif f == 'RA' or f == 'spectrogram': 
+                    #logging.error('RA begin->')
                     feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
                     feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
                     feature_data = cv2.flip(feature_data, flipCode=-1)
                     feature_data = cv2.resize(feature_data, dsize=(432, 720))
+                    #logging.error('RA created')
                 elif f == 'depth_image':
                     feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
                 elif f == 'radarPC' or f == 'lidarPC': # point cloud
+                    #logging.error('PCL begin->')
+                    #logging.error(feature_data)
                     plt.figure(figsize=(8, 6))
-                    plt.plot(feature_data[:,1], feature_data[:,0], '.')
+                    if feature_data.size > 0:
+                        plt.plot(feature_data[:,1], feature_data[:,0], '.')
                     plt.xlim(-20, 20)
                     plt.ylim(0, 20)
                     plt.grid()
                     plot_arr = self.plot_to_array(plt)
-                    logging.error(f"raw plot: {plot_arr.shape}")
+                    #logging.error(f"raw plot: {plot_arr.shape}")
                     plt.close()
                     feature_data = cv2.resize(plot_arr, dsize=(1024, 720))
-                    logging.error(f"converted {f}->:{feature_data.shape}")
+                    #logging.error(f"converted {f}->:{feature_data.shape}")
+                    #logging.error('PCL created')
 
                 lst.append(feature_data)
-                
-                
+                   
             frame = np.hstack(lst)
-            #logging.error(f"stacked:{frame.shape}, {frame.dtype}, {frame.max()}, {frame.min()}")
             stack_frames.append(frame)
-        
-        # PowerSpectrum = (PowerSpectrum -PowerSpectrum.min())/(PowerSpectrum.max()-PowerSpectrum.min())*255
-        # RA_cartesian = np.asarray((RA_cartesian*255).astype('uint8'))
-        # RA_cartesian = cv2.cvtColor(RA_cartesian, cv2.COLOR_GRAY2BGR)
-        # RA_cartesian = cv2.resize(RA_cartesian,dsize=(400,512))
-        # RA_cartesian=cv2.flip(RA_cartesian,flipCode=-1)
+            logging.error(idx)
 
         output_path = os.path.join(self.feature_path, '_'.join(features) + '.mp4')
         with imageio.get_writer(output_path, mode='I', fps=5) as writer:
-            for img in stack_frames:
+            for idx, img in enumerate(stack_frames):
+                cv2.putText(img, f"Frame: {idx}", 
+                            (10, 30),  # Position
+                            cv2.FONT_HERSHEY_SIMPLEX,  # Font
+                            1,  # Font scale
+                            (0, 255, 0),  # Color (Green in this case)
+                            2)  # Line thickness
+
                 writer.append_data(img)
 
         return output_path
@@ -315,7 +324,7 @@ class RaDICaL(Dataset):
 
     def get_radarpointcloud(self, idx=None):
         adc = self.get_ADC(idx)
-        logging.error(f"#########################################")
+        #logging.error(f"#########################################")
         # 1. range fft
         radar_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
         # 2. doppler fft
@@ -343,19 +352,19 @@ class RaDICaL(Dataset):
         detObj2DRaw['dopplerIdx'] = det_peaks_indices[:, 1].squeeze()
         detObj2DRaw['peakVal'] = peakVals.flatten()
         detObj2DRaw['SNR'] = snr.flatten()
-        logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
+        #logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
         # Further peak pruning. This increases the point cloud density but helps avoid having too many detections around one object.
         detObj2DRaw = dsp.prune_to_peaks(detObj2DRaw, det_matrix, self.numDopplerBins, reserve_neighbor=True)
-        logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
+        # logging.error(f"detObj2DRaw:{detObj2DRaw.shape}")
         # --- Peak Grouping
         detObj2D = dsp.peak_grouping_along_doppler(detObj2DRaw, det_matrix, self.numDopplerBins)
         SNRThresholds2 = np.array([[2, 15], [10, 10], [35, 10]])
         peakValThresholds2 = np.array([[2, 50]])
         detObj2D = dsp.range_based_pruning(detObj2D, SNRThresholds2, peakValThresholds2, 
                                            max_range=self.numRangeBins, min_range=0.5, range_resolution=self.range_resolution)
-        logging.error(f"detObj2D:{detObj2D.shape}")
+        #logging.error(f"detObj2D:{detObj2D.shape}")
         azimuthInput = aoa_input[detObj2D['rangeIdx'], :, detObj2D['dopplerIdx']]
-        logging.error(f"azimuthInput:{azimuthInput.shape}")
+        # logging.error(f"azimuthInput:{azimuthInput.shape}")
 
         # 4. AoA
         num_vec, steering_vec = gen_steering_vec(self.angle_range, self.angle_resolution, 8)
@@ -385,7 +394,7 @@ class RaDICaL(Dataset):
                 # points.append([range, doppler, azimuth])
                 points.append([range * np.sin(azimuth), range * np.cos(azimuth), doppler]) # [y, x, doppler]
                 #logging.error(points)
-        logging.error(f"Total points: {len(points)}, range resolution: {self.range_resolution}")   
+        #logging.error(f"Total points: {len(points)}, range resolution: {self.range_resolution}")   
         return np.array(points) 
 
     def get_lidarpointcloud():
