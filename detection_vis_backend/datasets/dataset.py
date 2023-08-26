@@ -62,20 +62,19 @@ class DatasetFactory:
 
 
 class RaDICaL(Dataset):
-    name = "RaDICaL dataset instance"
-    features = []
-    feature_path = ""
-    config = ""
-
-    frames_count = {} 
-    timestamps = {} # dict of list
-    sync_indices = [] # list of dict
-    sync_mode = False
-    frame_sync = 0
-
+    name = "RaDICaL dataset instance"    
 
     def __init__(self, features=None):
+        self.feature_path = ""
+        self.config = ""
+
+        self.frames_count = {} 
+        self.timestamps = {} # dict of list
+        self.sync_indices = [] # list of dict
+        self.sync_mode = False
+        self.frame_sync = 0
         self.features = ['image', 'depth_image', 'adc']
+        logging.error(f'initial: {len(self.sync_indices)}')
 
 
     def parse(self, file_id, file_path, file_name, config):
@@ -174,7 +173,7 @@ class RaDICaL(Dataset):
                             idx_closest = time_diff.index(min(time_diff))
                             index[f] = idx_closest
                     self.sync_indices.append(index)
-
+        logging.error(f"sync incdices = {len(self.sync_indices)}")
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
@@ -436,18 +435,14 @@ class RaDICaL(Dataset):
 
 
 class RADIal(Dataset):
-    name = ""
-    features = []
-    config = ""
-
-    frame_sync = 8252
+    name = "RADIal ready-to-use dataset instance"  # RADIal data has two formats: raw and ready-to-use
 
     def __init__(self):
-        # RADIal data has two formats: raw and ready-to-use
-        self.name = "RADIal ready-to-use dataset instance" 
+        self.config = ""
+
+        self.frame_sync = 8252
         self.features = ['image', 'lidarPC', 'adc', 'radarPC']
         
-
     def parse(self, file_id, file_path, file_name, config, difficult=True):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
@@ -643,15 +638,13 @@ class RADIal(Dataset):
 
 
 class RADIalRaw(Dataset):
-    name = ""
-    features = []
-    feature_path = ""
-    config = ""
-
-    frame_sync = 0
+    name = "RADIal raw dataset instance"  # RADIal data has two formats: raw and ready-to-use
 
     def __init__(self, features=None):
-        self.name = "RADIal raw dataset instance"
+        self.feature_path = ""
+        self.config = ""
+
+        self.frame_sync = 0
         self.features = ['image', 'lidarPC', 'adc']
 
         # Radar parameters
