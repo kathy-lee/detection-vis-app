@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 
-if 'datafiles_chosen' not in st.session_state or 'features_chosen' not in st.session_state:
+if 'datafiles_chosen' not in st.session_state or 'features_chosen' not in st.session_state or not st.session_state.features_chosen:
   st.info("Please choose data and feature first.")
   st.stop()
 

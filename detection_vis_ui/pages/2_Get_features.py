@@ -26,14 +26,37 @@ datafiles_chosen = st.session_state.datafiles_chosen
 if 'datafile_chosen' not in st.session_state:
   st.session_state.datafile_chosen = 0
 
+
+featureset = ["ADC", "RAD", "RA", "RD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
+
+# frame sync mode
+if 'frame_sync' not in st.session_state:
+  st.session_state.frame_sync = False
+
+if 'frame_id' not in st.session_state:
+  st.session_state.frame_id = 0
+
+def reset_file():
+  st.session_state.frame_id = 0
+  st.session_state.frame_sync = False
+  if 'sync_checkbox' in st.session_state:
+    st.session_state.sync_checkbox = False
+  if 'frame_slider' in st.session_state:
+    st.session_state.frame_slider = 0
+  for feature in featureset:
+    counter = f"counter_{feature}"
+    if counter in st.session_state:
+      st.session_state[counter] = 0
+
 # old
 # datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
 #                              index=st.session_state.datafile_chosen)
 # st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) if d["name"] == datafile_name), None)
 
 ##### new
-datafile_selectbox_val = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
-                             index=st.session_state.datafile_chosen, key='datafile_selectbox')
+default_index = 0 if st.session_state['datafile_chosen'] > len(st.session_state['datafiles_chosen'])-1 else st.session_state['datafile_chosen']
+st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
+                             index=default_index, key='datafile_selectbox', on_change=reset_file)
 st.session_state.datafile_chosen = next((index for (index, d) in enumerate(datafiles_chosen) 
                                          if d["name"] == st.session_state['datafile_selectbox']), None)
 #### 
@@ -58,9 +81,9 @@ if datafile_parsed not in st.session_state:
     st.session_state[datafile_parsed] = True
 
 
-# frame sync mode
-if 'frame_sync' not in st.session_state:
-  st.session_state.frame_sync = False
+# # frame sync mode
+# if 'frame_sync' not in st.session_state:
+#   st.session_state.frame_sync = False
 
 @st.cache_data
 def check_sync(file_id):
@@ -68,24 +91,39 @@ def check_sync(file_id):
   sync = response.json()
   return sync
 
-sync = check_sync(datafile_chosen["id"])
-frame_sync = st.checkbox("frame sync mode", value=st.session_state.frame_sync)
-frame_begin = 0
-frame_end = sync
-frame_id = 0
-if frame_sync:
-  st.session_state.frame_sync = True
-  if sync == 0:
-    response = requests.get(f"http://{backend_service}:8001/sync_set/{datafile_chosen['id']}")
-    sync_frames = response.json()
-    frame_end = sync_frames
-  frame_id = st.slider('Choose a frame', frame_begin, frame_end, frame_begin)
+# @st.cache_data
+def set_sync(file_id):
+  response = requests.get(f"http://{backend_service}:8001/sync_set/{file_id}")
+  frames = response.json()
+  return frames
+
+# @st.cache_data
+def unset_sync(file_id):
+  response = requests.get(f"http://{backend_service}:8001/sync_unset/{file_id}")
+  return True if response.status_code == 204 else False
+
+sync_frames = check_sync(datafile_chosen["id"])
+st.write(f"sync_frames: {sync_frames}")
+st.session_state.frame_id = 0
+
+def set_sync_mode():
+  st.session_state.frame_sync = st.session_state['sync_checkbox']
+  return 
+
+st.checkbox("frame sync mode", value=st.session_state.frame_sync, key='sync_checkbox', on_change=set_sync_mode)
+if st.session_state['sync_checkbox']:
+  # st.session_state.frame_sync = True
+  if sync_frames == 0:
+    sync_frames = set_sync(datafile_chosen['id'])
+  
+  st.slider('Choose a frame', 0, sync_frames, 0, key='frame_slider')
 else:
-  st.session_state.frame_sync = False
+  # st.session_state.frame_sync = False
+  if sync_frames == 0:
+    unset_sync(datafile_chosen['id'])
   
 
 # infer the available features
-featureset = ["ADC", "RAD", "RA", "RD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
 features = []
 features_show = []
 for idx, f in enumerate(featureset):
@@ -229,36 +267,40 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     feature_image = feature_image - np.min(feature_image)
     feature_image = feature_image / np.max(feature_image)
     st.image(feature_image, caption=f"index: {st.session_state[counter]}")
-  
+  return
+
+
+if 'frame_slider' in st.session_state:
+  st.session_state.frame_id = st.session_state['frame_slider']
 
 feature = "image"
 counter = f"counter_{feature}" 
 if feature in features:
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   expander_image = st.expander("RGB images", expanded=True)
   with expander_image:
-    show_feature(datafile_chosen['id'], feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id)
     
 
 feature = "depth_image"
 counter = f"counter_{feature}" 
 if feature in features:
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   expander_depthimage = st.expander("Depth images", expanded=True)
   with expander_depthimage:
-    show_feature(datafile_chosen['id'], feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id)
 
 
 feature = "lidarPC"
 counter = f"counter_{feature}" 
 if feature in features:
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   expander_lidarpc = st.expander("Lidar Point Cloud", expanded=True)
   with expander_lidarpc:
-    show_feature(datafile_chosen['id'], feature, counter, frame_id)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id)
 
 
 feature = "RD"
@@ -266,10 +308,10 @@ counter = f"counter_{feature}"
 if feature in features and (features_show[features.index("RD")] or fft_config in ("No windowing", "Hamming windowing", "Hanning windowing")):
   expander_RD = st.expander("Range-Doppler(RD) feature", expanded=True)
   if counter not in st.session_state: 
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   with expander_RD:
     cfg = None if features_show[features.index("RD")] else fft_config
-    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=cfg)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=cfg)
 
 
 feature = "RA" 
@@ -277,9 +319,9 @@ counter = f"counter_{feature}"
 if feature in features and aoa_config in ("Barlett", "Capon"):
   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   with expander_RA:
-    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=aoa_config)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
 
 
 feature = "spectrogram" 
@@ -287,9 +329,9 @@ counter = f"counter_{feature}"
 if feature in features and tfa_config in ("STFT", "WV"):
   expander_tfa = st.expander("Spectrogram feature", expanded=True)
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   with expander_tfa:
-    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=tfa_config)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=tfa_config)
 
 
 feature = "radarPC" 
@@ -297,10 +339,10 @@ counter = f"counter_{feature}"
 if feature in features and (features_show[features.index("radarPC")] or cfar_config in ("CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR")):
   expander_radarpc = st.expander("Radar Point Cloud", expanded=True)
   if counter not in st.session_state:
-    st.session_state[counter] = frame_id
+    st.session_state[counter] = st.session_state.frame_id
   with expander_radarpc:
     cfg = None if features_show[features.index("radarPC")] else cfar_config
-    show_feature(datafile_chosen['id'], feature, counter, frame_id, config=cfg)
+    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=cfg)
 
 
 @st.cache_data
@@ -337,7 +379,7 @@ if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
 # ######
 
 ##### new video widget
-if 'video_features' not in st.session_state:
+if 'video_features' not in st.session_state or set(st.session_state.video_features) - set(feature_list):
   st.session_state.video_features = feature_list
 
 def set_video_features():
