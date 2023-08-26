@@ -159,7 +159,7 @@ async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         frame_sync = dataset_inst.frame_sync
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Failed to retrieve sync mode.")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve sync mode.")
 
     return frame_sync
 
@@ -172,10 +172,24 @@ async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = True
         sync_frames = len(dataset_inst.sync_indices)
+        logging.error(f"sync frames: {sync_frames}")
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Failed to set sync mode.")
+        raise HTTPException(status_code=500, detail=f"Failed to set sync mode.")
 
     return sync_frames
+
+
+@app.get("/sync_unset/{file_id}")
+async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+    try:
+        datafile = crud.get_datafile(db, file_id)
+        dataset_factory = DatasetFactory()
+        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        dataset_inst.sync_mode = False
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set sync mode.")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/feature/{file_id}/{feature_name}/size")
@@ -195,7 +209,7 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
         #             count = dataset_inst.frames_count[f]
         #             break       
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Failed to retrieve feature size.")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve feature size.")
 
     return count
  
@@ -240,7 +254,7 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
         else:
             video_filepath = dataset_inst.frames_to_video(feature_list)
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Failed to retrieve feature video.")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve feature video.")
     return video_filepath    
 
 # @app.get("/video/{file_id}")
