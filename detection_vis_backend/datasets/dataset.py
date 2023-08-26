@@ -74,7 +74,6 @@ class RaDICaL(Dataset):
         self.sync_mode = False
         self.frame_sync = 0
         self.features = ['image', 'depth_image', 'adc']
-        logging.error(f'initial: {len(self.sync_indices)}')
 
 
     def parse(self, file_id, file_path, file_name, config):
@@ -221,66 +220,124 @@ class RaDICaL(Dataset):
             'depth_image': self.get_depthimage,
         }
         logging.error(f"total frames: {len(self.sync_indices)}")
-        for idx in range(len(self.sync_indices)):
-            lst = []
-            for f in features:
-                feature_data = function_dict[f](idx)
-                #logging.error(f"raw {f}: {feature_data.shape}")
+        # for idx in range(len(self.sync_indices)):
+        #     lst = []
+        #     for f in features:
+        #         feature_data = function_dict[f](idx)
+        #         #logging.error(f"raw {f}: {feature_data.shape}")
                 
-                if f == 'RD': 
-                    #logging.error('RD begin->')
-                    feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
-                    feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
-                    feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
-                    feature_data = cv2.transpose(feature_data)
-                    feature_data = cv2.flip(feature_data, flipCode=0)
-                    feature_data = cv2.resize(feature_data, dsize=(192, 720))
-                    #logging.error('RD created')
-                    #logging.error(f"converted {f}->:{feature_data.shape}")
-                elif f == 'RA' or f == 'spectrogram': 
-                    #logging.error('RA begin->')
-                    feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
-                    feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
-                    feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
-                    feature_data = cv2.flip(feature_data, flipCode=-1)
-                    feature_data = cv2.resize(feature_data, dsize=(432, 720))
-                    #logging.error('RA created')
-                elif f == 'depth_image':
-                    feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
-                elif f == 'radarPC' or f == 'lidarPC': # point cloud
-                    #logging.error('PCL begin->')
-                    #logging.error(feature_data)
-                    plt.figure(figsize=(8, 6))
-                    if feature_data.size > 0:
-                        plt.plot(feature_data[:,1], feature_data[:,0], '.')
-                    plt.xlim(-20, 20)
-                    plt.ylim(0, 20)
-                    plt.grid()
-                    plot_arr = self.plot_to_array(plt)
-                    #logging.error(f"raw plot: {plot_arr.shape}")
-                    plt.close()
-                    feature_data = cv2.resize(plot_arr, dsize=(1024, 720))
-                    #logging.error(f"converted {f}->:{feature_data.shape}")
-                    #logging.error('PCL created')
+        #         if f == 'RD': 
+        #             #logging.error('RD begin->')
+        #             feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+        #             feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+        #             feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+        #             feature_data = cv2.transpose(feature_data)
+        #             feature_data = cv2.flip(feature_data, flipCode=0)
+        #             feature_data = cv2.resize(feature_data, dsize=(192, 720))
+        #             #logging.error('RD created')
+        #             #logging.error(f"converted {f}->:{feature_data.shape}")
+        #         elif f == 'RA' or f == 'spectrogram': 
+        #             #logging.error('RA begin->')
+        #             feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+        #             feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+        #             feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+        #             feature_data = cv2.flip(feature_data, flipCode=-1)
+        #             feature_data = cv2.resize(feature_data, dsize=(432, 720))
+        #             #logging.error('RA created')
+        #         elif f == 'depth_image':
+        #             feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
+        #         elif f == 'radarPC' or f == 'lidarPC': # point cloud
+        #             #logging.error('PCL begin->')
+        #             #logging.error(feature_data)
+        #             plt.figure(figsize=(8, 6))
+        #             if feature_data.size > 0:
+        #                 plt.plot(feature_data[:,1], feature_data[:,0], '.')
+        #             plt.xlim(-20, 20)
+        #             plt.ylim(0, 20)
+        #             plt.grid()
+        #             plot_arr = self.plot_to_array(plt)
+        #             #logging.error(f"raw plot: {plot_arr.shape}")
+        #             plt.close()
+        #             feature_data = cv2.resize(plot_arr, dsize=(1024, 720))
+        #             #logging.error(f"converted {f}->:{feature_data.shape}")
+        #             #logging.error('PCL created')
 
-                lst.append(feature_data)
+        #         lst.append(feature_data)
                    
-            frame = np.hstack(lst)
-            stack_frames.append(frame)
-            logging.error(idx)
+        #     frame = np.hstack(lst)
+        #     stack_frames.append(frame)
+        #     logging.error(idx)
 
+        # output_path = os.path.join(self.feature_path, '_'.join(features) + '.mp4')
+        # with imageio.get_writer(output_path, mode='I', fps=5) as writer:
+        #     for idx, img in enumerate(stack_frames):
+        #         cv2.putText(img, f"Frame: {idx}", 
+        #                     (10, 30),  # Position
+        #                     cv2.FONT_HERSHEY_SIMPLEX,  # Font
+        #                     1,  # Font scale
+        #                     (0, 255, 0),  # Color (Green in this case)
+        #                     2)  # Line thickness
+
+        #         writer.append_data(img)
+
+####new
         output_path = os.path.join(self.feature_path, '_'.join(features) + '.mp4')
         with imageio.get_writer(output_path, mode='I', fps=5) as writer:
-            for idx, img in enumerate(stack_frames):
-                cv2.putText(img, f"Frame: {idx}", 
-                            (10, 30),  # Position
-                            cv2.FONT_HERSHEY_SIMPLEX,  # Font
-                            1,  # Font scale
-                            (0, 255, 0),  # Color (Green in this case)
-                            2)  # Line thickness
+            for idx in range(len(self.sync_indices)):
+                lst = []
+                for f in features:
+                    feature_data = function_dict[f](idx)
+                    #logging.error(f"raw {f}: {feature_data.shape}")
+                    
+                    if f == 'RD': 
+                        #logging.error('RD begin->')
+                        feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+                        feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+                        feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+                        feature_data = cv2.transpose(feature_data)
+                        feature_data = cv2.flip(feature_data, flipCode=0)
+                        feature_data = cv2.resize(feature_data, dsize=(192, 720))
+                        #logging.error('RD created')
+                        #logging.error(f"converted {f}->:{feature_data.shape}")
+                    elif f == 'RA' or f == 'spectrogram': 
+                        #logging.error('RA begin->')
+                        feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
+                        feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
+                        feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
+                        feature_data = cv2.flip(feature_data, flipCode=-1)
+                        feature_data = cv2.resize(feature_data, dsize=(432, 720))
+                        #logging.error('RA created')
+                    elif f == 'depth_image':
+                        feature_data = cv2.cvtColor(feature_data.astype('uint8'),cv2.COLOR_GRAY2BGR)
+                    elif f == 'radarPC' or f == 'lidarPC': # point cloud
+                        #logging.error('PCL begin->')
+                        #logging.error(feature_data)
+                        plt.figure(figsize=(8, 6))
+                        if feature_data.size > 0:
+                            plt.plot(feature_data[:,1], feature_data[:,0], '.')
+                        plt.xlim(-20, 20)
+                        plt.ylim(0, 20)
+                        plt.grid()
+                        plot_arr = self.plot_to_array(plt)
+                        #logging.error(f"raw plot: {plot_arr.shape}")
+                        plt.close()
+                        feature_data = cv2.resize(plot_arr, dsize=(1024, 720))
+                        #logging.error(f"converted {f}->:{feature_data.shape}")
+                        #logging.error('PCL created')
 
-                writer.append_data(img)
+                    lst.append(feature_data)
+                    
+                frame = np.hstack(lst)
+                cv2.putText(frame, f"Frame: {idx}", 
+                                (10, 30),  # Position
+                                cv2.FONT_HERSHEY_SIMPLEX,  # Font
+                                1,  # Font scale
+                                (0, 255, 0),  # Color (Green in this case)
+                                2)  # Line thickness
 
+                writer.append_data(frame)
+                logging.error(idx)
+####
         return output_path
 
     def get_RAD(self, idx=None):
