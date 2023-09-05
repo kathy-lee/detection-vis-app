@@ -148,46 +148,6 @@ for idx, f in enumerate(featureset):
 st.info(features)
 st.info(features_show)
 
-
-if "RD" in features and not features_show[features.index("RD")]:
-  if "fft_cfg" not in st.session_state:
-    st.session_state.fft_cfg = 0
-  fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
-  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
-  st.session_state.fft_cfg = fft_config_list.index(fft_config)
-
-
-if "spectrogram" in features and not features_show[features.index("spectrogram")]:
-  if "tfa_cfg" not in st.session_state:
-    st.session_state.tfa_cfg = 0
-  tfa_config_list = ["Not interested", "STFT", "WV"]
-  tfa_config = st.sidebar.radio("How would you like to do time frequency analysis?", tfa_config_list, index=st.session_state.tfa_cfg)
-  st.session_state.tfa_cfg = tfa_config_list.index(tfa_config)
-
-
-if "RA" in features and not features_show[features.index("RA")]:
-  if "aoa_cfg" not in st.session_state:
-    st.session_state.aoa_cfg = 0
-  aoa_config_list = ["Not interested", "Barlett", "Capon"]
-  aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
-  st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
-
-
-if "noise_cfg" not in st.session_state:
-  st.session_state.noise_cfg = 0
-noise_config_list = ["Not interested", "Static noise removal"]
-noise_config = st.sidebar.radio("How would you like to remove nosie?", noise_config_list, index=st.session_state.noise_cfg)
-st.session_state.noise_cfg = noise_config_list.index(noise_config)
-
-
-if "radarPC" in features and not features_show[features.index("radarPC")]:
-  if "cfar_cfg" not in st.session_state:
-    st.session_state.cfar_cfg = 0
-  cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
-  cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
-  st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
-
-
 @st.cache_data
 def get_feature(file_id, feature, idx):
   response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/{idx}")
@@ -246,7 +206,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.ylim(0, max(feature_image[:,0])) # plt.ylim(0,100)
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
-    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
     st.pyplot(plt)
   elif feature == "RD":
     #rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
@@ -256,22 +216,85 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     #plt.imshow(np.log10(power_spectrum), aspect='auto')
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image) #, aspect='auto'
-    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
     st.pyplot(plt)
   elif feature == "RA":
+    if feature_image.ndim > 2:
+      feature_image = np.sqrt(feature_image[:, :, 0] ** 2 + feature_image[:, :, 1] ** 2)
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image, aspect='auto')
-    plt.title(f"index: {st.session_state[counter]}", y=-0.1)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
     st.pyplot(plt)
   else:
     feature_image = feature_image - np.min(feature_image)
     feature_image = feature_image / np.max(feature_image)
-    st.image(feature_image, caption=f"index: {st.session_state[counter]}")
+    st.image(feature_image, caption=f"index: {st.session_state[counter]}, shape: {feature_image.shape}")
   return
 
 
 if 'frame_slider' in st.session_state:
   st.session_state.frame_id = st.session_state['frame_slider']
+
+
+if "RD" in features and not features_show[features.index("RD")]:
+  if "fft_cfg" not in st.session_state:
+    st.session_state.fft_cfg = 0
+  fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
+  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
+  st.session_state.fft_cfg = fft_config_list.index(fft_config)
+
+
+if "spectrogram" in features and not features_show[features.index("spectrogram")]:
+  if "tfa_cfg" not in st.session_state:
+    st.session_state.tfa_cfg = 0
+  tfa_config_list = ["Not interested", "STFT", "WV"]
+  tfa_config = st.sidebar.radio("How would you like to do time frequency analysis?", tfa_config_list, index=st.session_state.tfa_cfg)
+  st.session_state.tfa_cfg = tfa_config_list.index(tfa_config)
+
+
+feature = "RA"
+counter = f"counter_{feature}" 
+if feature in features:
+  if not features_show[features.index(feature)]:
+    if "aoa_cfg" not in st.session_state:
+      st.session_state.aoa_cfg = 0
+    aoa_config_list = ["Not interested", "Barlett", "Capon"]
+    aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
+    st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
+    #
+    if aoa_config in ("Barlett", "Capon"):
+      expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+      if counter not in st.session_state:
+        st.session_state[counter] = st.session_state.frame_id
+      with expander_RA:
+        show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
+  else:
+    expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+    if counter not in st.session_state:
+      st.session_state[counter] = st.session_state.frame_id
+    with expander_RA:
+      show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
+
+
+if "noise_cfg" not in st.session_state:
+  st.session_state.noise_cfg = 0
+noise_config_list = ["Not interested", "Static noise removal"]
+noise_config = st.sidebar.radio("How would you like to remove nosie?", noise_config_list, index=st.session_state.noise_cfg)
+st.session_state.noise_cfg = noise_config_list.index(noise_config)
+
+
+if "radarPC" in features and not features_show[features.index("radarPC")]:
+  if "cfar_cfg" not in st.session_state:
+    st.session_state.cfar_cfg = 0
+  cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
+  cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
+  st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
+
+
+
+
+
+
 
 feature = "image"
 counter = f"counter_{feature}" 
@@ -314,14 +337,20 @@ if feature in features and (features_show[features.index("RD")] or fft_config in
     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=cfg)
 
 
-feature = "RA" 
-counter = f"counter_{feature}"  
-if feature in features and aoa_config in ("Barlett", "Capon"):
-  expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-  if counter not in st.session_state:
-    st.session_state[counter] = st.session_state.frame_id
-  with expander_RA:
-    show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
+# feature = "RA" 
+# counter = f"counter_{feature}"  
+# if aoa_config in ("Barlett", "Capon"):
+#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+#   if counter not in st.session_state:
+#     st.session_state[counter] = st.session_state.frame_id
+#   with expander_RA:
+#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
+# elif feature in features:
+#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+#   if counter not in st.session_state:
+#     st.session_state[counter] = st.session_state.frame_id
+#   with expander_RA:
+#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
 
 
 feature = "spectrogram" 
@@ -354,14 +383,18 @@ def get_feature_video(file_id, features):
 
 # get current shown features' names
 feature_list = [f for f, b in zip(features, features_show) if b]
-if st.session_state.cfar_cfg > 0 and 'radarPC' not in feature_list:
-  feature_list.append('radarPC')
-if st.session_state.aoa_cfg > 0 and 'RA' not in feature_list:
-  feature_list.append('RA')
-if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
-  feature_list.append('spectrogram')
-if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
-  feature_list.append('RD')
+if "cfar_cfg" in st.session_state:
+  if st.session_state.cfar_cfg > 0 and 'radarPC' not in feature_list:
+    feature_list.append('radarPC')
+if "aoa_cfg" in st.session_state:
+  if st.session_state.aoa_cfg > 0 and 'RA' not in feature_list:
+    feature_list.append('RA')
+if "tfa_cfg" in st.session_state:
+  if st.session_state.tfa_cfg > 0 and 'spectrogram' not in feature_list:
+    feature_list.append('spectrogram')
+if "fft_cfg" in st.session_state:
+  if st.session_state.fft_cfg > 0 and 'RD' not in feature_list:
+    feature_list.append('RD')
 
 # ###### old video widget
 # if st.session_state.frame_sync:
