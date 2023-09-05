@@ -19,15 +19,22 @@
         "split":[0.7,0.15,0.15],
         "train": {
             "batch_size": 4,
-            "num_workers": 4
+            "num_workers": 4,
+            "data": ["2019_04_09_BMS1000", "2019_04_09_BMS1001"]
     	},
         "val": {
             "batch_size": 4,
-            "num_workers": 4
+            "num_workers": 4,
+            "data": ["2019_04_09_BMS1002"]
         },
         "test": {
             "batch_size": 1,
-            "num_workers": 1
+            "num_workers": 1,
+            "data": ["2019_04_09_CMS1002"]
         }
-    }
+    },
+
+    "win_size": 16,
+    "train_step": 1,
+    "train_stride": 4
 }
