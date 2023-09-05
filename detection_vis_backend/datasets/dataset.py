@@ -26,6 +26,7 @@ from detection_vis_backend.datasets.utils import read_radar_params, reshape_fram
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
+
 class DatasetFactory:
     _instance = None
     def __new__(cls, *args, **kwargs):
@@ -697,7 +698,7 @@ class RADIal(Dataset):
 class RADIalRaw(Dataset):
     name = "RADIal raw dataset instance"  # RADIal data has two formats: raw and ready-to-use
 
-    def __init__(self, features=None):
+    def __init__(self):
         self.feature_path = ""
         self.config = ""
 
@@ -713,7 +714,7 @@ class RADIalRaw(Dataset):
         self.numReducedDoppler = 16
         self.numChirpsPerLoop = 16
     
-    def parse_recording(folder):
+    def parse_recording(self, folder):
         recorder_folder_path = Path(folder)
         
         list_files = [file for file in os.listdir(recorder_folder_path) if os.isfile(os.path.join(recorder_folder_path, file))]
@@ -1244,3 +1245,63 @@ class RADIalRaw(Dataset):
     def get_spectrogram(self, idx=None):
         return None
 
+
+
+class CRUW(Dataset):
+    name = "CRUW ROD2021 dataset instance"
+
+    def __init__(self, features=None):
+        self.feature_path = ""
+        self.config = ""
+
+        self.frame_sync = 0
+        self.features = ['image', 'RA']
+
+    def parse(self, file_id, file_path, file_name, config):
+        self.config = config
+        self.root_path = file_path
+        self.seq_name = file_name
+
+        def get_sorted_filenames(directory):
+            # Get a sorted list of all file names in the given directory
+            return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
+        
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'TRAIN_CAM_0', file_name, 'IMAGES_0'))
+        self.frame_sync = len(self.image_filenames)
+
+        self.labels = os.path.join(self.root_path, 'TRAIN_RAD_H_ANNO', self.seq_name+'.txt')
+
+        return 
+    
+    def get_image(self, idx=None): 
+        image = np.asarray(Image.open(self.image_filenames[idx]))
+        return image
+    
+    def get_RA(self, idx=None):
+        chirp_path = os.path.join(self.root_path, 'TRAIN_RAD_H', self.seq_name, 'RADAR_RA_H', '%06d_0000.npy' % idx) # 000000_0192.npy
+        return np.load(chirp_path)
+
+    def get_RAD(self, idx=None):
+        return None
+    
+    def get_RD(self, idx=None):
+        return None
+
+    def get_radarpointcloud(self, idx=None):
+        return None
+
+    def get_lidarpointcloud(self, idx=None):
+        return None
+
+    def get_depthimage(self, idx=None):
+        return None
+      
+    def get_spectrogram(self, idx=None):
+        return None
+
+    def __len__(self):
+        return self.frame_sync
+
+    def __getitem__(self, index):
+        
+       return None
