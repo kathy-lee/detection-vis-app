@@ -12,12 +12,14 @@ import pandas as pd
 import pickle
 import time
 
+
 from metaflow import FlowSpec, Parameter, step, current
 from pathlib import Path
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import lr_scheduler
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -81,12 +83,12 @@ class TrainDataset(Dataset):
             #     self.data_files = [subset + '.pkl']
             # else:
             #     # self.data_files = list_pkl_filenames(config_dict['dataset_cfg'], split)
-            self.data_files = sorted(os.listdir(os.path.join(self.pkl_path, split)))
+            self.data_files = sorted(os.listdir(self.pkl_path))
             self.seq_names = [name.split('.')[0] for name in self.data_files]
             self.n_seq = len(self.seq_names)
 
             for seq_id, data_file in enumerate(tqdm(self.data_files)):
-                data_file_path = os.path.join(self.pkl_path, split, data_file)
+                data_file_path = os.path.join(self.pkl_path, data_file)
                 data_details = pickle.load(open(data_file_path, 'rb'))
                 # if split == 'train' or split == 'valid':
                 #     assert data_details['anno'] is not None
@@ -245,19 +247,15 @@ class TrainDataset(Dataset):
     def prepare(self):
         if self.model_cfg['type'] == 'RODNet':
             sets_seqs = [dataset.name for dataset in self.datasets]
-            # Split
-            type_of_seq = ['train'] * len(sets_seqs) # ['train', 'valid', 'test']
-            type_of_seq[-2] = 'valid'
-            type_of_seq[-1] = 'test'
 
             data_root = self.datasets[0].root_path
 
             tmp_path = Path(os.getenv('TMP_ROOTDIR')).joinpath('RODNet')
             tmp_path.mkdir(parents=True, exist_ok=True)
             self.pkl_path = tmp_path
-            (tmp_path / 'train').mkdir(parents=True, exist_ok=True)
-            (tmp_path / 'valid').mkdir(parents=True, exist_ok=True)
-            (tmp_path / 'test').mkdir(parents=True, exist_ok=True)
+            # (tmp_path / 'train').mkdir(parents=True, exist_ok=True)
+            # (tmp_path / 'valid').mkdir(parents=True, exist_ok=True)
+            # (tmp_path / 'test').mkdir(parents=True, exist_ok=True)
 
             # (data_path / 'sequences').mkdir(parents=True, exist_ok=True)
             # (data_path / 'sequences' / 'train').mkdir(parents=True, exist_ok=True)
@@ -296,7 +294,7 @@ class TrainDataset(Dataset):
                 # seq_path = os.path.join(data_root, set_cfg['subdir'], seq)
                 # seq_anno_path = os.path.join(anno_root, set_cfg['subdir'], seq + '.txt')
                 seq_anno_path = os.path.join(data_root, 'TRAIN_RAD_H_ANNO', seq + '.txt')
-                save_path = os.path.join(tmp_path, type_of_seq[i], seq + '.pkl')
+                save_path = os.path.join(tmp_path, seq + '.pkl')
                 print("Sequence %s saving to %s" % (seq, save_path))
 
                 try:
