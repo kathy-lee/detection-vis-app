@@ -199,7 +199,11 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
 
-        count = dataset_inst.frames_count[feature_name]
+        frame_sync = dataset_inst.frame_sync
+        if frame_sync > 0:
+            count = frame_sync
+        else:
+            count = dataset_inst.frames_count[feature_name]
         # if feature_name in ("image", "depth_image", "lidarPC"):
         #     count = dataset_inst.frames_count[feature_name]
         # else:
