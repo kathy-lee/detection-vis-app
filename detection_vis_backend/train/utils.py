@@ -7,23 +7,14 @@ import torch.nn as nn
 import logging
 import cv2
 import polarTransform
+import math
+import scipy
+import matplotlib.pyplot as plt
+
 
 from torch.utils.data import DataLoader, random_split, Subset
 from shapely.geometry import Polygon
 
-
-
-# class TrainDataset(Dataset):
-#     def __init__(self, data):
-#         self.data = data
-#         self.keys = list(self.data.keys())
-#         self.length = len(self.data[self.keys[0]])
-
-#     def __getitem__(self, index):
-#         return {key: self.data[key][index] for key in self.keys}
-
-#     def __len__(self):
-#         return self.length
 
 def CreateDataLoaders(dataset,config=None,seed=0):
 
@@ -443,3 +434,286 @@ def worldToImage(x,y,z):
     u = int(min(max(0,imgpts[0][0][0]),ImageWidth-1))
     v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
     return u, v
+
+
+def load_anno_txt(txt_path, n_frame, radar_cfg):
+    folder_name_dict = dict(
+        cam_0='IMAGES_0',
+        rad_h='RADAR_RA_H'
+    )
+    anno_dict = init_meta_json(n_frame, folder_name_dict)
+
+    range_grid = confmap2ra(radar_cfg, name='range')
+    angle_grid = confmap2ra(radar_cfg, name='angle')
+    
+    with open(txt_path, 'r') as f:
+        data = f.readlines()
+    for line in data:
+        frame_id, r, a, class_name = line.rstrip().split()
+        frame_id = int(frame_id)
+        r = float(r)
+        a = float(a)
+        rid, aid = ra2idx(r, a, range_grid, angle_grid)
+        anno_dict[frame_id]['rad_h']['n_objects'] += 1
+        anno_dict[frame_id]['rad_h']['obj_info']['categories'].append(class_name)
+        anno_dict[frame_id]['rad_h']['obj_info']['centers'].append([r, a])
+        anno_dict[frame_id]['rad_h']['obj_info']['center_ids'].append([rid, aid])
+        anno_dict[frame_id]['rad_h']['obj_info']['scores'].append(1.0)
+
+    return anno_dict
+
+
+def get_class_id(class_str, classes):
+    if class_str in classes:
+        class_id = classes.index(class_str)
+    else:
+        if class_str == '':
+            raise ValueError("No class name found")
+        else:
+            class_id = -1000
+    return class_id
+
+
+def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
+    """
+    Generate confidence map a radar frame.
+    :param n_obj: number of objects in this frame
+    :param obj_info: obj_info includes metadata information
+    :param dataset: dataset object
+    :param config_dict: rodnet configurations
+    :param gaussian_thres: threshold for gaussian distribution in confmaps
+    :return: generated confmap
+    """
+
+    confmap_cfg = dict(
+        confmap_sigmas={
+            'pedestrian': 15,
+            'cyclist': 20,
+            'car': 30,
+            # 'van': 40,
+            # 'truck': 50,
+        },
+        confmap_sigmas_interval={
+            'pedestrian': [5, 15],
+            'cyclist': [8, 20],
+            'car': [10, 30],
+            # 'van': [15, 40],
+            # 'truck': [20, 50],
+        },
+        confmap_length={
+            'pedestrian': 1,
+            'cyclist': 2,
+            'car': 3,
+            # 'van': 4,
+            # 'truck': 5,
+        }
+)
+    n_class = 3 # dataset.object_cfg.n_class
+    classes = ["pedestrian", "cyclist", "car"] # dataset.object_cfg.classes
+    confmap_sigmas = confmap_cfg['confmap_sigmas']
+    confmap_sigmas_interval = confmap_cfg['confmap_sigmas_interval']
+    confmap_length = confmap_cfg['confmap_length']
+
+    range_grid = confmap2ra(radar_configs, name='range')
+    angle_grid = confmap2ra(radar_configs, name='angle')
+
+    confmap = np.zeros((n_class, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
+    for objid in range(n_obj):
+        rng_idx = obj_info['center_ids'][objid][0]
+        agl_idx = obj_info['center_ids'][objid][1]
+        class_name = obj_info['categories'][objid]
+        if class_name not in classes:
+            # print("not recognized class: %s" % class_name)
+            continue
+        class_id = get_class_id(class_name, classes)
+        sigma = 2 * np.arctan(confmap_length[class_name] / (2 * range_grid[rng_idx])) * confmap_sigmas[class_name]
+        sigma_interval = confmap_sigmas_interval[class_name]
+        if sigma > sigma_interval[1]:
+            sigma = sigma_interval[1]
+        if sigma < sigma_interval[0]:
+            sigma = sigma_interval[0]
+        for i in range(radar_configs['ramap_rsize']):
+            for j in range(radar_configs['ramap_asize']):
+                distant = (((rng_idx - i) * 2) ** 2 + (agl_idx - j) ** 2) / sigma ** 2
+                if distant < gaussian_thres:  # threshold for confidence maps
+                    value = np.exp(- distant / 2) / (2 * math.pi)
+                    confmap[class_id, i, j] = value if value > confmap[class_id, i, j] else confmap[class_id, i, j]
+
+    return confmap
+
+
+def normalize_confmap(confmap):
+    conf_min = np.min(confmap)
+    conf_max = np.max(confmap)
+    if conf_max - conf_min != 0:
+        confmap_norm = (confmap - conf_min) / (conf_max - conf_min)
+    else:
+        confmap_norm = confmap
+    return confmap_norm
+
+
+def add_noise_channel(confmap, radar_configs):
+    n_class = 3 # dataset.object_cfg.n_class
+
+    confmap_new = np.zeros((n_class + 1, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
+    confmap_new[:n_class, :, :] = confmap
+    conf_max = np.max(confmap, axis=0)
+    confmap_new[n_class, :, :] = 1.0 - conf_max
+    return confmap_new
+
+
+def visualize_confmap(confmap, pps=[]):
+    if len(confmap.shape) == 2:
+        plt.imshow(confmap, origin='lower', aspect='auto')
+        for pp in pps:
+            plt.scatter(pp[1], pp[0], s=5, c='white')
+        plt.show()
+        return
+    else:
+        n_channel, _, _ = confmap.shape
+    if n_channel == 3:
+        confmap_viz = np.transpose(confmap, (1, 2, 0))
+    elif n_channel > 3:
+        confmap_viz = np.transpose(confmap[:3, :, :], (1, 2, 0))
+        if n_channel == 4:
+            confmap_noise = confmap[3, :, :]
+            plt.imshow(confmap_noise, origin='lower', aspect='auto')
+            plt.show()
+    else:
+        print("Warning: wrong shape of confmap!")
+        return
+    plt.imshow(confmap_viz, origin='lower', aspect='auto')
+    for pp in pps:
+        plt.scatter(pp[1], pp[0], s=5, c='white')
+    plt.show()
+
+
+def generate_confmaps(metadata_dict, n_class, viz, radar_configs):
+    confmaps = []
+    for metadata_frame in metadata_dict:
+        n_obj = metadata_frame['rad_h']['n_objects']
+        obj_info = metadata_frame['rad_h']['obj_info']
+        if n_obj == 0:
+            confmap_gt = np.zeros(
+                (n_class + 1, radar_configs['ramap_rsize'], radar_configs['ramap_asize']),
+                dtype=float)
+            confmap_gt[-1, :, :] = 1.0  # initialize noise channal
+        else:
+            confmap_gt = generate_confmap(n_obj, obj_info, radar_configs)
+            confmap_gt = normalize_confmap(confmap_gt)
+            confmap_gt = add_noise_channel(confmap_gt, radar_configs)
+        assert confmap_gt.shape == (
+            n_class + 1, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+        if viz:
+            visualize_confmap(confmap_gt)
+        confmaps.append(confmap_gt)
+    confmaps = np.array(confmaps)
+    return confmaps
+
+
+def init_meta_json(n_frames, 
+                   imwidth=1440, imheight=864,
+                   rarange=128, raazimuth=128, n_chirps=255):
+    folder_name_dict = dict(
+        cam_0='IMAGES_0',
+        cam_1='IMAGES_1',
+        rad_h='RADAR_RA_H'
+    )
+    meta_all = []
+    for frame_id in range(n_frames):
+        meta_dict = dict(frame_id=frame_id)
+        for key in folder_name_dict.keys():
+            if key.startswith('cam'):
+                meta_dict[key] = init_camera_json(folder_name_dict[key], imwidth, imheight)
+            elif key.startswith('rad'):
+                meta_dict[key] = init_radar_json(folder_name_dict[key], rarange, raazimuth, n_chirps)
+            else:
+                raise NotImplementedError
+        meta_all.append(meta_dict)
+    return meta_all
+
+
+def init_camera_json(folder_name, width, height):
+    return dict(
+        folder_name=folder_name,
+        frame_name=None,
+        width=width,
+        height=height,
+        n_objects=0,
+        obj_info=dict(
+            anno_source=None,
+            categories=[],
+            bboxes=[],
+            scores=[],
+            masks=[]
+        )
+    )
+
+
+def init_radar_json(folder_name, range, azimuth, n_chirps):
+    return dict(
+        folder_name=folder_name,
+        frame_name=None,
+        range=range,
+        azimuth=azimuth,
+        n_chirps=n_chirps,
+        n_objects=0,
+        obj_info=dict(
+            anno_source=None,
+            categories=[],
+            centers=[],
+            center_ids=[],
+            scores=[]
+        )
+    )
+
+
+def ra2idx(rng, agl, range_grid, angle_grid):
+    """Mapping from absolute range (m) and azimuth (rad) to ra indices."""
+    rng_id, _ = find_nearest(range_grid, rng)
+    agl_id, _ = find_nearest(angle_grid, agl)
+    return rng_id, agl_id
+
+
+def find_nearest(array, value):
+    """Find nearest value to 'value' in 'array'."""
+    array = np.asarray(array)
+    idx = (np.abs(array - value)).argmin()
+    return idx, array[idx]
+
+
+def confmap2ra(radar_configs, name, radordeg='rad'):
+    """
+    Map confidence map to range(m) and angle(deg): not uniformed angle
+    :param radar_configs: radar configurations
+    :param name: 'range' for range mapping, 'angle' for angle mapping
+    :param radordeg: choose from radius or degree for angle grid
+    :return: mapping grids
+    """
+    # TODO: add more args for different network settings
+    Fs = radar_configs['sample_freq']
+    sweepSlope = radar_configs['sweep_slope']
+    num_crop = radar_configs['crop_num']
+    fft_Rang = radar_configs['ramap_rsize'] + 2 * num_crop
+    fft_Ang = radar_configs['ramap_asize']
+    c = scipy.constants.speed_of_light
+
+    if name == 'range':
+        freq_res = Fs / fft_Rang
+        freq_grid = np.arange(fft_Rang) * freq_res
+        rng_grid = freq_grid * c / sweepSlope / 2
+        rng_grid = rng_grid[num_crop:fft_Rang - num_crop]
+        return rng_grid
+
+    if name == 'angle':
+        # for [-90, 90], w will be [-1, 1]
+        w = np.linspace(math.sin(math.radians(radar_configs['ra_min'])),
+                        math.sin(math.radians(radar_configs['ra_max'])),
+                        radar_configs['ramap_asize'])
+        if radordeg == 'deg':
+            agl_grid = np.degrees(np.arcsin(w))  # rad to deg
+        elif radordeg == 'rad':
+            agl_grid = np.arcsin(w)
+        else:
+            raise TypeError
+        return agl_grid
