@@ -1,10 +1,19 @@
 {
-    "fftradnet": {
+    "FFTRadNet": {
         "blocks": [3, 6, 6, 3],
         "channels": [32,40,48,56],
         "mimo_layer": 192,
         "detection_head": "True",
         "segmentation_head": "True"
+    },
+    
+    "RODNet": {
+        "type": "CDCv2",
+        "name": "rodnet-cdcv2-win16-mnet-dcn",
+        "max_dets": 20,
+        "peak_thres": 0.3,
+        "ols_thres": 0.3,
+        "mnet_cfg": [4, 32],
+        "dcn": "True"
     }
-
 }
