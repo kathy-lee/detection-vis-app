@@ -268,18 +268,18 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    # try: 
-    #     train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
-    #     with open('exp_info.txt', 'r') as f:
-    #         exp_name = f.read()
+    try: 
+        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
+        with open('exp_info.txt', 'r') as f:
+            exp_name = f.read()
 
-    #     model_meta = schemas.MLModelCreate(name=exp_name,description="info")
-    #     crud.add_model(db=db, mlmodel=model_meta)
-    # except Exception as e:
-    #     logging.error(f"An unexpected error occurred during training: {str(e)}")
-    #     raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+        model_meta = schemas.MLModelCreate(name=exp_name,description="info")
+        crud.add_model(db=db, mlmodel=model_meta)
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during training: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
 
-    exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
+    #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
     return {"model_name": exp_name}
 
 
