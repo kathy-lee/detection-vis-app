@@ -70,7 +70,7 @@ def config_editor(model_cfg, train_cfg):
                 readonly=False,
                 annotations=None)
   model_configs = json.loads(formatted_model_configs)
-  model_configs["type"] = model
+  model_configs["class"] = model
   st.session_state.model_configs = model_configs
   
   st.write("Train config:")
@@ -112,6 +112,17 @@ if train_mode == train_modes[0]:
     train_action = st.button("Train", key="train_btn")
     if train_action:
       with st.spinner(text="Training model in progress..."):
+        # find the chosen data files which are not parsed yet, and parse them
+        for f in st.session_state.datafiles_chosen:
+          datafile_parsed = f"parse_{f['id']}"
+          if datafile_parsed not in st.session_state:
+            st.session_state[datafile_parsed] = False
+            response = requests.get(f"http://{backend_service}:8001/parse/{f['id']}")
+            if response.status_code != 204:
+              st.info(f"An error occurred in parsing data file {f['name']}.")
+              st.stop()
+            else:
+              st.session_state[datafile_parsed] = True
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
                   "features_chosen": st.session_state.features_chosen, 
                   "mlmodel_configs": st.session_state.model_configs, 
