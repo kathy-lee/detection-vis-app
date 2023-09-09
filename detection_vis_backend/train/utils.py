@@ -10,20 +10,95 @@ import polarTransform
 import math
 import scipy
 import matplotlib.pyplot as plt
+import re
 
 
 from torch.utils.data import DataLoader, random_split, Subset
 from shapely.geometry import Polygon
 
 
+def RADIal_collate(batch):
+    images = []
+    FFTs = []
+    segmaps = []
+    labels = []
+    encoded_label = []
+
+    for radar_FFT, segmap,out_label,box_labels,image in batch:
+        FFTs.append(torch.tensor(radar_FFT).permute(2,0,1))
+        segmaps.append(torch.tensor(segmap))
+        encoded_label.append(torch.tensor(out_label))
+        images.append(torch.tensor(image))
+        labels.append(torch.from_numpy(box_labels))    
+    return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
+
+
+def ROD_collate(batch):
+    r"""Puts each data field into a tensor with outer dimension batch size"""
+
+    np_str_obj_array_pattern = re.compile(r'[SaUO]')
+    default_collate_err_msg_format = (
+        "default_collate: batch must contain tensors, numpy arrays, numbers, "
+        "dicts or lists; found {}")
+
+    elem = batch[0]
+    elem_type = type(elem)
+    if elem is None:
+        return None
+    elif isinstance(elem, torch.Tensor):
+        # out = None
+        # if torch.utils.data.get_worker_info() is not None:
+        #     # If we're in a background process, concatenate directly into a
+        #     # shared memory tensor to avoid an extra copy
+        #     numel = sum([x.numel() for x in batch])
+        #     storage = elem.untyped_storage()._new_shared(numel)
+        #     out = elem.new(storage)
+        # return torch.stack(batch, 0, out=out)
+        return torch.stack(batch, 0)
+    elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
+            and elem_type.__name__ != 'string_':
+        elem = batch[0]
+        if elem_type.__name__ == 'ndarray':
+            # array of string classes and object
+            if np_str_obj_array_pattern.search(elem.dtype.str) is not None:
+                raise TypeError(default_collate_err_msg_format.format(elem.dtype))
+
+            return ROD_collate([torch.as_tensor(b) for b in batch])
+        elif elem.shape == ():  # scalars
+            return torch.as_tensor(batch)
+    elif isinstance(elem, float):
+        return torch.tensor(batch, dtype=torch.float64)
+    elif isinstance(elem, bool):
+        return all(batch)
+    elif isinstance(elem, int): # int_classes
+        return torch.tensor(batch)
+    elif isinstance(elem, str): # string_classes
+        return batch
+    elif isinstance(elem, dict): # container_abcs.Mapping
+        return {key: ROD_collate([d[key] for d in batch]) for key in elem}
+    elif isinstance(elem, tuple) and hasattr(elem, '_fields'):  # namedtuple
+        return elem_type(*(ROD_collate(samples) for samples in zip(*batch)))
+    elif isinstance(elem, (list, tuple)): # container_abcs.Sequence
+        # transposed = zip(*batch)
+        # return [cr_collate(samples) for samples in transposed]
+        return batch
+
+    raise TypeError(default_collate_err_msg_format.format(elem_type))
+
+
 def CreateDataLoaders(dataset,config=None,seed=0):
 
-    if(config['mode']=='random'):
+    if dataset.model_cfg['class'] == 'FFTRadNet':
+        collate_func = RADIal_collate
+    elif dataset.model_cfg['class'] == 'RODNet':
+        collate_func = ROD_collate
+
+    if(config['splitmode']=='random'):
         # generated training and validation set
         # number of images used for training and validation
         n_images = dataset.__len__()
 
-        split = np.array(config['split'])
+        split = np.array(config['split_random'])
         if(np.sum(split)!=1):
             raise NameError('The sum of the train/val/test split should be equal to 1')
             return
@@ -36,8 +111,8 @@ def CreateDataLoaders(dataset,config=None,seed=0):
             dataset, [n_train, n_val,n_test], generator=torch.Generator().manual_seed(seed))
 
         print('===========  Dataset  ==================:')
-        print('      Mode:', config['mode'])
-        print('      Train Val ratio:', config['split'])
+        print('      Mode:', config['splitmode'])
+        print('      Train Val ratio:', config['split_random'])
         print('      Training:', len(train_dataset),' indexes...',train_dataset.indices[:3])
         print('      Validation:', len(val_dataset),' indexes...',val_dataset.indices[:3])
         print('      Test:', len(test_dataset),' indexes...',test_dataset.indices[:3])
@@ -49,63 +124,74 @@ def CreateDataLoaders(dataset,config=None,seed=0):
                                 shuffle=True,
                                 num_workers=config['train']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
+                                collate_fn=collate_func)
         val_loader = DataLoader(val_dataset, 
                                 batch_size=config['val']['batch_size'], 
                                 shuffle=False,
                                 num_workers=config['val']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
+                                collate_fn=collate_func)
         test_loader = DataLoader(test_dataset, 
                                 batch_size=config['test']['batch_size'], 
                                 shuffle=False,
                                 num_workers=config['test']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
+                                collate_fn=collate_func)
 
         train_ids = train_dataset.indices
         val_ids = val_dataset.indices
         test_ids = test_dataset.indices
         return train_loader,val_loader,test_loader,train_ids,val_ids,test_ids
-    elif(config['mode']=='sequence'):
-        Sequences = {'Validation':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
-                                   'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
-                    'Test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
-                            'RECORD@2020-11-22_12.03.47','RECORD@2020-11-22_12.54.38']}
+    elif(config['splitmode']=='sequence'):
+        Sequences = config['split_sequence']
         
-        # Added: Get labels and sample_keys 
-        labels = pd.read_csv(os.path.join('/home/kangle/dataset/radial/RADIal-labeled', 'labels.csv')).to_numpy()
-        unique_ids = np.unique(labels[:,0])
-        label_dict = {}
-        for i,ids in enumerate(unique_ids):
-            sample_ids = np.where(labels[:,0]==ids)[0]
-            label_dict[ids]=sample_ids
-        sample_keys = list(label_dict.keys())
+        if dataset.model_cfg['class'] == 'FFTRadNet':
+            # Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
+            #                            'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
+            #             'test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
+            #                     'RECORD@2020-11-22_12.03.47','RECORD@2020-11-22_12.54.38']}
+            
+            labels = dataset.datasets[0].labels
+            dict_index_to_keys = {s:i for i,s in enumerate(dataset.datasets[0].sample_keys)}
 
-        dict_index_to_keys = {s:i for i,s in enumerate(sample_keys)}
+            Val_indexes = []
+            for seq in Sequences['val']:
+                idx = np.where(labels[:,14]==seq)[0]
+                Val_indexes.append(labels[idx,0])
+            Val_indexes = np.unique(np.concatenate(Val_indexes))
 
-        Val_indexes = []
-        for seq in Sequences['Validation']:
-            idx = np.where(labels[:,14]==seq)[0]
-            Val_indexes.append(labels[idx,0])
-        Val_indexes = np.unique(np.concatenate(Val_indexes))
+            Test_indexes = []
+            for seq in Sequences['test']:
+                idx = np.where(labels[:,14]==seq)[0]
+                Test_indexes.append(labels[idx,0])
+            Test_indexes = np.unique(np.concatenate(Test_indexes))
 
-        Test_indexes = []
-        for seq in Sequences['Test']:
-            idx = np.where(labels[:,14]==seq)[0]
-            Test_indexes.append(labels[idx,0])
-        Test_indexes = np.unique(np.concatenate(Test_indexes))
+            val_ids = [dict_index_to_keys[k] for k in Val_indexes]
+            test_ids = [dict_index_to_keys[k] for k in Test_indexes]
+            train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))   
+        else:
+            val_dataset_indices = [i for i, name in enumerate(dataset.dataset_names) if name in Sequences['val']]
+            val_ids = []
+            for idx in val_dataset_indices:
+                start_idx = 0 if idx == 0 else dataset.cumulative_lengths[idx-1]
+                end_idx = dataset.cumulative_lengths[idx]
+                val_ids.extend(range(start_idx, end_idx))
 
-        val_ids = [dict_index_to_keys[k] for k in Val_indexes]
-        test_ids = [dict_index_to_keys[k] for k in Test_indexes]
-        train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))
+            test_dataset_indices = [i for i, name in enumerate(dataset.dataset_names) if name in Sequences['test']]
+            test_ids = []
+            for idx in test_dataset_indices:
+                start_idx = 0 if idx == 0 else dataset.cumulative_lengths[idx-1]
+                end_idx = dataset.cumulative_lengths[idx]
+                test_ids.extend(range(start_idx, end_idx))
+
+            train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))
 
         train_dataset = Subset(dataset,train_ids)
         val_dataset = Subset(dataset,val_ids)
         test_dataset = Subset(dataset,test_ids)
 
         print('===========  Dataset  ==================:')
-        print('      Mode:', config['mode'])
+        print('      Mode:', config['splitmode'])
         print('      Training:', len(train_dataset))
         print('      Validation:', len(val_dataset))
         print('      Test:', len(test_dataset))
@@ -117,42 +203,24 @@ def CreateDataLoaders(dataset,config=None,seed=0):
                                 shuffle=True,
                                 num_workers=config['train']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
+                                collate_fn=collate_func)
         val_loader =  DataLoader(val_dataset, 
                                 batch_size=config['val']['batch_size'], 
                                 shuffle=False,
                                 num_workers=config['val']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
+                                collate_fn=collate_func)
         test_loader =  DataLoader(test_dataset, 
                                 batch_size=config['test']['batch_size'], 
                                 shuffle=False,
                                 num_workers=config['test']['num_workers'],
                                 pin_memory=True,
-                                collate_fn=RADIal_collate)
-
+                                collate_fn=collate_func)
+        print(f"Train/Val/Test Dataloaders in {config['splitmode']} mode created.")
         return train_loader,val_loader,test_loader,train_ids,val_ids,test_ids
-        
     else:      
-        raise NameError(config['mode'], 'is not supported !')
+        raise NameError(config['splitmode'], 'is not supported !')
         return
-
-
-def RADIal_collate(batch):
-    images = []
-    FFTs = []
-    segmaps = []
-    labels = []
-    encoded_label = []
-
-    for radar_FFT, segmap,out_label,box_labels,image in batch:
-
-        FFTs.append(torch.tensor(radar_FFT).permute(2,0,1))
-        segmaps.append(torch.tensor(segmap))
-        encoded_label.append(torch.tensor(out_label))
-        images.append(torch.tensor(image))
-        labels.append(torch.from_numpy(box_labels))    
-    return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
 
 def decode(map,threshold):
@@ -507,7 +575,7 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
             # 'van': 4,
             # 'truck': 5,
         }
-)
+    )
     n_class = 3 # dataset.object_cfg.n_class
     classes = ["pedestrian", "cyclist", "car"] # dataset.object_cfg.classes
     confmap_sigmas = confmap_cfg['confmap_sigmas']
