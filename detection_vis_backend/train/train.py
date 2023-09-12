@@ -31,7 +31,7 @@ from detection_vis_backend.train.evaluate import run_evaluation, run_FullEvaluat
 
 
 class TrainDataset(Dataset):
-    def __init__(self, datasets, model_cfg, train_cfg):
+    def __init__(self, datasets, model_cfg, train_cfg, features):
         """
         Args:
             datasets (list): A list of dataset instances.
@@ -52,6 +52,7 @@ class TrainDataset(Dataset):
         self.cumulative_lengths = np.cumsum(self.dataset_lengths)
         self.model_cfg = model_cfg
         self.train_cfg = train_cfg
+        self.features = features
         self.data_root = self.datasets[0].root_path
 
         if self.model_cfg['class'] == 'RODNet':
@@ -141,10 +142,19 @@ class TrainDataset(Dataset):
         # dataset_idx = next(i for i, cumulative_length in enumerate(self.cumulative_lengths) if idx < cumulative_length)
         # if dataset_idx > 0:
         #     idx = idx - self.cumulative_lengths[dataset_idx - 1]
-        # return self.datasets[dataset_idx].get_data(idx) # Assuming each dataset instance has a `get_data` method
+        # return self.datasets[dataset_idx].get_data(idx) 
     
         if self.model_cfg['class'] == 'FFTRadNet':
-            return None # (radar_FFT, segmap,out_label,box_labels,image)
+            # (radar_FFT, segmap,out_label,box_labels,image)
+            # Determine which dataset the index belongs to
+            if idx < 0:
+                if -idx > len(self):
+                    raise ValueError("absolute value of index should not exceed dataset length")
+                idx = len(self) + idx
+            dataset_idx = next(i for i, cumulative_length in enumerate(self.cumulative_lengths) if idx < cumulative_length)
+            if dataset_idx > 0:
+                idx = idx - self.cumulative_lengths[dataset_idx - 1]
+            return self.datasets[dataset_idx](idx) 
         elif self.model_cfg['class'] == 'RODNet':
             seq_id, data_id = self.index_mapping[index]
             seq_name = self.seq_names[seq_id]
@@ -221,7 +231,6 @@ class TrainDataset(Dataset):
                 data_dict['start_frame'] = data_id
                 data_dict['end_frame'] = data_id + self.win_size * self.step - 1
                 #print(f"############################ {data_dict['start_frame']} ~~~  {data_dict['end_frame']}")
-
             except:
                 # in case load npy fail
                 data_dict['status'] = False
@@ -420,7 +429,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
         dataset_inst_list.append(dataset_inst)
-    integrated_dataset = TrainDataset(dataset_inst_list, model_config, train_config)
+    integrated_dataset = TrainDataset(dataset_inst_list, model_config, train_config, features)
 
     train_loader, val_loader, test_loader, train_ids, val_ids, test_ids = CreateDataLoaders(integrated_dataset, train_config['dataloader'], train_config['seed'])
 
