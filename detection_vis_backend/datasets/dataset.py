@@ -564,6 +564,38 @@ class RADIal(Dataset):
     def get_spectrogram(self, idx=None):
         return None
 
+    def get_feature(self, feature_name, idx=None):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx)
+        return feature_data
+    
+    def get_label(self, feature_name, idx=None):
+        sample_id = self.sample_keys[idx] 
+        entries_indexes = self.label_dict[sample_id]
+        labels = self.labels[entries_indexes]
+        gt = []
+        for label in labels:
+            if(label[0]==-1):
+                break # -1 means no object
+            if feature_name == "image":
+                gt.append(label[:3])
+            elif feature_name == "lidarPC":
+                gt.append(label[4:5])
+            elif feature_name == "radarPC":
+                gt.label(label[7:8])
+            else: # RD
+                gt.append(label[9, 11])
+        return gt
+    
     def __len__(self):
         return len(self.label_dict)
 
@@ -580,7 +612,7 @@ class RADIal(Dataset):
 
         # Labels contains following parameters:
         # x1_pix	y1_pix	x2_pix	y2_pix	laser_X_m	laser_Y_m	laser_Z_m radar_X_m	radar_Y_m	radar_R_m
-        # format as following [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
+        # format as following: [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
         ######################

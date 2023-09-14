@@ -224,26 +224,24 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        function_dict = {
-            'RAD': dataset_inst.get_RAD,
-            'RD': dataset_inst.get_RD,
-            'RA': dataset_inst.get_RA,
-            'spectrogram': dataset_inst.get_spectrogram,
-            'radarPC': dataset_inst.get_radarpointcloud,
-            'lidarPC': dataset_inst.get_lidarpointcloud,
-            'image': dataset_inst.get_image,
-            'depth_image': dataset_inst.get_depthimage,
-        }
-        feature = function_dict[feature_name](id)
-        
-        if feature_name == "RAD":
-            serialized_feature = [[[(x.real, x.imag) for x in y] for y in z] for z in feature.tolist()]
-        else:
-            serialized_feature = feature.tolist()
+        # function_dict = {
+        #     'RAD': dataset_inst.get_RAD,
+        #     'RD': dataset_inst.get_RD,
+        #     'RA': dataset_inst.get_RA,
+        #     'spectrogram': dataset_inst.get_spectrogram,
+        #     'radarPC': dataset_inst.get_radarpointcloud,
+        #     'lidarPC': dataset_inst.get_lidarpointcloud,
+        #     'image': dataset_inst.get_image,
+        #     'depth_image': dataset_inst.get_depthimage,
+        # }
+        # feature = function_dict[feature_name](id)
+        feature = dataset_inst.get_feature(feature_name, id)
+        gt_label = dataset_inst.get_label(feature_name, id)
+        serialized_feature = feature.tolist()
     except IndexError:
         raise HTTPException(status_code=404, detail=f"Feature ID {id} is out of range.")
 
-    return {"serialized_feature": serialized_feature}
+    return {"serialized_feature": serialized_feature, "gt_label": gt_label}
     
 
 @app.get("/video/{file_id}")
