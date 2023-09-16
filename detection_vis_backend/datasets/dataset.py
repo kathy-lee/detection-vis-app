@@ -8,6 +8,8 @@ import io
 #import mkl_fft
 import torch
 import math
+import pickle
+import json
 import numpy as np
 import torchvision.transforms as transform
 import pandas as pd
@@ -22,7 +24,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -490,6 +492,24 @@ class RaDICaL(Dataset):
     
     def set_features(self, features):
         self.features = features
+    
+    def get_feature(self, feature_name, idx=None):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx)
+        return feature_data
+
+    def get_label(self, feature_name, idx=None):
+        # RaDICaL dataset has no groundtruth label
+        return []
 
 
 class RADIal(Dataset):
@@ -582,18 +602,20 @@ class RADIal(Dataset):
         sample_id = self.sample_keys[idx] 
         entries_indexes = self.label_dict[sample_id]
         labels = self.labels[entries_indexes]
+        labels = labels[:,1:-3].astype(np.float32)
         gt = []
         for label in labels:
             if(label[0]==-1):
                 break # -1 means no object
             if feature_name == "image":
-                gt.append(label[:3])
+                gt.append(label[:4].tolist())
             elif feature_name == "lidarPC":
-                gt.append(label[4:5])
+                gt.append(label[4:6].tolist())
             elif feature_name == "radarPC":
-                gt.label(label[7:8])
+                gt.append(label[7:9].tolist())
             else: # RD
-                gt.append(label[9, 11])
+                label[9] *= 512/103 # 512 range bins for 103m
+                gt.append(label[[9,11]].tolist())
         return gt
     
     def __len__(self):
@@ -1276,6 +1298,24 @@ class RADIalRaw(Dataset):
       
     def get_spectrogram(self, idx=None):
         return None
+    
+    def get_feature(self, feature_name, idx=None):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx)
+        return feature_data
+    
+    def get_label(self, feature_name, idx=None):
+        # Raw Radial dataset is partly labeled
+        return []
 
 
 
@@ -1302,7 +1342,106 @@ class CRUW(Dataset):
         self.frame_sync = len(self.image_filenames)
 
         self.labels = os.path.join(self.root_path, 'TRAIN_RAD_H_ANNO', self.seq_name+'.txt')
+        with open(self.config, 'r') as file:
+            self.sensor_cfg = json.load(file)
+        camera_configs = self.sensor_cfg['camera_cfg']
+        radar_configs = self.sensor_cfg['radar_cfg']
+        n_class = 3
 
+        # Create pkl file to keep data infos in the seq file
+        self.pkl_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
+        self.pkl_path.mkdir(parents=True, exist_ok=True)
+        save_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
+        print("Sequence %s saving to %s" % (self.seq_name, save_path))
+        overwrite = False
+        # if overwrite:
+        #     if os.path.exists(os.path.join(data_dir, split)):
+        #         shutil.rmtree(os.path.join(data_dir, split))
+        #     os.makedirs(os.path.join(data_dir, split))
+        try:
+            if not overwrite and os.path.exists(save_path):
+                print("%s already exists, skip" % save_path)
+                return
+
+            image_dir = os.path.join(self.root_path, 'TRAIN_CAM_0', self.seq_name, camera_configs['image_folder'])
+            if os.path.exists(image_dir):
+                image_paths = sorted([os.path.join(image_dir, name) for name in os.listdir(image_dir) if
+                                    name.endswith(camera_configs['ext'])])
+                n_frame = len(image_paths)
+            else:  # camera images are not available
+                image_paths = None
+                n_frame = None
+
+            radar_dir = os.path.join(self.root_path, 'TRAIN_RAD_H', self.seq_name, radar_configs['chirp_folder'])
+            # if radar_configs['data_type'] == 'RI' or radar_configs['data_type'] == 'AP':
+            #     radar_paths = sorted([os.path.join(radar_dir, name) for name in os.listdir(radar_dir) if
+            #                         name.endswith(dataset.sensor_cfg.radar_cfg['ext'])])
+            #     n_radar_frame = len(radar_paths)
+            #     assert n_frame == n_radar_frame
+            # elif radar_configs['data_type'] == 'RISEP' or radar_configs['data_type'] == 'APSEP':
+            #     radar_paths_chirp = []
+            #     for chirp_id in range(n_chirp):
+            #         chirp_dir = os.path.join(radar_dir, '%04d' % chirp_id)
+            #         paths = sorted([os.path.join(chirp_dir, name) for name in os.listdir(chirp_dir) if
+            #                         name.endswith(config_dict['dataset_cfg']['radar_cfg']['ext'])])
+            #         n_radar_frame = len(paths)
+            #         assert n_frame == n_radar_frame
+            #         radar_paths_chirp.append(paths)
+            #     radar_paths = []
+            #     for frame_id in range(n_frame):
+            #         frame_paths = []
+            #         for chirp_id in range(n_chirp):
+            #             frame_paths.append(radar_paths_chirp[chirp_id][frame_id])
+            #         radar_paths.append(frame_paths)
+            # elif radar_configs['data_type'] == 'ROD2021':
+            if n_frame is not None:
+                assert len(os.listdir(radar_dir)) == n_frame * len(radar_configs['chirp_ids'])
+            else:  # radar frames are not available
+                n_frame = int(len(os.listdir(radar_dir)) / len(radar_configs['chirp_ids']))
+            radar_paths = []
+            for frame_id in range(n_frame):
+                chirp_paths = []
+                for chirp_id in radar_configs['chirp_ids']:
+                    path = os.path.join(radar_dir, '%06d_%04d.' % (frame_id, chirp_id) +
+                                        radar_configs['ext'])
+                    chirp_paths.append(path)
+                radar_paths.append(chirp_paths)
+            # else:
+            #     raise ValueError
+
+            data_dict = dict(
+                data_root=self.root_path,
+                # data_path=seq_path,
+                seq_name=self.seq_name,
+                n_frame=n_frame,
+                image_paths=image_paths,
+                radar_paths=radar_paths,
+                anno=None,
+            )
+
+            # if split == 'demo' or not os.path.exists(seq_anno_path):
+            #     # no labels need to be saved
+            #     pickle.dump(data_dict, open(save_path, 'wb'))
+            #     continue
+            # else:
+            anno_obj = {}
+            seq_anno_path = os.path.join(self.root_path, 'TRAIN_RAD_H_ANNO', self.seq_name + '.txt')
+            #if config_dict['dataset_cfg']['anno_ext'] == '.txt':
+            anno_obj['metadata'] = load_anno_txt(seq_anno_path, n_frame, radar_configs)
+            # elif config_dict['dataset_cfg']['anno_ext'] == '.json':
+            #     with open(os.path.join(seq_anno_path), 'r') as f:
+            #         anno = json.load(f)
+            #     anno_obj['metadata'] = anno['metadata']
+            # else:
+            #     raise
+
+            anno_obj['confmaps'] = generate_confmaps(anno_obj['metadata'], n_class, False, radar_configs)
+            data_dict['anno'] = anno_obj
+            # save pkl files
+            pickle.dump(data_dict, open(save_path, 'wb'))
+            # end frames loop
+        except Exception as e:
+            print("Error while preparing %s: %s" % (self.seq_name, e))
         return 
     
     def get_image(self, idx=None): 
@@ -1337,3 +1476,30 @@ class CRUW(Dataset):
     def __getitem__(self, index):
         
        return None
+    
+    def get_feature(self, feature_name, idx=None):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx)
+        return feature_data
+    
+    def get_label(self, feature_name, idx=None):
+        pkl_file_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
+        seq_details = pickle.load(open(pkl_file_path, 'rb'))
+        lst_categories = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['categories']
+        lst_center_ids = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['center_ids']
+
+        gt = []
+        for center_id, category in zip(lst_center_ids, lst_categories):
+            if feature_name == "RA":
+                center_id = [int(x) for x in center_id]
+                gt.append(center_id + [category])
+        return gt
