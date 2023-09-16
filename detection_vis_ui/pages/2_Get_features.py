@@ -4,6 +4,7 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 from streamlit_extras.switch_page_button import switch_page
 
@@ -152,8 +153,9 @@ st.info(features_show)
 def get_feature(file_id, feature, idx):
   response = requests.get(f"http://{backend_service}:8001/feature/{file_id}/{feature}/{idx}")
   feature_data = response.json()
-  serialized_feature = feature_data["serialized_feature"]
-  return serialized_feature
+  # serialized_feature = feature_data["serialized_feature"]
+  # return serialized_feature
+  return feature_data
 
 @st.cache_data
 def get_feature_size(file_id, feature):
@@ -197,26 +199,35 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
   if st.session_state.frame_sync:
     st.session_state[counter] = frame_id
 
-  serialized_feature = get_feature(file_id, feature, st.session_state[counter])
+  feature_data = get_feature(file_id, feature, st.session_state[counter])
+  serialized_feature = feature_data["serialized_feature"]
   feature_image = np.array(serialized_feature)
   if feature == "lidarPC" or feature == "radarPC":
     plt.figure(figsize=(8, 6))
     plt.plot(feature_image[:,1], feature_image[:,0], '.')
-    plt.xlim(-max(abs(feature_image[:,1])), max(abs(feature_image[:,1]))) # plt.xlim(-20,20)
-    plt.ylim(0, max(feature_image[:,0])) # plt.ylim(0,100)
+    plt.xlim(-20,20)
+    plt.ylim(0,100)
+    # plt.xlim(-max(abs(feature_image[:,1])), max(abs(feature_image[:,1])))
+    # plt.ylim(0, max(feature_image[:,0])) 
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    if feature_data["gt_label"]:
+      objs = feature_data["gt_label"]
+      for obj in objs:
+        plt.plot(obj[0],obj[1],'rs')
     st.pyplot(plt)
   elif feature == "RD":
-    #rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
-    #power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
-    #power_spectrum = np.abs(rangedoppler)
-    #plt.figure(figsize=(8,6))
-    #plt.imshow(np.log10(power_spectrum), aspect='auto')
+    rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
+    power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
     plt.figure(figsize=(8,6))
-    plt.imshow(feature_image) #, aspect='auto'
+    plt.imshow(np.log10(power_spectrum), aspect='auto')
+    # plt.imshow(feature_image) #, aspect='auto'
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    if feature_data["gt_label"]:
+      objs = feature_data["gt_label"]
+      for obj in objs:
+        plt.plot(obj[1],obj[0],'ro')
     st.pyplot(plt)
   elif feature == "RA":
     if feature_image.ndim > 2:
@@ -224,6 +235,21 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image, aspect='auto')
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    if feature_data["gt_label"]:
+      objs = feature_data["gt_label"]
+      for obj in objs:
+        plt.plot(obj[1],obj[0],'ro')
+        plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[2])
+    st.pyplot(plt)
+  elif feature == 'image':
+    plt.figure(figsize=(8,6))
+    plt.imshow(feature_image) #, aspect='auto'
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    if feature_data["gt_label"]:
+      objs = feature_data["gt_label"]
+      for obj in objs:
+        rect = Rectangle(np.array(obj[:2])/2,(obj[2]-obj[0])/2,(obj[3]-obj[1])/2,linewidth=3, edgecolor='r', facecolor='none')
+        plt.gca().add_patch(rect)
     st.pyplot(plt)
   else:
     feature_image = feature_image - np.min(feature_image)
