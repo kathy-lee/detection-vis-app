@@ -8,7 +8,8 @@ import math
 
 from shapely.geometry import Polygon
 
-from detection_vis_backend.train.utils import decode, confmap2ra, get_class_id
+from detection_vis_backend.train.utils import decode
+from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
 
 
 
