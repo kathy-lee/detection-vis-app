@@ -24,7 +24,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, qaut_to_angle
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -493,7 +493,7 @@ class RaDICaL(Dataset):
     def set_features(self, features):
         self.features = features
     
-    def get_feature(self, feature_name, idx=None):
+    def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
             'RAD': self.get_RAD,
             'RD': self.get_RD,
@@ -504,7 +504,7 @@ class RaDICaL(Dataset):
             'image': self.get_image,
             'depth_image': self.get_depthimage,
         }
-        feature_data = function_dict[feature_name](idx)
+        feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
         return feature_data
 
     def get_label(self, feature_name, idx=None):
@@ -1498,7 +1498,7 @@ class CRUW(Dataset):
             'image': self.get_image,
             'depth_image': self.get_depthimage,
         }
-        feature_data = function_dict[feature_name](idx)
+        feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
         return feature_data
     
     def get_label(self, feature_name, idx=None):
@@ -1535,15 +1535,16 @@ class CARRADA(Dataset):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
-        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'camera_images'))
-        self.frame_sync = len(self.image_filenames)
-        self.RD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'radar_doppler_numpy'))
-        self.RA_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'radar_angle_numpy'))
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'camera_images'))
+        self.RD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'range_doppler_numpy'))
+        self.RA_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'range_angle_numpy'))
         self.AD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'angle_doppler_raw'))
-
+        self.frame_sync = len(self.image_filenames)
         self.RAD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada_RAD', file_name, 'RAD_numpy'))
 
-        self.annos = os.path.join(self.root_path, 'Carrada', 'annotations_frame_oriented.json')
+        anno_path = os.path.join(self.root_path, 'Carrada', 'annotations_frame_oriented.json')
+        with open(anno_path, 'r') as fp:
+            self.annos = json.load(fp)
 
     def get_image(self, idx=None, for_visualize=False): 
         image = np.asarray(Image.open(self.image_filenames[idx]))
@@ -1596,15 +1597,19 @@ class CARRADA(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
+        # idx = 539 # for testing of frame with objects
         frame = "{:06d}".format(idx)
+        logging.error(f"################### {frame}: {type(frame)}")
+        logging.error(self.annos[self.seq_name][frame])
         objs = self.annos[self.seq_name][frame]
         gt = []
-        categories = {1: 'pedestrain', 2: 'cyclist', 3: 'car'}
+        categories = {1: 'pedestrian', 2: 'cyclist', 3: 'car'}
         if objs:
             for obj in objs.values():
+                category = categories[obj['range_angle']['label']]
                 if feature_name == "RA":
                     points = obj['range_angle']['box']
-                    gt.append([points[0][1], points[0][0], points[1][1], points[1][0], categories[obj['range_angle']['box']['label']]])
+                    gt.append([points[0][1], points[0][0], points[1][1], points[1][0], category])
                 elif feature_name == "RD":
                     points = obj['range_doppler']['box']
                     height, width = 256, 64
@@ -1616,7 +1621,7 @@ class CARRADA(Dataset):
                         upper_right_corner[0], 
                         upper_right_corner[1]
                         ]
-                    gt.append([points[0][0], points[0][1], points[1][0], points[1][1], categories[obj['range_angle']['box']['label']]])
+                    gt.append([points[0][0], points[0][1], points[1][0], points[1][1], category])
         return gt
 
 
@@ -1660,17 +1665,25 @@ class RADDetDataset(Dataset):
         image = np.asarray(Image.open(self.image_filenames[idx]))
         return image
     
-    def get_RA(self, idx=None, for_visualize=False):
-        
-        return None
-
     def get_RAD(self, idx=None, for_visualize=False):
         rad = np.load(self.RAD_filenames[idx])
         return rad
     
     def get_RD(self, idx=None, for_visualize=False):
-        
-        return None
+        rad = self.get_RAD(idx)
+        rad = np.abs(rad)
+        rad = pow(rad, 2)
+        rd = np.sum(rad, axis=1)
+        rd = 10 * np.log10(rd + 1.)
+        return rd
+    
+    def get_RA(self, idx=None, for_visualize=False):
+        rad = self.get_RAD(idx)
+        rad = np.abs(rad)
+        rad = pow(rad, 2)
+        ra = np.sum(rad, axis=-1)
+        ra = 10 * np.log10(ra + 1.)
+        return ra
 
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
@@ -1720,4 +1733,158 @@ class RADDetDataset(Dataset):
             elif feature_name == "RA":
                 gt.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
             #cart_box = np.array([cart_box])
+        return gt
+    
+
+class Astyx(Dataset):
+    name = "Astyx 2019 dataset instance"
+
+    def __init__(self, features=None):
+        self.feature_path = ""
+        self.config = ""
+
+        self.frame_sync = 0
+        self.features = ['image', 'radarPC', 'lidarPC']
+        
+    def parse(self, file_id, file_path, file_name, config):
+        self.config = config
+        self.root_path = file_path
+        
+        def get_sorted_filenames(directory):
+            # Get a sorted list of all file names in the given directory
+            return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
+        
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'camera_front'))
+        self.frame_sync = len(self.image_filenames)
+        self.radarPC_filenames = get_sorted_filenames(os.path.join(self.root_path, 'radar_6455'))
+        self.lidarPC_filenames = get_sorted_filenames(os.path.join(self.root_path, 'lidar_vlp16'))
+
+
+    def get_image(self, idx=None, for_visualize=False): 
+        image = np.asarray(Image.open(self.image_filenames[idx]))
+        return image
+    
+    def get_RAD(self, idx=None, for_visualize=False):
+        return None
+    
+    def get_RD(self, idx=None, for_visualize=False):
+        return None
+    
+    def get_RA(self, idx=None, for_visualize=False):
+        return None
+
+    def get_radarpointcloud(self, idx=None, for_visualize=False):
+        pc = read_pointcloudfile(self.radarPC_filenames[idx])
+        return pc
+
+    def get_lidarpointcloud(self, idx=None, for_visualize=False):
+        pc = read_pointcloudfile(self.lidarPC_filenames[idx])
+        return pc
+
+    def get_depthimage(self, idx=None, for_visualize=False):
+        return None
+      
+    def get_spectrogram(self, idx=None, for_visualize=False):
+        return None
+
+    def __len__(self):
+        return self.frame_sync
+
+    def __getitem__(self, index):
+        
+       return None
+    
+    def get_feature(self, feature_name, idx=None, for_visualize=False):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
+        return feature_data
+    
+    def get_label(self, feature_name, idx=None):
+        file_name = "{:06d}".format(idx) + ".json"
+
+        #T_toLidar, T_toCamera, K = get_calibration(filename)
+        with open(os.path.join(self.root_path, 'calibration', file_name), mode='r') as f:
+            calib_data = json.load(f)
+        
+        T_fromLidar = np.array(calib_data['sensors'][1]['calib_data']['T_to_ref_COS'])
+        T_fromCamera = np.array(calib_data['sensors'][2]['calib_data']['T_to_ref_COS'])
+        K = np.array(calib_data['sensors'][2]['calib_data']['K'])
+
+        T_toLidar = inv_trans(T_fromLidar)
+        T_toCamera = inv_trans(T_fromCamera)
+
+        #objects, classids = get_objects(filename)
+        gt = []
+        with open(os.path.join(self.root_path, 'groundtruth_obj3d', file_name), mode='r') as f:
+            gt_data = json.load(f)
+        objects_info = gt_data['objects']
+        objects = []
+        classids = []
+        for p in objects_info:
+            center = np.array(p['center3d'])
+            dimension = np.array(p['dimension3d'])
+            w = dimension[0]
+            l = dimension[1]
+            h = dimension[2]
+            orientation = np.array(p['orientation_quat'])
+            classids.append(p['classname'])
+
+            x_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2]
+            y_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2]
+            z_corners = [h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2]
+            # rotate and translate 3d bounding box
+            R = quat_to_rotation(orientation)
+            # ##########################
+            # yaw = qaut_to_angle(orientation)
+            # rotMat = np.array([
+            #     [np.cos(yaw), -np.sin(yaw), 0.0],
+            #     [np.sin(yaw), np.cos(yaw), 0.0],
+            #     [0.0, 0.0, 1.0]])
+            # ##########################
+            # case 1: rotate + translate
+            bbox = np.vstack([x_corners, y_corners, z_corners])
+            bbox = np.dot(R, bbox)
+            bbox = bbox + center[:, np.newaxis]
+
+            # case 2: translate + rotate
+            # bbox = np.vstack([x_corners, y_corners, z_corners]) + center[:,np.newaxis]
+            # bbox = np.dot(R, bbox)
+
+            bbox = np.transpose(bbox)
+            objects.append(bbox)
+
+        if feature_name == "radarPC":
+            for obj, cls in zip(objects, classids):
+                gt.append(obj.flatten().tolist() + cls)
+
+        if feature_name == "lidarPC":
+            objects_lidar = []
+            for obj, cls in zip(objects, classids):
+                obj_lidar = np.dot(T_toLidar[0:3, 0:3], np.transpose(obj))
+                T = T_toLidar[0:3, 3]
+                obj_lidar = obj_lidar + T[:, np.newaxis]
+                obj_lidar = np.transpose(obj_lidar)
+                objects_lidar.append(obj_lidar)
+                gt.append(obj_lidar.flatten().tolist() + [cls])
+
+        if feature_name == "image":
+            objects_2Dimage = []
+            for obj, cls in zip(objects, classids):
+                obj_camera = np.dot(T_toCamera[0:3, 0:3], np.transpose(obj))
+                T = T_toCamera[0:3, 3]
+                obj_camera = obj_camera + T[:, np.newaxis]
+                obj_image = np.dot(K, obj_camera)
+                obj_image = obj_image / obj_image[2, :]
+                obj_image = np.delete(obj_image, 2, 0)
+                objects_2Dimage.append(obj_image)
+                gt.append(obj_image.flatten().tolist() + [cls])
         return gt
