@@ -704,3 +704,71 @@ def confmap2ra(radar_configs, name, radordeg='rad'):
         else:
             raise TypeError
         return agl_grid
+
+
+def is_float(str_val):
+    try:
+        float(str_val)
+        return True
+    except ValueError:
+        return False
+
+def read_pointcloudfile(filename):
+    pc = []
+    with open(filename) as f:
+        for line in f:
+            line = line.rstrip()
+            if line:
+                line_str = line.split()
+                if is_float(line_str[0]):
+                    line_float = [float(x) for x in line_str]
+                    pc.append(line_float)
+    pa = np.array(pc)
+    return pa
+
+def inv_trans(T):
+    rotation = np.linalg.inv(T[0:3, 0:3])  # rotation matrix
+
+    translation = T[0:3, 3]
+    translation = -1 * np.dot(rotation, translation.T)
+    translation = np.reshape(translation, (3, 1))
+    Q = np.hstack((rotation, translation))
+
+    # # test if it is truly a roation matrix
+    # d = np.linalg.det(rotation)
+    # t = np.transpose(rotation)
+    # o = np.dot(rotation, t)
+    return Q
+
+def quat_to_rotation(quat):
+    m = np.sum(np.multiply(quat, quat))
+    q = quat.copy()
+    q = np.array(q)
+    n = np.dot(q, q)
+    if n < np.finfo(q.dtype).eps:
+        rot_matrix = np.identity(4)
+        return rot_matrix
+    q = q * np.sqrt(2.0 / n)
+    q = np.outer(q, q)
+    rot_matrix = np.array(
+        [[1.0 - q[2, 2] - q[3, 3], q[1, 2] + q[3, 0], q[1, 3] - q[2, 0]],
+         [q[1, 2] - q[3, 0], 1.0 - q[1, 1] - q[3, 3], q[2, 3] + q[1, 0]],
+         [q[1, 3] + q[2, 0], q[2, 3] - q[1, 0], 1.0 - q[1, 1] - q[2, 2]]],
+        dtype=q.dtype)
+    rot_matrix = np.transpose(rot_matrix)
+    # # test if it is truly a rotation matrix
+    # d = np.linalg.det(rotation)
+    # t = np.transpose(rotation)
+    # o = np.dot(rotation, t)
+    return rot_matrix
+
+def qaut_to_angle(quat):
+    w=quat[0]
+    x=quat[1]
+    y=quat[2]
+    z=quat[3]
+
+    rol = math.atan2(2*(w*x+y*z),1-2*(x*x+y*y))#the rol is the yaw angle!
+    pith = math.asin(2*(w*y-x*z))
+    yaw = math.atan2(2*(w*z+x*y),1-2*(z*z+y*y))
+    return rol
