@@ -4,8 +4,9 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+import random
 
+from matplotlib.patches import Rectangle
 from streamlit_extras.switch_page_button import switch_page
 
 
@@ -215,7 +216,14 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
       for obj in objs:
-        plt.plot(obj[0],obj[1],'rs')
+        if len(obj) == 9:
+          # draw 2D box with lines
+          for k in range(0, 3):
+            plt.plot([obj[k*2], obj[(k+1)*2]], [obj[k*2+1], obj[(k+1)*2+1]], 'r-')
+          plt.plot([obj[6], obj[0]], [obj[7], obj[1]], 'r-')
+          #plt.text(obj[8])
+        else:
+          plt.plot(obj[0],obj[1],'rs')
     st.pyplot(plt)
   elif feature == "RD":
     # rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
@@ -246,7 +254,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
       for obj in objs:
-        if len(obj) == 2:
+        if len(obj) == 3:
           # Case: CRUW Dataset
           plt.plot(obj[1],obj[0],'ro')
           plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[2])
@@ -263,9 +271,25 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
-      for obj in objs:
-        rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
-        plt.gca().add_patch(rect)
+      number_of_colors = len(objs)
+      colorlist = ["#" + ''.join([random.choice('0123456789ABCDEF') for j in range(6)]) for i in range(number_of_colors)]
+      for n, obj in enumerate(objs):
+        if len(obj) > 5:
+          obj = obj[:16]
+          qs = np.array(obj).reshape((2, 8))
+          qs = qs.astype(np.int32)
+          qs = np.transpose(qs)
+          for k in range(0, 4):
+            i, j = k, (k + 1) % 4
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3)
+            i, j = k + 4, (k + 1) % 4 + 4
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3)
+            i, j = k, k + 4
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3) 
+          #plt.text(obj[8])
+        else:
+          rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
+          plt.gca().add_patch(rect)
     st.pyplot(plt)
   else:
     feature_image = feature_image - np.min(feature_image)
