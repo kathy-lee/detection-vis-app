@@ -205,91 +205,116 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
   feature_image = np.array(serialized_feature)
   if feature == "lidarPC" or feature == "radarPC":
     plt.figure(figsize=(8, 6))
-    plt.plot(feature_image[:,1], feature_image[:,0], '.')
-    plt.xlim(-20,20)
-    plt.ylim(0,100)
-    # plt.xlim(-max(abs(feature_image[:,1])), max(abs(feature_image[:,1])))
-    # plt.ylim(0, max(feature_image[:,0])) 
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
-    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
-      for obj in objs:
-        if len(obj) == 9:
-          # draw 2D box with lines
+      if len(objs[0]) == 25:
+        plt.scatter(feature_image[:, 0], feature_image[:, 1], c='darkblue', s=1, alpha=0.5)
+        plt.xlim(0, 100) 
+        plt.ylim(-50, 50)
+        for obj in objs:
+          points = obj[:24]
+          points = np.array(points).reshape((8, 3))
           for k in range(0, 3):
-            plt.plot([obj[k*2], obj[(k+1)*2]], [obj[k*2+1], obj[(k+1)*2+1]], 'r-')
-          plt.plot([obj[6], obj[0]], [obj[7], obj[1]], 'r-')
-          #plt.text(obj[8])
-        else:
+            plt.plot(points[k:k + 2, 0], points[k:k + 2, 1], 'r-')
+          plt.plot([points[3, 0], points[0, 0]], [points[3, 1], points[0, 1]], 'r-', linewidth=1)
+          plt.text(points[0, 0] + 1, points[0, 1] + 1, obj[24], c='g')
+      else:
+        # Case: RADIal Dataset
+        plt.plot(feature_image[:,1], feature_image[:,0], '.')
+        plt.xlim(-20,20)
+        plt.ylim(0,100)
+        # plt.xlim(-max(abs(feature_image[:,1])), max(abs(feature_image[:,1])))
+        # plt.ylim(0, max(feature_image[:,0])) 
+        for obj in objs:
           plt.plot(obj[0],obj[1],'rs')
+    else:
+      # Case: RaDIcal Dataset
+      plt.plot(feature_image[:,1], feature_image[:,0], '.')
+      plt.xlim(-20,20)
+      plt.ylim(0,50)
+    plt.xlabel('X(m)')
+    plt.ylabel('Y(m)')
     st.pyplot(plt)
   elif feature == "RD":
-    # rangedoppler = feature_image[...,::2] + 1j * feature_image[...,1::2]
-    # power_spectrum = np.sum(np.abs(rangedoppler),axis=2)
-    # plt.figure(figsize=(8,6))
-    # plt.imshow(np.log10(power_spectrum), aspect='auto')
+    plt.figure(figsize=(8, 6))
+    feature_image = np.rot90(feature_image, k=-1) # k=-1 rotates the image 90 degrees clockwise
+    img_height, img_width = feature_image.shape
     plt.imshow(feature_image) #, aspect='auto'
-    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    plt.xlabel('Range')
+    plt.ylabel('Doppler')
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
-      for obj in objs:
-        if len(obj) == 2: 
-          # Case: RADIal Dataset
-          plt.plot(obj[1],obj[0],'ro')
-        elif len(obj) == 5:
-          # Case: CARRADA Dataset 
-          rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
+      if len(objs[0]) == 2: 
+        # Case: RADIal Dataset
+        for obj in objs:
+          #plt.plot(obj[1],obj[0],'ro') 
+          plt.plot(img_width - obj[0], obj[1], 'ro')  # Adjust coordinates for rotation
+      elif len(objs[0]) == 5:
+        # Case: CARRADA Dataset 
+        for obj in objs:
+          # rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
+          # plt.gca().add_patch(rect)
+          # plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[4])
+          # Adjust coordinates and dimensions for rotation
+          rect = Rectangle((img_width - obj[0] - (obj[2] - obj[0]), obj[1]), obj[2] - obj[0], obj[3] - obj[1], linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
-          plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[4])
+          plt.text(img_width - obj[0] - (obj[2] - obj[0]), obj[1] - 5, '%s' % obj[4], c='y')  # Adjust coordinates for rotation
     st.pyplot(plt)
   elif feature == "RA":
-    # Case: CRUW Dataset
-    # if feature_image.ndim > 2:
-    #   feature_image = np.sqrt(feature_image[:, :, 0] ** 2 + feature_image[:, :, 1] ** 2)
     plt.figure(figsize=(8,6))
-    plt.imshow(feature_image, aspect='auto')
-    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    plt.imshow(feature_image)
+    plt.xlabel('Azimuth')
+    plt.ylabel('Range')
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
-      for obj in objs:
-        if len(obj) == 3:
-          # Case: CRUW Dataset
+      if len(objs[0]) == 3:
+        # Case: CRUW Dataset
+        for obj in objs:
           plt.plot(obj[1],obj[0],'ro')
           plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[2])
-        elif len(obj) == 5:
-          # Case: CARRADA Dataset
+      elif len(objs[0]) == 5:
+        # Case: CARRADA Dataset
+        for obj in objs:
           rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
-          plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[4])
+          plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
     st.pyplot(plt)
   elif feature == 'image':
-    # Case: RADIal Dataset
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image) #, aspect='auto'
-    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=-0.1)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
+    img_height, img_width, _ = feature_image.shape
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
-      number_of_colors = len(objs)
-      colorlist = ["#" + ''.join([random.choice('0123456789ABCDEF') for j in range(6)]) for i in range(number_of_colors)]
-      for n, obj in enumerate(objs):
-        if len(obj) > 5:
-          obj = obj[:16]
-          qs = np.array(obj).reshape((2, 8))
+      if len(objs[0]) > 5:
+        number_of_colors = len(objs)
+        colorlist = ["#" + ''.join([random.choice('0123456789ABCDEF') for j in range(6)]) for i in range(number_of_colors)]
+        for n, obj in enumerate(objs):
+          # Case: Astyx Dataset
+          qs = obj[:16]
+          qs = np.array(qs).reshape((2, 8))
           qs = qs.astype(np.int32)
           qs = np.transpose(qs)
           for k in range(0, 4):
             i, j = k, (k + 1) % 4
-            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3)
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=1)
             i, j = k + 4, (k + 1) % 4 + 4
-            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3)
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=1)
             i, j = k, k + 4
-            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=3) 
-          #plt.text(obj[8])
-        else:
+            plt.plot([qs[i, 0], qs[j, 0]], [qs[i, 1], qs[j, 1]], color=colorlist[n], linewidth=1) 
+          #plt.text(qs[0, 0], qs[1, 0], obj[16], c=colorlist[n])
+      else:
+        for obj in objs:
+          # Case: RADIal Dataset
           rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
+    plt.xlim(0, img_width - 1)
+    plt.ylim(img_height - 1, 0)
     st.pyplot(plt)
   else:
     feature_image = feature_image - np.min(feature_image)
