@@ -343,10 +343,10 @@ class RaDICaL(Dataset):
 ####
         return output_path
 
-    def get_RAD(self, idx=None):
+    def get_RAD(self, idx=None, for_visualize=False):
         return None
     
-    def get_ADC(self, idx=None):
+    def get_ADC(self, idx=None, for_visualize=False):
         if self.sync_mode:
             index = self.sync_indices[idx]['adc']
         else:
@@ -355,7 +355,7 @@ class RaDICaL(Dataset):
         adc = np.load(adc_file)
         return adc
     
-    def get_RA(self, idx=None):
+    def get_RA(self, idx=None, for_visualize=False):
         adc = self.get_ADC(idx)
         # rf = RadarFrame(radar_config)
         # beamformed_range_azimuth = rf.compute_range_azimuth(adc) 
@@ -368,7 +368,7 @@ class RaDICaL(Dataset):
         ra = np.log(np.abs(ra))  
         return ra 
 
-    def get_RD(self, idx=None):
+    def get_RD(self, idx=None, for_visualize=False):
         # rf = RadarFrame(radar_config)
         # rf.raw_cube = self.get_ADC(idx)
         # range_doppler = rf.range_doppler
@@ -376,12 +376,11 @@ class RaDICaL(Dataset):
         range_cube = dsp.range_processing(adc, window_type_1d=Window.BLACKMAN)
         range_doppler, _ = dsp.doppler_processing(range_cube, interleaved=False, num_tx_antennas=2, clutter_removal_enabled=True, window_type_2d=Window.HAMMING)
         range_doppler = np.fft.fftshift(range_doppler, axes=1)
-        range_doppler = np.transpose(range_doppler)
         range_doppler[np.isinf(range_doppler)] = 0  # replace Inf with zero
         # rd = np.concatenate([range_doppler.real,range_doppler.imag], axis=2)
         return range_doppler
 
-    def get_radarpointcloud(self, idx=None):
+    def get_radarpointcloud(self, idx=None, for_visualize=False):
         adc = self.get_ADC(idx)
         #logging.error(f"#########################################")
         # 1. range fft
@@ -456,14 +455,14 @@ class RaDICaL(Dataset):
         #logging.error(f"Total points: {len(points)}, range resolution: {self.range_resolution}")   
         return np.array(points) 
 
-    def get_lidarpointcloud():
+    def get_lidarpointcloud(self, idx=None, for_visualize=False):
         return None
     
-    def get_spectrogram(self, idx=None):
+    def get_spectrogram(self, idx=None, for_visualize=False):
         adc = self.get_ADC(idx)
         return None
 
-    def get_image(self, idx=None):
+    def get_image(self, idx=None, for_visualize=False):
         if self.sync_mode:
             index = self.sync_indices[idx]['image']
         else:
@@ -472,7 +471,7 @@ class RaDICaL(Dataset):
         image = np.load(image_file)
         return image
     
-    def get_depthimage(self, idx=None):
+    def get_depthimage(self, idx=None, for_visualize=False):
         if self.sync_mode:
             index = self.sync_indices[idx]['depth_image']
         else:
@@ -489,9 +488,6 @@ class RaDICaL(Dataset):
         for feature in self.features:
             data_dict[feature] = getattr(self, feature)[idx]
         return data_dict
-    
-    def set_features(self, features):
-        self.features = features
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
@@ -1597,10 +1593,7 @@ class CARRADA(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
-        # idx = 539 # for testing of frame with objects
         frame = "{:06d}".format(idx)
-        logging.error(f"################### {frame}: {type(frame)}")
-        logging.error(self.annos[self.seq_name][frame])
         objs = self.annos[self.seq_name][frame]
         gt = []
         categories = {1: 'pedestrian', 2: 'cyclist', 3: 'car'}
@@ -1864,7 +1857,7 @@ class Astyx(Dataset):
 
         if feature_name == "radarPC":
             for obj, cls in zip(objects, classids):
-                gt.append(obj.flatten().tolist() + cls)
+                gt.append(obj.flatten().tolist() + [cls])
 
         if feature_name == "lidarPC":
             objects_lidar = []
