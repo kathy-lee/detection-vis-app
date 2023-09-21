@@ -1555,8 +1555,9 @@ class CARRADA(Dataset):
         return rad
     
     def get_RD(self, idx=None, for_visualize=False):
+        # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         rd = np.load(self.RD_filenames[idx])
-        rd = np.rot90(rd, k=2)
+        rd = np.rot90(rd, k=2) # To align with feature display in UI
         return rd
 
     def get_radarpointcloud(self, idx=None, for_visualize=False):
@@ -1593,6 +1594,7 @@ class CARRADA(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
+        # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         frame = "{:06d}".format(idx)
         objs = self.annos[self.seq_name][frame]
         gt = []
@@ -1614,7 +1616,7 @@ class CARRADA(Dataset):
                         upper_right_corner[0], 
                         upper_right_corner[1]
                         ]
-                    gt.append([points[0][0], points[0][1], points[1][0], points[1][1], category])
+                    gt.append([obj[0], obj[1], obj[2], obj[3], category])
         return gt
 
 
@@ -1647,12 +1649,12 @@ class RADDetDataset(Dataset):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
-        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'stereo_image'))
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'stereo_image'))
         self.frame_sync = len(self.image_filenames)
         
-        self.RAD_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'RAD'))
+        self.RAD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'RAD'))
 
-        self.annos = os.path.join(self.root_path, 'gt')
+        self.anno_filenames = get_sorted_filenames(os.path.join(self.root_path, 'gt'))
 
     def get_image(self, idx=None, for_visualize=False): 
         image = np.asarray(Image.open(self.image_filenames[idx]))
@@ -1713,19 +1715,25 @@ class RADDetDataset(Dataset):
     
     def get_label(self, feature_name, idx=None):
         gt = []
-        file_name = "{:06d}".format(idx) + ".pickle"
-        pickle_file = os.path.join(self.root_path, 'gt', file_name)
-        with open(pickle_file, "rb") as f:
+        with open(self.anno_filenames[idx], "rb") as f:
             objs = pickle.load(f)
         for i in range(len(objs["classes"])):
             bbox3d = objs["boxes"][i]
             cls = objs["classes"][i]
             cart_box = objs["cart_boxes"][i]
             if feature_name == "RD":
-                gt.append([bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5], cls])
+                y_c, x_c, h, w = (bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5])
+                y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
+                gt.append([x1, y1, x2, y2, cls])
+                print("####################### RD label ######################")
+                print([x1, y1, x2, y2, cls])
             elif feature_name == "RA":
-                gt.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
-            #cart_box = np.array([cart_box])
+                y_c, x_c, h, w = (bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4])
+                y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
+                gt.append([x1, y1, x2, y2, cls])
+                print("####################### RA label ######################")
+                print([x1, y1, x2, y2, cls])
+            #cart_box = np.array([cart_box])   
         return gt
     
 
