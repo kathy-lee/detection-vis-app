@@ -239,12 +239,13 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.ylabel('Y(m)')
     st.pyplot(plt)
   elif feature == "RD":
-    plt.figure(figsize=(8, 6))
-    feature_image = np.rot90(feature_image, k=-1) # k=-1 rotates the image 90 degrees clockwise
-    img_height, img_width = feature_image.shape
+    plt.figure(figsize=(2, 6))
+    # Rotates RD image 90 degrees clockwise
+    # feature_image = np.rot90(feature_image, k=-1) 
+    # img_height, img_width = feature_image.shape
     plt.imshow(feature_image) #, aspect='auto'
-    plt.xlabel('Range')
-    plt.ylabel('Doppler')
+    plt.xlabel('Doppler')
+    plt.ylabel('Range')
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
@@ -256,13 +257,26 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
       elif len(objs[0]) == 5:
         # Case: CARRADA Dataset 
         for obj in objs:
-          # rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
-          # plt.gca().add_patch(rect)
-          # plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[4])
-          # Adjust coordinates and dimensions for rotation
-          rect = Rectangle((img_width - obj[0] - (obj[2] - obj[0]), obj[1]), obj[2] - obj[0], obj[3] - obj[1], linewidth=1, edgecolor='r', facecolor='none')
+          ## If RD image doesn't rotate
+          rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
-          plt.text(img_width - obj[0] - (obj[2] - obj[0]), obj[1] - 5, '%s' % obj[4], c='y')  # Adjust coordinates for rotation
+          plt.text(obj[0], obj[1] - 2, '%s' % obj[4], c='y')
+          # plt.yticks([0, 64, 128, 192, 255], [50, 37.5, 25, 12.5, 0]) # range
+          # plt.xticks([0, 16, 32, 48, 63], [-13, -6.5, 0, 6.5, 13]) # doppler
+
+          ## If RD image is rotated 90 degree clockwise:
+          # rect = Rectangle((img_width - obj[0] - (obj[2] - obj[0]), obj[1]), obj[2] - obj[0], obj[3] - obj[1], linewidth=1, edgecolor='r', facecolor='none')
+          # plt.gca().add_patch(rect)
+          # plt.text(img_width - obj[0] - (obj[2] - obj[0]), obj[1] - 5, '%s' % obj[4], c='y')  
+
+          ## If RD image is rotated 90 degree clockwise:
+          # new_x = img_width - obj[3]
+          # new_y = obj[0]
+          # new_width = obj[3] - obj[1]
+          # new_height = obj[2] - obj[0]
+          # rect = Rectangle((new_x, new_y), new_width, new_height, linewidth=1, edgecolor='r', facecolor='none')
+          # plt.gca().add_patch(rect)
+          # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
     st.pyplot(plt)
   elif feature == "RA":
     plt.figure(figsize=(8,6))
