@@ -82,3 +82,6 @@ INSERT INTO files (name, description, size, path, directory_id, config, parse, "
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
 VALUES ('Astyx', 'description', '622MB', '/home/kangle/dataset/Astyx',12, '', 'Astyx', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);
+
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('RADDet_Dataset', 'description', '320GB', '/home/kangle/Downloads/wd_disk_radar_data/RADDet_reform_dataset',10, '', 'RADDetDataset', FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
