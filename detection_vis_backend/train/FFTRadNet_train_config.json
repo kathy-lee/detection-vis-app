@@ -1,0 +1,38 @@
+{
+    "seed":3,
+    "losses": {
+        "fct":"PixorLoss",
+        "classification": "FocalLoss",
+        "regression": "smoothL1Loss",
+        "weight": [1,100,100]
+    },
+    "lr_scheduler": {
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs":20,
+    "dataloader": {
+        "splitmode":"sequence",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random":[0.7,0.15,0.15],
+        "train": {
+            "batch_size": 4,
+            "num_workers": 4
+    	},
+        "val": {
+            "batch_size": 1,
+            "num_workers": 1
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    }
+}

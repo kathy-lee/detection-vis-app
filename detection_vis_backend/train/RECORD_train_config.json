@@ -1,0 +1,51 @@
+
+{
+  "seed":3,
+  "losses": "bce",
+  "lr_scheduler": {
+    "type": "exp",
+    "gamma": 0.9
+  },
+  "optimizer": {
+    "lr": 1e-3
+  },
+  "num_epochs":20,
+  "data_preprocess": {
+    "normalize": false,
+    "aug": {
+      "mirror": 0.5,
+      "reverse": 0.5,
+      "gaussian": 0.0
+    }
+  },
+  "dataloader": {
+    "splitmode": "sequence",
+    "split_sequence": {
+      "train": ["2019_04_09_BMS1000", "2019_04_09_BMS1001"],
+      "val": ["2019_04_09_BMS1002"],
+      "test": ["2019_04_09_CMS1002"]
+    },
+    "split_random":[0.7,0.15,0.15],
+    "train": {
+      "batch_size": 4,
+      "num_workers": 4
+    },
+    "val": {
+      "batch_size": 1,
+      "num_workers": 1
+    },
+    "test": {
+      "batch_size": 1,
+      "num_workers": 1
+    }
+  },
+
+  "win_size": 1,
+  "train_step": 1,
+  "train_stride": 4,
+  "test_step": 1,
+  "test_stride": 8,
+  "max_dets": 20,
+  "peak_thres": 0.3,
+  "ols_thres": 0.3
+}
