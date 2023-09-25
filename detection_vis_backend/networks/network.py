@@ -11,7 +11,7 @@ from torchvision.transforms.transforms import Sequence
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
-from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet 
+from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d 
 
 
 class NetworkFactory:
@@ -66,10 +66,12 @@ class FFTRadNet(nn.Module):
             out['Segmentation'] = self.freespace(Y)
         
         return out
-    
+
 
 class RODNet(nn.Module):
-    def __init__(self, type, in_channels, n_class, stacked_num=1, mnet_cfg=None, dcn=True):
+    def __init__(self, type, in_channels, n_class, stacked_num=1, mnet_cfg=None, dcn=True): 
+                    # win_size = 16, patch_size = 8, norm_layer = 'batch', hidden_size = 516, channels_features = (1,2,3,4),
+                    # receptive_field = [3,3,3,3], mlp_dim = 3072, num_layers = 12, num_heads = 12, out_head = 1):
         super(RODNet, self).__init__()
         self.nettype = type
         mnet_cfg = tuple(mnet_cfg)
@@ -95,7 +97,7 @@ class RODNet(nn.Module):
             else:
                 self.with_mnet = False
                 self.cdc = RadarVanilla(in_channels, n_class, use_mse_loss=False)
-        elif self.nettype == 'HGv2':
+        elif self.nettype in ('HGv2', 'HGwIv2', 'HGwIv2_2d', 'hrformer2d', 'unetr_2d', 'unetr_2d_res_final', 'maxvit2'):
             self.dcn = dcn
             if dcn:
                 self.conv_op = DeformConvPack3D
@@ -105,29 +107,56 @@ class RODNet(nn.Module):
                 in_chirps_mnet, out_channels_mnet = mnet_cfg
                 assert in_channels == in_chirps_mnet
                 self.mnet = MNet(in_chirps_mnet, out_channels_mnet, conv_op=self.conv_op)
-                self.with_mnet = True
-                self.stacked_hourglass = RadarStackedHourglass_HG(out_channels_mnet, n_class, stacked_num=stacked_num,
-                                                            conv_op=self.conv_op)
+                self.with_mnet = True   
             else:
                 self.with_mnet = False
-                self.stacked_hourglass = RadarStackedHourglass_HG(in_channels, n_class, stacked_num=stacked_num,
-                                                            conv_op=self.conv_op)
-        elif self.nettype == 'HGwIv2':
-            self.dcn = dcn
-            if dcn:
-                self.conv_op = DeformConvPack3D
-            else:
-                self.conv_op = nn.Conv3d
-            if mnet_cfg is not None:
-                in_chirps_mnet, out_channels_mnet = mnet_cfg
-                self.mnet = MNet(in_chirps_mnet, out_channels_mnet, conv_op=self.conv_op)
-                self.with_mnet = True
-                self.stacked_hourglass = RadarStackedHourglass_HGwI(out_channels_mnet, n_class, stacked_num=stacked_num,
-                                                            conv_op=self.conv_op)
-            else:
-                self.with_mnet = False
-                self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels, n_class, stacked_num=stacked_num,
-                                                            conv_op=self.conv_op)
+                
+            if self.nettype == 'HGv2':
+                if mnet_cfg is not None:
+                    self.stacked_hourglass = RadarStackedHourglass_HG(out_channels_mnet, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+                else:
+                    self.stacked_hourglass = RadarStackedHourglass_HG(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+            elif self.nettype == 'HGwIv2':
+                if mnet_cfg is not None:
+                    self.stacked_hourglass = RadarStackedHourglass_HGwI(out_channels_mnet, n_class, stacked_num=stacked_num, conv_op=self.conv_op) 
+                else:
+                    self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+            # elif self.nettype == 'HGwIv2_2d':
+            #     if mnet_cfg is not None:
+            #         self.stacked_hourglass = RadarStackedHourglass_HGwI2d(out_channels_mnet, win_size, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+            #     else:
+            #         self.stacked_hourglass = RadarStackedHourglass_HGwI2d(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+            # elif self.nettype == 'hrformer2d':
+            #     if mnet_cfg is not None:
+            #         self.stacked_hourglass = RadarStackedHourglass_HRFormer2d(out_channels_mnet, n_class, stacked_num=stacked_num, conv_op=self.conv_op,
+            #                                             win_size = win_size, patch_size = patch_size, hidden_size = hidden_size, mlp_dim = mlp_dim,
+            #                                             num_layers = num_layers, receptive_field = receptive_field, norm_layer = norm_layer, 
+            #                                             num_heads = num_heads, channels_features = channels_features)
+            #     else:
+            #         self.stacked_hourglass = RadarStackedHourglass_HRFormer2d(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+            # elif self.nettype == 'unetr_2d':
+            #     if mnet_cfg is not None:
+            #         self.stacked_hourglass = RadarStackedHourglass_UNETR2d(out_channels_mnet, n_class, stacked_num=stacked_num, conv_op=self.conv_op,
+            #                                             win_size = win_size, patch_size = patch_size, hidden_size = hidden_size, mlp_dim = mlp_dim,
+            #                                             num_layers = num_layers, receptive_field = receptive_field, norm_layer = norm_layer, num_heads = num_heads)
+            #     else:
+            #         self.stacked_hourglass = RadarStackedHourglass_UNETR2d(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)       
+            # elif self.nettype == 'unetr_2d_res_final':
+            #     if mnet_cfg is not None:
+            #         self.stacked_hourglass = RadarStackedHourglass_UNETR2dRes(out_channels_mnet, n_class, stacked_num=stacked_num, conv_op=self.conv_op,
+            #                                             win_size = win_size, patch_size = patch_size, hidden_size = hidden_size, mlp_dim = mlp_dim,
+            #                                             num_layers = num_layers, receptive_field = receptive_field, norm_layer = norm_layer,
+            #                                             out_head = out_head, num_heads = num_heads)
+            #     else:
+            #         self.stacked_hourglass = RadarStackedHourglass_UNETR2dRes(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)    
+            # elif self.nettype == 'maxvit2':
+            #     if mnet_cfg is not None:
+            #         self.stacked_hourglass = RadarStackedHourglass_MAXVIT2(out_channels_mnet, n_class, stacked_num=stacked_num,
+            #                                             win_size = win_size, patch_size = patch_size, hidden_size = hidden_size,
+            #                                             num_layers = num_layers, receptive_field = receptive_field,
+            #                                             out_head = out_head)
+            #     else:
+            #         self.stacked_hourglass = RadarStackedHourglass_MAXVIT2(in_channels, n_class, stacked_num=stacked_num, conv_op=self.conv_op)
         else:
             raise ValueError("Model type not supported")
 
@@ -142,12 +171,8 @@ class RODNet(nn.Module):
             if self.with_mnet:
                 x = self.mnet(x)
             out = self.cdc(x)
-        elif self.nettype == 'HGv2':
+        elif self.nettype in ('HGv2', 'HGwIv2', 'HGwIv2_2d', 'hrformer2d', 'unetr_2d', 'unetr_2d_res_final', 'maxvit2'):
             if self.with_mnet:
-                x = self.mnet(x)
-            out = self.stacked_hourglass(x)
-        else:  # nettype: HGwIv2
-            if self.with_mnet: 
                 x = self.mnet(x)
             out = self.stacked_hourglass(x)
         return out
