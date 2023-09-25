@@ -11,7 +11,8 @@ from torchvision.transforms.transforms import Sequence
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
-from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d 
+from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d
+from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder
 
 
 class NetworkFactory:
@@ -176,3 +177,37 @@ class RODNet(nn.Module):
                 x = self.mnet(x)
             out = self.stacked_hourglass(x)
         return out
+    
+
+class Record(nn.Module):
+    def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
+        """
+        RECurrent Online object detectOR (RECORD) model class
+        @param config: configuration file of the model
+        @param alpha: expansion factor to modify the size of the model (default: 1.0)
+        @param in_channels: number of input channels (default: 8)
+        @param norm: type of normalisation (default: LayerNorm). Other normalisation are not supported yet.
+        @param n_class: number of classes (default: 3)
+        @param shallow: load a shallow version of RECORD (fewer channels in the decoder)
+        """
+        super(Record, self).__init__()
+        self.encoder = RecordEncoder(encoder_config, in_channels=in_channels, norm=norm)
+        self.decoder = RecordDecoder(decoder_config, n_class=n_class)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Forward pass RECORD model
+        @param x: input tensor with shape (B, C, T, H, W) where T is the number of timesteps
+        @return: ConfMap prediction of the last time step with shape (B, n_classes, H, W)
+        """
+        time_steps = x.shape[2]
+        assert len(x.shape) == 5
+        for t in range(time_steps):
+            if t == 0:
+                # Init hidden states if first time step of sliding window
+                self.encoder.__init_hidden__()
+            st_features_lstm1, st_features_lstm2, st_features_backbone = self.encoder(x[:, :, t])
+
+        confmap_pred = self.decoder(st_features_lstm1, st_features_lstm2, st_features_backbone)
+        return self.sigmoid(confmap_pred)
