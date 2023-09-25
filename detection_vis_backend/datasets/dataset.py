@@ -1557,7 +1557,8 @@ class CARRADA(Dataset):
     def get_RD(self, idx=None, for_visualize=False):
         # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         rd = np.load(self.RD_filenames[idx])
-        rd = np.rot90(rd, k=2) # To align with feature display in UI
+        if for_visualize:
+            rd = np.rot90(rd, k=2) # To align with feature display in UI
         return rd
 
     def get_radarpointcloud(self, idx=None, for_visualize=False):
@@ -1615,7 +1616,7 @@ class CARRADA(Dataset):
                         lower_left_corner[1], 
                         upper_right_corner[0], 
                         upper_right_corner[1]
-                        ]
+                    ]
                     gt.append([obj[0], obj[1], obj[2], obj[3], category])
         return gt
 
