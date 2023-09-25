@@ -239,14 +239,14 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.ylabel('Y(m)')
     st.pyplot(plt)
   elif feature == "RD":
-    plt.figure(figsize=(2, 6))
-    # Rotates RD image 90 degrees clockwise
+    plt.figure(figsize=(2, 3))
+    ## Rotates RD image 90 degrees clockwise
     # feature_image = np.rot90(feature_image, k=-1) 
     # img_height, img_width = feature_image.shape
     plt.imshow(feature_image) #, aspect='auto'
-    plt.xlabel('Doppler')
-    plt.ylabel('Range')
-    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
+    plt.xlabel('Doppler', fontsize=8)
+    plt.ylabel('Range', fontsize=8)
+    plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0, fontsize=8)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
       if len(objs[0]) == 2: 
@@ -260,7 +260,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
           ## If RD image doesn't rotate
           rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
-          plt.text(obj[0], obj[1] - 2, '%s' % obj[4], c='y')
+          plt.text(obj[0], obj[1] - 2, '%s' % obj[4], c='y', fontsize=6)
           # plt.yticks([0, 64, 128, 192, 255], [50, 37.5, 25, 12.5, 0]) # range
           # plt.xticks([0, 16, 32, 48, 63], [-13, -6.5, 0, 6.5, 13]) # doppler
 
@@ -277,7 +277,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
           # rect = Rectangle((new_x, new_y), new_width, new_height, linewidth=1, edgecolor='r', facecolor='none')
           # plt.gca().add_patch(rect)
           # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
-    st.pyplot(plt)
+    st.pyplot(plt, use_container_width=False)
   elif feature == "RA":
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image)

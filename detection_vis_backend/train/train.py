@@ -55,7 +55,7 @@ class TrainDataset(Dataset):
         self.features = features
         self.data_root = self.datasets[0].root_path
 
-        if self.model_cfg['class'] == 'RODNet':
+        if self.model_cfg['class'] in ('RODNet', 'RECORD'):
             with open(self.datasets[0].config, 'r') as file:
                 self.sensor_cfg = json.load(file)
 
@@ -73,13 +73,17 @@ class TrainDataset(Dataset):
             self.stride = train_cfg['train_stride']
 
             self.is_random_chirp = True
-            self.n_chirps = 1
             self.noise_channel = False
 
             # Dataloader for MNet
             if 'mnet_cfg' in model_cfg:
                 in_chirps, out_channels = model_cfg['mnet_cfg']
                 self.n_chirps = in_chirps
+            elif self.model_cfg['class'] == 'RECORD':
+                self.n_chirps = 4
+            else:
+                self.n_chirps = 1
+
             self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
 
             # dataset initialization
@@ -158,7 +162,7 @@ class TrainDataset(Dataset):
             # for f in self.features:
             #     data_dict[f] = self.datasets[dataset_idx].get_feature(f, idx)
             # return data_dict
-        elif self.model_cfg['class'] == 'RODNet':
+        elif self.model_cfg['class'] in ('RODNet', 'RECORD'):
             seq_id, data_id = self.index_mapping[index]
             seq_name = self.seq_names[seq_id]
             image_paths = self.image_paths[seq_id]
@@ -277,143 +281,6 @@ class TrainDataset(Dataset):
                 data_dict['anno'] = None
 
             return data_dict
-
-
-    # def prepare(self):
-    #     if self.model_cfg['class'] == 'RODNet':
-    #         sets_seqs = [dataset.seq_name for dataset in self.datasets]
-
-    #         data_root = self.data_root
-
-    #         # (tmp_path / 'train').mkdir(parents=True, exist_ok=True)
-    #         # (tmp_path / 'valid').mkdir(parents=True, exist_ok=True)
-    #         # (tmp_path / 'test').mkdir(parents=True, exist_ok=True)
-
-    #         # (data_path / 'sequences').mkdir(parents=True, exist_ok=True)
-    #         # (data_path / 'sequences' / 'train').mkdir(parents=True, exist_ok=True)
-    #         # (data_path / 'sequences' / 'valid').mkdir(parents=True, exist_ok=True)
-    #         # (data_path / 'sequences' / 'test').mkdir(parents=True, exist_ok=True)
-    #         # (data_path / 'annotations').mkdir(parents=True, exist_ok=True)
- 
-    #         camera_configs = self.sensor_cfg['camera_cfg']
-    #         radar_configs = self.sensor_cfg['radar_cfg']
-    #         n_chirp = radar_configs['n_chirps']
-    #         n_class = 3 # dataset.object_cfg.n_class
-
-    #         # data_root = os.path.join(data_path, 'sequences')
-    #         # anno_root = os.path.join(data_path, 'annotations')
-
-    #         # if split is None:
-    #         #     set_cfg = {
-    #         #         'subdir': '',
-    #         #         'seqs': sorted(os.listdir(data_root))
-    #         #     }
-    #         #     sets_seqs = sorted(os.listdir(data_root))
-    #         # else:
-    #         #     set_cfg = config_dict['dataset_cfg'][split]
-    #         #     if 'seqs' not in set_cfg:
-    #         #         sets_seqs = sorted(os.listdir(os.path.join(data_root, set_cfg['subdir'])))
-    #         #     else:
-    #         #         sets_seqs = set_cfg['seqs']
-
-    #         overwrite = False
-    #         # if overwrite:
-    #         #     if os.path.exists(os.path.join(data_dir, split)):
-    #         #         shutil.rmtree(os.path.join(data_dir, split))
-    #         #     os.makedirs(os.path.join(data_dir, split))
-
-    #         for i, seq in enumerate(sets_seqs):
-    #             # seq_path = os.path.join(data_root, set_cfg['subdir'], seq)
-    #             # seq_anno_path = os.path.join(anno_root, set_cfg['subdir'], seq + '.txt')
-    #             seq_anno_path = os.path.join(data_root, 'TRAIN_RAD_H_ANNO', seq + '.txt')
-    #             save_path = os.path.join(self.pkl_path, seq + '.pkl')
-    #             print("Sequence %s saving to %s" % (seq, save_path))
-
-    #             try:
-    #                 if not overwrite and os.path.exists(save_path):
-    #                     print("%s already exists, skip" % save_path)
-    #                     continue
-
-    #                 image_dir = os.path.join(data_root, 'TRAIN_CAM_0', seq, camera_configs['image_folder'])
-    #                 if os.path.exists(image_dir):
-    #                     image_paths = sorted([os.path.join(image_dir, name) for name in os.listdir(image_dir) if
-    #                                         name.endswith(camera_configs['ext'])])
-    #                     n_frame = len(image_paths)
-    #                 else:  # camera images are not available
-    #                     image_paths = None
-    #                     n_frame = None
-
-    #                 radar_dir = os.path.join(data_root, 'TRAIN_RAD_H', seq, radar_configs['chirp_folder'])
-    #                 # if radar_configs['data_type'] == 'RI' or radar_configs['data_type'] == 'AP':
-    #                 #     radar_paths = sorted([os.path.join(radar_dir, name) for name in os.listdir(radar_dir) if
-    #                 #                         name.endswith(dataset.sensor_cfg.radar_cfg['ext'])])
-    #                 #     n_radar_frame = len(radar_paths)
-    #                 #     assert n_frame == n_radar_frame
-    #                 # elif radar_configs['data_type'] == 'RISEP' or radar_configs['data_type'] == 'APSEP':
-    #                 #     radar_paths_chirp = []
-    #                 #     for chirp_id in range(n_chirp):
-    #                 #         chirp_dir = os.path.join(radar_dir, '%04d' % chirp_id)
-    #                 #         paths = sorted([os.path.join(chirp_dir, name) for name in os.listdir(chirp_dir) if
-    #                 #                         name.endswith(config_dict['dataset_cfg']['radar_cfg']['ext'])])
-    #                 #         n_radar_frame = len(paths)
-    #                 #         assert n_frame == n_radar_frame
-    #                 #         radar_paths_chirp.append(paths)
-    #                 #     radar_paths = []
-    #                 #     for frame_id in range(n_frame):
-    #                 #         frame_paths = []
-    #                 #         for chirp_id in range(n_chirp):
-    #                 #             frame_paths.append(radar_paths_chirp[chirp_id][frame_id])
-    #                 #         radar_paths.append(frame_paths)
-    #                 # elif radar_configs['data_type'] == 'ROD2021':
-    #                 if n_frame is not None:
-    #                     assert len(os.listdir(radar_dir)) == n_frame * len(radar_configs['chirp_ids'])
-    #                 else:  # radar frames are not available
-    #                     n_frame = int(len(os.listdir(radar_dir)) / len(radar_configs['chirp_ids']))
-    #                 radar_paths = []
-    #                 for frame_id in range(n_frame):
-    #                     chirp_paths = []
-    #                     for chirp_id in radar_configs['chirp_ids']:
-    #                         path = os.path.join(radar_dir, '%06d_%04d.' % (frame_id, chirp_id) +
-    #                                             radar_configs['ext'])
-    #                         chirp_paths.append(path)
-    #                     radar_paths.append(chirp_paths)
-    #                 # else:
-    #                 #     raise ValueError
-
-    #                 data_dict = dict(
-    #                     data_root=data_root,
-    #                     # data_path=seq_path,
-    #                     seq_name=seq,
-    #                     n_frame=n_frame,
-    #                     image_paths=image_paths,
-    #                     radar_paths=radar_paths,
-    #                     anno=None,
-    #                 )
-
-    #                 # if split == 'demo' or not os.path.exists(seq_anno_path):
-    #                 #     # no labels need to be saved
-    #                 #     pickle.dump(data_dict, open(save_path, 'wb'))
-    #                 #     continue
-    #                 # else:
-    #                 anno_obj = {}
-    #                 #if config_dict['dataset_cfg']['anno_ext'] == '.txt':
-    #                 anno_obj['metadata'] = load_anno_txt(seq_anno_path, n_frame, radar_configs)
-    #                 # elif config_dict['dataset_cfg']['anno_ext'] == '.json':
-    #                 #     with open(os.path.join(seq_anno_path), 'r') as f:
-    #                 #         anno = json.load(f)
-    #                 #     anno_obj['metadata'] = anno['metadata']
-    #                 # else:
-    #                 #     raise
-
-    #                 anno_obj['confmaps'] = generate_confmaps(anno_obj['metadata'], n_class, False, radar_configs)
-    #                 data_dict['anno'] = anno_obj
-    #                 # save pkl files
-    #                 pickle.dump(data_dict, open(save_path, 'wb'))
-    #                 # end frames loop
-
-    #             except Exception as e:
-    #                 print("Error while preparing %s: %s" % (seq, e))
-    #     return
 
     
 
