@@ -74,7 +74,7 @@ if subdatasets:
         col4.write(file["size"]) 
         # last column
         checkbox = f"{dataset['name']}_{index}_{file['name']}"
-        if  checkbox not in st.session_state:
+        if checkbox not in st.session_state:
           checkbox_status = col5.checkbox(" ", value=False,key=f"checkbox_{checkbox}")
           st.session_state[checkbox] = False
         elif st.session_state[checkbox]:

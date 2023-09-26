@@ -31,12 +31,13 @@ s = ''
 for i in st.session_state.datafiles_chosen:
   s += "- " + i["name"] + "\n"
 st.markdown(s)
+
 edit_data_action = st.button("Edit data", key="edit_data_btn")
 if edit_data_action:
   switch_page("choose data")
 
 
-features_chosen = st.write("You have chosen the following feature(s):")
+st.write("You have chosen the following feature(s):")
 s = ''
 for i in st.session_state.features_chosen:
   s += "- " + i + "\n"
@@ -89,7 +90,41 @@ def config_editor(model_cfg, train_cfg):
   train_configs = json.loads(formatted_train_configs)
   st.session_state.train_configs = train_configs
   return 
-  
+
+
+split_mode = st.radio("Select the data split way:", ["sequence", "random"], horizontal=True, key=f"radio_splitmode")
+if split_mode not in st.session_state:
+  st.session_state.split_mode = split_mode
+
+if split_mode == 'random':
+  if 'split_ratios' not in st.session_state:
+    st.session_state.split_ratios = []
+  split_value = st.slider('Select the ratio for Train/Validation/Test data:', 0.0, 1.0, (0.70, 0.90))
+  st.write(f"Split ratios:   Train: {split_value[0]:.2f}, Validation: {split_value[1]-split_value[0]:.2f}, Test: {1.0-split_value[1]:.2f}")
+  st.session_state.split_ratios = [split_value[0], split_value[1]-split_value[0], 1.0-split_value[1]]
+else:
+  if 'datafiles_split' not in st.session_state:
+    st.session_state.datafiles_split = {key: [] for key in ["train", "validation", "test"]}
+  splits = ["train", "validation", "test"]
+  for f in st.session_state.datafiles_chosen:
+    radiobox = f"split_{f['id']}"
+    if radiobox not in st.session_state:
+      radio_select = st.radio(f"File {f['name']} as:", ["train", "validation", "test"], index=None, horizontal=True, key=f"radio_{radiobox}")
+      # st.session_state[radiobox] = False
+    elif st.session_state[radiobox]:
+      radio_select = st.radio(f"File {f['name']} as:", ["train", "validation", "test"], index=splits.index(st.session_state[radiobox]), horizontal=True, key=f"radio_{radiobox}")
+    # else:
+    #   radio_select = col2.radio("", ["train", "validation", "test"], horizontal=True, key=f"radio_{radiobox}")
+    if radio_select and f not in st.session_state.datafiles_split[radio_select]:
+      st.session_state[radiobox] = radio_select
+      st.session_state.datafiles_split[radio_select].append(f)
+      left_splits = [x for x in splits if x != radio_select]
+      for split in left_splits:
+        if f in st.session_state.datafiles_split[split]:
+          st.session_state.datafiles_split[split].remove(f)
+          break
+
+
 
 # Optinon 1: Train from scratch
 model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD"]   # This will be changed when streamlit support selectbox with None as default option
@@ -108,6 +143,12 @@ if train_mode == train_modes[0]:
       train_configs = data
 
     config_editor(model_configs, train_configs)
+    if split_mode == 'Sequence':
+      train_configs["dataloader"]["splitmode"] = "sequence"
+      train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
+    else:
+      train_configs["dataloader"]["splitmode"] = "random"
+      train_configs["dataloader"]["split_random"] = st.session_state.datafiles_split
     
     train_action = st.button("Train", key="train_btn")
     if train_action:
@@ -166,6 +207,12 @@ if train_mode == train_modes[1]:
   model_paras = response.json()
 
   config_editor(model_paras["model_config"], model_paras["train_config"])
+  if split_mode == 'Sequence':
+    train_configs["dataloader"]["splitmode"] = "sequence"
+    train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
+  else:
+    train_configs["dataloader"]["splitmode"] = "random"
+    train_configs["dataloader"]["split_random"] = st.session_state.datafiles_split
 
   train_action = st.button("Train", key="train_btn")
   if train_action:
