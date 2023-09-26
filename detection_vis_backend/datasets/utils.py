@@ -5,6 +5,9 @@ import scipy
 import matplotlib.pyplot as plt
 
 
+from skimage import transform
+
+
 
 logger = logging.getLogger()
 
@@ -772,3 +775,112 @@ def qaut_to_angle(quat):
     pith = math.asin(2*(w*y-x*z))
     yaw = math.atan2(2*(w*z+x*y),1-2*(z*z+y*y))
     return rol
+
+
+class Rescale:
+    """Rescale the image in a sample to a given size.
+
+    PARAMETERS
+    ----------
+    output_size: tuple or int
+        Desired output size. If tuple, output is
+        matched to output_size. If int, smaller of image edges is matched
+        to output_size keeping aspect ratio the same.
+    """
+
+    def __init__(self, output_size):
+        assert isinstance(output_size, (int, tuple))
+        self.output_size = output_size
+
+    def __call__(self, frame):
+        matrix, rd_mask, ra_mask = frame['matrix'], frame['rd_mask'], frame['ra_mask']
+        h, w = matrix.shape[1:]
+        if isinstance(self.output_size, int):
+            if h > w:
+                new_h, new_w = self.output_size * h / w, self.output_size
+            else:
+                new_h, new_w = self.output_size, self.output_size * w / h
+        else:
+            new_h, new_w = self.output_size
+        new_h, new_w = int(new_h), int(new_w)
+        # transform.resize induce a smoothing effect on the values
+        # transform only the input data
+        matrix = transform.resize(matrix, (matrix.shape[0], new_h, new_w))
+        return {'matrix': matrix, 'rd_mask': rd_mask, 'ra_mask': ra_mask}
+
+
+class Flip:
+    """
+    Randomly flip the matrix with a proba p
+    """
+
+    def __init__(self, proba):
+        assert proba <= 1.
+        self.proba = proba
+
+    def __call__(self, frame):
+        matrix, mask = frame['matrix'], frame['mask']
+        h_flip_proba = np.random.uniform(0, 1)
+        if h_flip_proba < self.proba:
+            matrix = np.flip(matrix, axis=1).copy()
+            mask = np.flip(mask, axis=1).copy()
+        v_flip_proba = np.random.uniform(0, 1)
+        if v_flip_proba < self.proba:
+            matrix = np.flip(matrix, axis=2).copy()
+            mask = np.flip(mask, axis=2).copy()
+        return {'matrix': matrix, 'mask': mask}
+
+
+class HFlip:
+    """
+    Randomly horizontal flip the matrix with a proba p
+    """
+
+    def __init__(self):
+        pass
+
+    def __call__(self, frame):
+        matrix, mask = frame['matrix'], frame['mask']
+        matrix = np.flip(matrix, axis=1).copy()
+        if len(mask.shape) == 3:
+            mask = np.flip(mask, axis=1).copy()
+        elif len(mask.shape) == 4:
+            mask = np.flip(mask, axis=2).copy()
+        return {'matrix': matrix, 'mask': mask}
+
+
+class VFlip:
+    """
+    Randomly vertical flip the matrix with a proba p
+    """
+
+    def __init__(self):
+        pass
+
+    def __call__(self, frame):
+        matrix, mask = frame['matrix'], frame['mask']
+        matrix = np.flip(matrix, axis=2).copy()
+        if len(mask.shape) == 3:
+            mask = np.flip(mask, axis=2).copy()
+        elif len(mask.shape) == 4:
+            mask = np.flip(mask, axis=3).copy()
+        return {'matrix': matrix, 'mask': mask}
+    
+
+def get_transformations(transform_names, split='train', sizes=None):
+    """Create a list of functions used for preprocessing
+    @param transform_names: list of str, one for each transformation
+    @param split: split currently used
+    @param sizes: int or tuple (optional)
+    @return: transformations to use for preprocessing (e.g. data augmentation)
+    """
+    transformations = list()
+    if 'rescale' in transform_names:
+        transformations.append(Rescale(sizes))
+    if 'flip' in transform_names and split == 'train':
+        transformations.append(Flip(0.5))
+    if 'vflip' in transform_names and split == 'train':
+        transformations.append(VFlip())
+    if 'hflip' in transform_names and split == 'train':
+        transformations.append(HFlip())
+    return transformations
