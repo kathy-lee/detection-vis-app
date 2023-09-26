@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import lr_scheduler
-from torch.utils.data import Dataset
+from torch.utils.data import ConcatDataset, DataLoader, random_split
 from tqdm import tqdm
 
 import sys
@@ -26,282 +26,70 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import CreateDataLoaders, pixor_loss
+from detection_vis_backend.train.utils import FFTRadNet_collate, ROD_collate, pixor_loss
 from detection_vis_backend.train.evaluate import run_evaluation, run_FullEvaluation, RODNet_evaluation
 
-
-class TrainDataset(Dataset):
-    def __init__(self, datasets, model_cfg, train_cfg, features):
-        """
-        Args:
-            datasets (list): A list of dataset instances.
-        """
-        if not isinstance(datasets, list):
-            raise TypeError("The provided dataset instaces must be a list!")
-
-        if not datasets:
-            raise ValueError("The provided dataset instances list is empty!")
-        
-        if not all(type(item) == type(datasets[0]) for item in datasets):
-            raise ValueError("All dataset instaces must be of the same type.")
-
-        self.datasets = datasets
-        self.dataclass = type(datasets[0]).__name__
-        self.dataset_names = [dataset.seq_name for dataset in datasets]
-        self.dataset_lengths = [len(dataset) for dataset in datasets]
-        self.cumulative_lengths = np.cumsum(self.dataset_lengths)
-        self.model_cfg = model_cfg
-        self.train_cfg = train_cfg
-        self.features = features
-        self.data_root = self.datasets[0].root_path
-
-        if self.model_cfg['class'] in ('RODNet', 'RECORD'):
-            with open(self.datasets[0].config, 'r') as file:
-                self.sensor_cfg = json.load(file)
-
-            # parameters settings
-            self.n_class = 3 # dataset.object_cfg.n_class
-            self.win_size = train_cfg['win_size']
-
-            # if split == 'train' or split == 'valid':
-            #     self.step = train_cfg['train_step']
-            #     self.stride = train_cfg['train_stride']
-            # else:
-            #     self.step = train_cfg['test_step']
-            #     self.stride = train_cfg['test_stride']
-            self.step = train_cfg['train_step']
-            self.stride = train_cfg['train_stride']
-
-            self.is_random_chirp = True
-            self.noise_channel = False
-
-            # Dataloader for MNet
-            if 'mnet_cfg' in model_cfg:
-                in_chirps, out_channels = model_cfg['mnet_cfg']
-                self.n_chirps = in_chirps
-            elif self.model_cfg['class'] == 'RECORD':
-                self.n_chirps = 4
-            else:
-                self.n_chirps = 1
-
-            self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
-
-            # dataset initialization
-            self.image_paths = []
-            self.radar_paths = []
-            self.obj_infos = []
-            self.confmaps = []
-            self.n_data = 0
-            self.index_mapping = []
-
-            # if subset is not None:
-            #     self.data_files = [subset + '.pkl']
-            # else:
-            #     # self.data_files = list_pkl_filenames(config_dict['dataset_cfg'], split)
-
-            # self.data_files = sorted(os.listdir(self.pkl_path))
-            # self.seq_names = [name.split('.')[0] for name in self.data_files]
-            # self.n_seq = len(self.seq_names)
-            self.data_files = [os.path.join(dataset.pkl_path, dataset.seq_name + '.pkl') for dataset in self.datasets]
-            self.seq_names = [dataset.seq_name for dataset in self.datasets]
-
-            for seq_id, data_file in enumerate(tqdm(self.data_files)):
-                data_details = pickle.load(open(data_file, 'rb'))
-                # if split == 'train' or split == 'valid':
-                #     assert data_details['anno'] is not None
-                n_frame = data_details['n_frame']
-                self.image_paths.append(data_details['image_paths'])
-                self.radar_paths.append(data_details['radar_paths'])
-                n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
-                    1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
-                ## Added for dataset iterate with win size, step, stride
-                self.dataset_lengths[seq_id] = n_data_in_seq
-                ## End
-                self.n_data += n_data_in_seq
-                for data_id in range(n_data_in_seq):
-                    self.index_mapping.append([seq_id, data_id * self.stride])
-                if data_details['anno'] is not None:
-                    self.obj_infos.append(data_details['anno']['metadata'])
-                    self.confmaps.append(data_details['anno']['confmaps'])
-            ## Added for dataset iterate with win size, step, stride
-            self.cumulative_lengths = np.cumsum(self.dataset_lengths)
-            ## End
-            #print(f"##################### index_mapping: {len(self.index_mapping)}, {self.dataset_lengths}, {self.index_mapping[0]}")
-            return
-
-    def __len__(self):
-        if self.model_cfg['class'] == 'RODNet':
-            return self.n_data
-        else:
-            return sum(self.dataset_lengths)
-
-    def __getitem__(self, index):
-        # # Determine which dataset the index belongs to
-        # if idx < 0:
-        #     if -idx > len(self):
-        #         raise ValueError("absolute value of index should not exceed dataset length")
-        #     idx = len(self) + idx
-        # dataset_idx = next(i for i, cumulative_length in enumerate(self.cumulative_lengths) if idx < cumulative_length)
-        # if dataset_idx > 0:
-        #     idx = idx - self.cumulative_lengths[dataset_idx - 1]
-        # return self.datasets[dataset_idx].get_data(idx) 
-    
-        if self.model_cfg['class'] == 'FFTRadNet':
-            # (radar_FFT, segmap,out_label,box_labels,image)
-            # Determine which dataset the index belongs to
-            if idx < 0:
-                if -idx > len(self):
-                    raise ValueError("absolute value of index should not exceed dataset length")
-                idx = len(self) + idx
-            dataset_idx = next(i for i, cumulative_length in enumerate(self.cumulative_lengths) if idx < cumulative_length)
-            if dataset_idx > 0:
-                idx = idx - self.cumulative_lengths[dataset_idx - 1]
-            return self.datasets[dataset_idx](idx) 
-        
-            # data_dict = {}
-            # for f in self.features:
-            #     data_dict[f] = self.datasets[dataset_idx].get_feature(f, idx)
-            # return data_dict
-        elif self.model_cfg['class'] in ('RODNet', 'RECORD'):
-            seq_id, data_id = self.index_mapping[index]
-            seq_name = self.seq_names[seq_id]
-            image_paths = self.image_paths[seq_id]
-            radar_paths = self.radar_paths[seq_id]
-            if len(self.confmaps) != 0:
-                this_seq_obj_info = self.obj_infos[seq_id]
-                this_seq_confmap = self.confmaps[seq_id]
-
-            data_dict = dict(
-                status=True,
-                seq_names=seq_name,
-                image_paths=[]
-            )
-
-            if self.is_random_chirp:
-                chirp_id = random.randint(0, len(self.chirp_ids) - 1)
-            else:
-                chirp_id = 0
-
-            # Dataloader for MNet
-            if 'mnet_cfg' in self.model_cfg:
-                chirp_id = self.chirp_ids
-
-            radar_configs = self.sensor_cfg['radar_cfg']
-            ramap_rsize = radar_configs['ramap_rsize']
-            ramap_asize = radar_configs['ramap_asize']
-
-            # Load radar data
-            try:
-                if radar_configs['data_type'] == 'RI' or radar_configs['data_type'] == 'AP':  # drop this format
-                    radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                    for idx, frameid in enumerate(
-                            range(data_id, data_id + self.win_size * self.step, self.step)):
-                        radar_npy_win[idx, :, :, :] = np.load(radar_paths[frameid])
-                        data_dict['image_paths'].append(image_paths[frameid])
-                elif radar_configs['data_type'] == 'RISEP' or radar_configs['data_type'] == 'APSEP':
-                    if isinstance(chirp_id, int):
-                        radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                        for idx, frameid in enumerate(
-                                range(data_id, data_id + self.win_size * self.step, self.step)):
-                            radar_npy_win[idx, :, :, :] = np.load(radar_paths[frameid][chirp_id])
-                            data_dict['image_paths'].append(image_paths[frameid])
-                    elif isinstance(chirp_id, list):
-                        radar_npy_win = np.zeros((self.win_size, self.n_chirps, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                        for idx, frameid in enumerate(
-                                range(data_id, data_id + self.win_size * self.step, self.step)):
-                            for cid, c in enumerate(chirp_id):
-                                npy_path = radar_paths[frameid][c]
-                                radar_npy_win[idx, cid, :, :, :] = np.load(npy_path)
-                            data_dict['image_paths'].append(image_paths[frameid])
-                    else:
-                        raise TypeError
-                elif radar_configs['data_type'] == 'ROD2021':
-                    if isinstance(chirp_id, int):
-                        radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                        for idx, frameid in enumerate(
-                                range(data_id, data_id + self.win_size * self.step, self.step)):
-                            radar_npy_win[idx, :, :, :] = np.load(radar_paths[frameid][chirp_id])
-                            data_dict['image_paths'].append(image_paths[frameid])
-                    elif isinstance(chirp_id, list):
-                        radar_npy_win = np.zeros((self.win_size, self.n_chirps, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                        for idx, frameid in enumerate(
-                                range(data_id, data_id + self.win_size * self.step, self.step)):
-                            for cid, c in enumerate(chirp_id):
-                                npy_path = radar_paths[frameid][cid]
-                                radar_npy_win[idx, cid, :, :, :] = np.load(npy_path)
-                            data_dict['image_paths'].append(image_paths[frameid])
-                    else:
-                        raise TypeError
-                else:
-                    raise NotImplementedError
-
-                data_dict['start_frame'] = data_id
-                data_dict['end_frame'] = data_id + self.win_size * self.step - 1
-                #print(f"############################ {data_dict['start_frame']} ~~~  {data_dict['end_frame']}")
-            except:
-                # in case load npy fail
-                data_dict['status'] = False
-                if not os.path.exists('./tmp'):
-                    os.makedirs('./tmp')
-                log_name = 'loadnpyfail-' + time.strftime("%Y%m%d-%H%M%S") + '.txt'
-                with open(os.path.join('./tmp', log_name), 'w') as f_log:
-                    f_log.write('npy path: ' + radar_paths[frameid][chirp_id] + \
-                                '\nframe indices: %d:%d:%d' % (data_id, data_id + self.win_size * self.step, self.step))
-                return data_dict
-
-            # Dataloader for MNet
-            if 'mnet_cfg' in self.model_cfg:
-                radar_npy_win = np.transpose(radar_npy_win, (4, 0, 1, 2, 3))
-                assert radar_npy_win.shape == (
-                    2, self.win_size, self.n_chirps, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-            else:
-                radar_npy_win = np.transpose(radar_npy_win, (3, 0, 1, 2))
-                assert radar_npy_win.shape == (2, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-
-            data_dict['radar_data'] = radar_npy_win
-
-            # Load annotations
-            if len(self.confmaps) != 0:
-                confmap_gt = this_seq_confmap[data_id:data_id + self.win_size * self.step:self.step]
-                confmap_gt = np.transpose(confmap_gt, (1, 0, 2, 3))
-                obj_info = this_seq_obj_info[data_id:data_id + self.win_size * self.step:self.step]
-                if self.noise_channel:
-                    assert confmap_gt.shape == \
-                        (self.n_class + 1, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-                else:
-                    confmap_gt = confmap_gt[:self.n_class]
-                    assert confmap_gt.shape == \
-                        (self.n_class, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-
-                data_dict['anno'] = dict(
-                    obj_infos=obj_info,
-                    confmaps=confmap_gt,
-                )
-            else:
-                data_dict['anno'] = None
-
-            return data_dict
-
-    
+collate_func = {
+    'FFTRadNet': FFTRadNet_collate,
+    'RDDNet': ROD_collate,
+    'RECORD': None,
+}    
 
 def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):
-    # # old single data file mode
-    # for file in datafiles:
-    #     dataset_factory = DatasetFactory()
-    #     dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-    #     dataset_inst.parse(file['path'], file['name'], file['config'])
-    #     # specify the features as train input data type
-    #     dataset_inst.set_features(features)
+    dataset_factory = DatasetFactory()
+    if train_config['dataloader']['splitmode'] == 'sequence':
+        assert len(datafiles) > 1
+        dataset_inst_list = []
+        for file in train_config['dataloader']['split_sequence']['train']:
+            dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+            dataset_inst.prepare_for_train(features, train_config)
+            dataset_inst_list.append(dataset_inst)
+        train_dataset = ConcatDataset(dataset_inst_list)
+        dataset_inst_list = []
+        for file in train_config['dataloader']['split_sequence']['val']:
+            dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+            dataset_inst.prepare_for_train(features, train_config)
+            dataset_inst_list.append(dataset_inst)
+        val_dataset = ConcatDataset(dataset_inst_list)
+        dataset_inst_list = []
+        for file in train_config['dataloader']['split_sequence']['test']:
+            dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+            dataset_inst.prepare_for_train(features, train_config)
+            dataset_inst_list.append(dataset_inst)
+        test_dataset = ConcatDataset(dataset_inst_list)
+    else:
+        dataset_inst_list = []
+        for file in datafiles:
+            dataset_factory = DatasetFactory()
+            dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+            dataset.prepare_for_train(features, train_config)
+            dataset_inst_list.append(dataset_inst)
+        dataset = ConcatDataset(dataset_inst_list)
+        split = np.array(train_config['dataloader']['split_random'])
+        n_samples = len(dataset)
+        n_train = int(split[0] * n_samples)
+        n_val = int(split[1] * n_samples)
+        n_test = n_samples - n_train - n_val
+        train_dataset, val_dataset, test_dataset = random_split(dataset, [n_train, n_val,n_test], generator=torch.Generator().manual_seed(seed))
     
-    # new multiple data files mode
-    dataset_inst_list = []
-    for file in datafiles:
-        dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-        dataset_inst_list.append(dataset_inst)
-    integrated_dataset = TrainDataset(dataset_inst_list, model_config, train_config, features)
-
-    train_loader, val_loader, test_loader, train_ids, val_ids, test_ids = CreateDataLoaders(integrated_dataset, train_config['dataloader'], train_config['seed'])
+    train_loader = DataLoader(train_dataset, 
+                        batch_size=train_config['dataloader']['train']['batch_size'], 
+                        shuffle=True,
+                        num_workers=train_config['dataloader']['train']['num_workers'],
+                        pin_memory=True,
+                        collate_fn=collate_func[model_config['class']])
+    val_loader =  DataLoader(val_dataset, 
+                        batch_size=train_config['dataloader']['val']['batch_size'], 
+                        shuffle=False,
+                        num_workers=train_config['dataloader']['val']['num_workers'],
+                        pin_memory=True,
+                        collate_fn=collate_func[model_config['class']])
+    test_loader =  DataLoader(test_dataset, 
+                        batch_size=train_config['dataloader']['test']['batch_size'], 
+                        shuffle=False,
+                        num_workers=train_config['dataloader']['test']['num_workers'],
+                        pin_memory=True,
+                        collate_fn=collate_func[model_config['class']])
 
     # Setup random seed
     torch.manual_seed(train_config['seed'])
@@ -475,7 +263,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = run_evaluation(net,val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
+            eval = run_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
                                     segmentation_loss=freespace_loss, losses_params=train_config['losses'],
                                     device=device)
         elif model_type == "RODNet":

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, random_split, Subset
 from shapely.geometry import Polygon
 
 
-def RADIal_collate(batch):
+def FFTRadNet_collate(batch):
     images = []
     FFTs = []
     segmaps = []

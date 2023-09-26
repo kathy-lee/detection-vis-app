@@ -10,7 +10,7 @@
     "lr": 1e-3
   },
   "num_epochs":20,
-  "data_preprocess": {
+  "preprocess": {
     "normalize": false,
     "aug": {
       "mirror": 0.5,
