@@ -252,8 +252,8 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
       if len(objs[0]) == 2: 
         # Case: RADIal Dataset
         for obj in objs:
-          #plt.plot(obj[1],obj[0],'ro') 
-          plt.plot(img_width - obj[0], obj[1], 'ro')  # Adjust coordinates for rotation
+          plt.plot(obj[1],obj[0],'ro', alpha=0.4) 
+          # plt.plot(img_width - obj[0], obj[1], 'ro')  # Adjust coordinates for rotation
       elif len(objs[0]) == 5:
         # Case: CARRADA Dataset 
         for obj in objs:
