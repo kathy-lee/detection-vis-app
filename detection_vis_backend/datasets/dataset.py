@@ -1355,18 +1355,18 @@ class CRUW(Dataset):
         n_class = 3
 
         # Create pkl file to keep data infos in the seq file
-        self.pkl_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
-        self.pkl_path.mkdir(parents=True, exist_ok=True)
-        save_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
-        print("Sequence %s saving to %s" % (self.seq_name, save_path))
+        self.feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
+        self.feature_path.mkdir(parents=True, exist_ok=True)
+        self.pkl_path = os.path.join(self.feature_path, self.seq_name + '.pkl')
+        print("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
         overwrite = False
         # if overwrite:
         #     if os.path.exists(os.path.join(data_dir, split)):
         #         shutil.rmtree(os.path.join(data_dir, split))
         #     os.makedirs(os.path.join(data_dir, split))
         try:
-            if not overwrite and os.path.exists(save_path):
-                print("%s already exists, skip" % save_path)
+            if not overwrite and os.path.exists(self.pkl_path):
+                print("%s already exists, skip" % self.pkl_path)
                 return
 
             image_dir = os.path.join(self.root_path, 'TRAIN_CAM_0', self.seq_name, camera_configs['image_folder'])
@@ -1406,7 +1406,7 @@ class CRUW(Dataset):
 
             # if split == 'demo' or not os.path.exists(seq_anno_path):
             #     # no labels need to be saved
-            #     pickle.dump(data_dict, open(save_path, 'wb'))
+            #     pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             #     continue
             # else:
             anno_obj = {}
@@ -1423,7 +1423,7 @@ class CRUW(Dataset):
             anno_obj['confmaps'] = generate_confmaps(anno_obj['metadata'], n_class, False, radar_configs)
             data_dict['anno'] = anno_obj
             # save pkl files
-            pickle.dump(data_dict, open(save_path, 'wb'))
+            pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             # end frames loop
         except Exception as e:
             print("Error while preparing %s: %s" % (self.seq_name, e))
@@ -1475,8 +1475,7 @@ class CRUW(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
-        pkl_file_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
-        seq_details = pickle.load(open(pkl_file_path, 'rb'))
+        seq_details = pickle.load(open(self.pkl_path, 'rb'))
         lst_categories = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['categories']
         lst_center_ids = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['center_ids']
 
@@ -1492,9 +1491,9 @@ class CRUW(Dataset):
 
         if 'win_size' in train_cfg: 
             self.win_size = train_cfg['win_size'] 
-        if 'step' in train_cfg:
+        if 'train_step' in train_cfg:
             self.step = train_cfg['train_step']
-        if 'stride' in train_cfg:
+        if 'train_stride' in train_cfg:
             self.stride = train_cfg['train_stride']
 
         # if split == 'train' or split == 'valid':
