@@ -5,6 +5,7 @@ import torch
 import time
 import os
 import math
+import json
 
 from shapely.geometry import Polygon
 
@@ -14,7 +15,7 @@ from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
 
 
 
-def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
+def FFTRadNet_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
 
     metrics = Metrics()
     metrics.reset()
@@ -70,7 +71,7 @@ def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def run_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
+def FFTRadNet_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
 
     net.eval()
     
@@ -926,7 +927,11 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
-def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg, radar_cfg, device):
+def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
+    root_path = "/home/kangle/dataset/CRUW"
+    with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
+        sensor_cfg = json.load(file)
+    radar_cfg = sensor_cfg['radar_cfg']
     n_class = 3 # dataset.object_cfg.n_class
     classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
     rng_grid = confmap2ra(radar_cfg, name='range')
@@ -1048,12 +1053,13 @@ def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg
 
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
-    seq_names = train_cfg['dataloader']['split_sequence']['val']
+    sequences = train_cfg['dataloader']['split_sequence']['val']
 
     evalImgs_all = []
     n_frames_all = 0
 
-    for seq_name in seq_names:
+    for seq in sequences:
+        seq_name = seq['name']
         gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         res_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
