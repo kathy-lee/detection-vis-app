@@ -49,6 +49,8 @@ def reset_file():
     counter = f"counter_{feature}"
     if counter in st.session_state:
       st.session_state[counter] = 0
+  if 'features_chosen' in st.session_state:
+    st.session_state.features_chosen = None
 
 # old
 # datafile_name = st.selectbox("Which data file would you like to check the features?", [f["name"] for f in datafiles_chosen], 
@@ -560,8 +562,12 @@ if 'features_chosen' not in st.session_state:
 def set_train_features():
   st.session_state['features_chosen'] = st.session_state['train_features_selectbox']
 
+if st.session_state['features_chosen'] and not all(f in features for f in st.session_state['features_chosen']):
+  st.session_state['features_chosen'] = None
+
 st.multiselect("Which features would you like to select as train input?", features, st.session_state['features_chosen'], 
-               key="train_features_selectbox", on_change=set_train_features)
+              key="train_features_selectbox", on_change=set_train_features)
+
 
 button_click = st.button("Go to train", key='switch_train_page')
 if button_click:
