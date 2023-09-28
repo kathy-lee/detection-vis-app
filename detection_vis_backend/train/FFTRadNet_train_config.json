@@ -15,13 +15,13 @@
     },
     "num_epochs":20,
     "dataloader": {
-        "splitmode":"sequence",
+        "splitmode":"",
         "split_sequence": {
             "train": [],
             "val": [],
             "test": []
         },
-        "split_random":[0.7,0.15,0.15],
+        "split_random":[],
         "train": {
             "batch_size": 4,
             "num_workers": 4

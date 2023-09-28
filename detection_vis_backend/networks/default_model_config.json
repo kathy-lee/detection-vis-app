@@ -8,7 +8,7 @@
     },
     
     "RODNet": {
-        "type": "CDC_v2",
+        "type": "CDCv2",
         "in_channels": 4,
         "n_class": 3,
         "stacked_num": null,
