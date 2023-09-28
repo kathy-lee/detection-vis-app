@@ -27,11 +27,11 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, ROD_collate, pixor_loss
-from detection_vis_backend.train.evaluate import run_evaluation, run_FullEvaluation, RODNet_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
-    'RDDNet': ROD_collate,
+    'RODNet': ROD_collate,
     'RECORD': None,
 }    
 
@@ -187,7 +187,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
     print('===========  Dataset  ==================:')
-    print('      Mode:', train_config['dataloader']['splitmode'])
+    print('      Split Mode:', train_config['dataloader']['splitmode'])
     print('      Training:', len(train_dataset))
     print('      Validation:', len(val_dataset))
     print('      Test:', len(test_dataset))
@@ -210,14 +210,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     with open("exp_info.txt", 'w') as f:
         f.write(exp_name)
 
-    split_info_path = os.path.join(output_folder, exp_name, 'samples_split.txt')
-
     # Initialize tensorboard
     output_folder = Path(os.getenv('MODEL_ROOTDIR'))
     output_folder.mkdir(parents=True, exist_ok=True)
     (output_folder / exp_name).mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(output_folder / exp_name)
 
+    split_info_path = os.path.join(output_folder, exp_name, 'samples_split.txt')
     train_loader, val_loader, test_loader = CreateDataLoaders(datafiles, features, model_config, train_config, use_original_split, split_info_path)
 
     # save model lineage info
@@ -358,11 +357,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = run_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
+            eval = FFTRadNet_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
                                     segmentation_loss=freespace_loss, losses_params=train_config['losses'],
                                     device=device)
         elif model_type == "RODNet":
-            eval = RODNet_evaluation(net, val_loader, os.path.join(output_folder, exp_name), train_config, model_config, device)
+            eval = RODNet_evaluation(net, val_loader, val_eval_path, train_config, model_config, device)
             
         history['val_loss'].append(eval['loss'])
         history['mAP'].append(eval['mAP'])
@@ -396,8 +395,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         torch.save(checkpoint,filename)
 
     df_val_eval.to_csv(val_eval_path, index=False)
-    run_FullEvaluation(net, test_loader, test_eval_path, device=device)
 
+    if model_type == "FFTRadNet":
+        FFTRadNet_FullEvaluation(net, test_loader, test_eval_path, device=device)
+    elif model_type == "RODNet":
+        eval = RODNet_evaluation(net, test_loader, test_eval_path, train_config, model_config, device)
+            
     return 
 
 
