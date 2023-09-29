@@ -26,8 +26,8 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, ROD_collate, pixor_loss
-from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation
+from detection_vis_backend.train.utils import FFTRadNet_collate, ROD_collate, pixor_loss, SmoothCELoss
+from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation, RECORD_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
@@ -330,6 +330,18 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                         loss += loss_cur
                 else:
                     loss = criterion(outputs, confmap_gt)
+            elif model_type == "RECORD":
+                loss_type = train_config['loss']
+                if loss_type == 'bce':
+                    criterion = nn.BCELoss()
+                elif loss_type == 'mse':
+                    criterion = nn.SmoothL1Loss()
+                elif loss_type == 'smooth_ce':
+                    alpha = train_config['alpha_loss']
+                    criterion = SmoothCELoss(alpha)
+                else:
+                    raise ValueError
+                loss = criterion(outputs, confmap_gt)
 
             # backprop
             loss.backward()
@@ -362,6 +374,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                                     device=device)
         elif model_type == "RODNet":
             eval = RODNet_evaluation(net, val_loader, val_eval_path, train_config, model_config, device)
+        elif model_type == "RECORD":
+            eval = RECORD_evaluation(net, val_loader, val_eval_path, train_config, model_config, device, model_type)
             
         history['val_loss'].append(eval['loss'])
         history['mAP'].append(eval['mAP'])
@@ -395,13 +409,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         torch.save(checkpoint,filename)
 
     df_val_eval.to_csv(val_eval_path, index=False)
-
+    print(f'=========== Evaluation of Test data ===========')
     if model_type == "FFTRadNet":
         FFTRadNet_FullEvaluation(net, test_loader, test_eval_path, device=device)
     elif model_type == "RODNet":
         eval = RODNet_evaluation(net, test_loader, test_eval_path, train_config, model_config, device)
             
-    return 
+    return exp_name
 
 
 # class TrainModelFlow(FlowSpec):

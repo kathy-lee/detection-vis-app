@@ -362,3 +362,18 @@ def worldToImage(x,y,z):
     u = int(min(max(0,imgpts[0][0][0]),ImageWidth-1))
     v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
     return u, v
+
+class SmoothCELoss(nn.Module):
+    """
+    Smooth cross entropy loss
+    SCE = SmoothL1Loss() + BCELoss()
+    By default reduction is mean. 
+    """
+    def __init__(self, alpha):
+        super().__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+        self.bce = nn.BCELoss()
+        self.alpha = alpha
+    
+    def forward(self, input, target):
+        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)
