@@ -31,12 +31,13 @@ s = ''
 for i in st.session_state.datafiles_chosen:
   s += "- " + i["name"] + "\n"
 st.markdown(s)
+
 edit_data_action = st.button("Edit data", key="edit_data_btn")
 if edit_data_action:
   switch_page("choose data")
 
 
-features_chosen = st.write("You have chosen the following feature(s):")
+st.write("You have chosen the following feature(s):")
 s = ''
 for i in st.session_state.features_chosen:
   s += "- " + i + "\n"
@@ -44,6 +45,55 @@ st.markdown(s)
 edit_feature_action = st.button("Edit feature", key="edit_feature_btn")
 if edit_feature_action:
   switch_page("get features")
+
+
+dataset_name = st.session_state.datafiles_chosen[0]["parse"]
+if len(st.session_state.datafiles_chosen) > 1:
+  if all(f["parse"] == dataset_name for f in st.session_state.datafiles_chosen):
+    if dataset_name in ("RADIal", "CARRADA", "RADDet_dataset"):
+      split_mode = st.radio("Select the data split way:", ["sequence", "random", "original"], horizontal=True, key=f"radio_splitmode")
+      st.write("Original mode is the default split which the dataset provides.")
+    else:
+      split_mode = st.radio("Select the data split way:", ["sequence", "random"], horizontal=True, key=f"radio_splitmode")
+  else:
+    st.info("Train with files from different datasets is not supported currently.")
+    st.stop()
+else:
+  if dataset_name in ("RADIal", "CARRADA", "RADDet_dataset"):
+    split_mode = st.radio("Select the data split way:", ["random", "original"], horizontal=True, key=f"radio_splitmode")
+  else:
+    split_mode = "random"
+
+st.session_state.split_mode = split_mode
+
+if st.session_state.split_mode == 'random':
+  if 'split_ratios' not in st.session_state:
+    st.session_state.split_ratios = []
+  split_value = st.slider('Select the ratio for Train/Validation/Test data:', 0.0, 1.0, (0.70, 0.90))
+  st.write(f"Split ratios:   Train: {split_value[0]:.2f}, Validation: {split_value[1]-split_value[0]:.2f}, Test: {1.0-split_value[1]:.2f}")
+  st.session_state.split_ratios = [split_value[0], split_value[1]-split_value[0], 1.0-split_value[1]]
+elif st.session_state.split_mode == 'sequence':
+  if 'datafiles_split' not in st.session_state:
+    st.session_state.datafiles_split = {key: [] for key in ["train", "val", "test"]}
+  splits = ["train", "val", "test"]
+  for f in st.session_state.datafiles_chosen:
+    radiobox = f"split_{f['id']}"
+    if radiobox not in st.session_state:
+      radio_select = st.radio(f"File {f['name']} as:", ["train", "val", "test"], index=None, horizontal=True, key=f"radio_{radiobox}")
+      # st.session_state[radiobox] = False
+    elif st.session_state[radiobox]:
+      radio_select = st.radio(f"File {f['name']} as:", ["train", "val", "test"], index=splits.index(st.session_state[radiobox]), horizontal=True, key=f"radio_{radiobox}")
+    # else:
+    #   radio_select = col2.radio("", ["train", "validation", "test"], horizontal=True, key=f"radio_{radiobox}")
+    if radio_select and f not in st.session_state.datafiles_split[radio_select]:
+      st.session_state[radiobox] = radio_select
+      st.session_state.datafiles_split[radio_select].append(f)
+      left_splits = [x for x in splits if x != radio_select]
+      for split in left_splits:
+        if f in st.session_state.datafiles_split[split]:
+          st.session_state.datafiles_split[split].remove(f)
+          break
+
 
 train_modes = ["Train from scratch", "Train on a pre-trained model"]
 train_mode = st.radio("Choose a way to train model:", train_modes)
@@ -89,10 +139,10 @@ def config_editor(model_cfg, train_cfg):
   train_configs = json.loads(formatted_train_configs)
   st.session_state.train_configs = train_configs
   return 
-  
+
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD"]   # This will be changed when streamlit support selectbox with None as default option
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
@@ -103,11 +153,19 @@ if train_mode == train_modes[0]:
       data = json.load(file)
       model_configs = data[model]
     
-    with open(os.path.join('detection_vis_backend', 'train', 'default_train_config.json'), 'r') as file:
+    with open(os.path.join('detection_vis_backend', 'train', f'{model}_train_config.json'), 'r') as file:
       data = json.load(file)
       train_configs = data
 
     config_editor(model_configs, train_configs)
+    if st.session_state.split_mode == 'sequence':
+      st.session_state.train_configs["dataloader"]["splitmode"] = "sequence"
+      st.session_state.train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
+    elif st.session_state.split_mode == 'random':
+      st.session_state.train_configs["dataloader"]["splitmode"] = "random"
+      st.session_state.train_configs["dataloader"]["split_random"] = st.session_state.split_ratios
+    else:
+      st.session_state.train_configs["dataloader"]["splitmode"] = "original"
     
     train_action = st.button("Train", key="train_btn")
     if train_action:
@@ -126,7 +184,8 @@ if train_mode == train_modes[0]:
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
                   "features_chosen": st.session_state.features_chosen, 
                   "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
+                  "train_configs": st.session_state.train_configs,
+                  "use_original_split": st.session_state.split_mode == "original"}
         response = requests.post(f"http://{backend_service}:8001/train", json=params)
       if response.status_code != 200:
         st.info("An error occurred in training.")
@@ -166,6 +225,14 @@ if train_mode == train_modes[1]:
   model_paras = response.json()
 
   config_editor(model_paras["model_config"], model_paras["train_config"])
+  if st.session_state.split_mode == 'sequence':
+    st.session_state.train_configs["dataloader"]["splitmode"] = "sequence"
+    st.session_state.train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
+  elif st.session_state.split_mode == 'random':
+    st.session_state.train_configs["dataloader"]["splitmode"] = "random"
+    st.session_state.train_configs["dataloader"]["split_random"] = st.session_state.split_ratios
+  else:
+    st.session_state.train_configs["dataloader"]["splitmode"] = "original"
 
   train_action = st.button("Train", key="train_btn")
   if train_action:
@@ -176,7 +243,8 @@ if train_mode == train_modes[1]:
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
                   "features_chosen": st.session_state.features_chosen, 
                   "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
+                  "train_configs": st.session_state.train_configs,
+                  "use_original_split": st.session_state.split_mode == "original"}
         response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
       if response.status_code != 200:
         st.info("An error occurred in training.")

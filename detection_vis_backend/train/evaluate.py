@@ -5,6 +5,7 @@ import torch
 import time
 import os
 import math
+import json
 
 from shapely.geometry import Polygon
 
@@ -14,7 +15,7 @@ from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
 
 
 
-def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
+def FFTRadNet_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
 
     metrics = Metrics()
     metrics.reset()
@@ -70,7 +71,7 @@ def run_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def run_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
+def FFTRadNet_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
 
     net.eval()
     
@@ -926,7 +927,11 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
-def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg, radar_cfg, device):
+def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
+    root_path = "/home/kangle/dataset/CRUW"
+    with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
+        sensor_cfg = json.load(file)
+    radar_cfg = sensor_cfg['radar_cfg']
     n_class = 3 # dataset.object_cfg.n_class
     classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
     rng_grid = confmap2ra(radar_cfg, name='range')
@@ -1034,7 +1039,7 @@ def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg
                 init_genConfmap = init_genConfmap.next
                 offset += 1
                 cur_frame_id += 1
-        print(f"validation ---- {iter}/{len(dataloader)} finished")
+        print(f"Sample {iter}/{len(dataloader)} finished")
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
@@ -1048,12 +1053,13 @@ def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg
 
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
-    seq_names = train_cfg['dataloader']['split_sequence']['val']
+    sequences = train_cfg['dataloader']['split_sequence']['val']
 
     evalImgs_all = []
     n_frames_all = 0
 
-    for seq_name in seq_names:
+    for seq in sequences:
+        seq_name = seq['name']
         gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         res_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
@@ -1073,3 +1079,45 @@ def RODNet_evaluation(net, dataloader, root_path, save_dir, train_cfg, model_cfg
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
     print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+
+
+def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, model_type):
+    root_path = "/home/kangle/dataset/CRUW"
+    with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
+        sensor_cfg = json.load(file)
+    radar_cfg = sensor_cfg['radar_cfg']
+    n_class = 3 # dataset.object_cfg.n_class
+    classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
+    rng_grid = confmap2ra(radar_cfg, name='range')
+    agl_grid = confmap2ra(radar_cfg, name='angle')
+
+    for iter, data_dict in enumerate(dataloader):
+        ra_maps = data_dict['radar_data'].to(device).float()
+        confmap_gts = data_dict['anno']['confmaps'].float()
+        image_paths = data_dict['image_paths']
+        seq_name = data_dict['seq_names'][0]
+        save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+
+        if confmap_gts is not None:
+            start_frame_name = image_paths[0][0].split('/')[-1].split('.')[0]
+            frame_name = image_paths[0][-1].split('/')[-1].split('.')[0]
+            frame_id = int(frame_name)
+        else:
+            start_frame_name = image_paths[0][0][0].split('/')[-1].split('.')[0].split('_')[0]
+            frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
+            frame_id = int(frame_name)
+
+        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstmSingle'):
+            for tmp_frame_id in range(frame_id):
+                print("Eval frame", tmp_frame_id)
+                tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
+                with torch.set_grad_enabled(False):
+                    confmap_pred = net(tmp_ra_maps)
+                res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+                write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
+
+        confmap_pred = net(ra_maps)
+
+        # Write results
+        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+        write_dets_results_single_frame(res_final, frame_id, save_path, classes)

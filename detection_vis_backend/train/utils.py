@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, random_split, Subset
 from shapely.geometry import Polygon
 
 
-def RADIal_collate(batch):
+def FFTRadNet_collate(batch):
     images = []
     FFTs = []
     segmaps = []
@@ -81,143 +81,6 @@ def ROD_collate(batch):
         return batch
 
     raise TypeError(default_collate_err_msg_format.format(elem_type))
-
-
-def CreateDataLoaders(dataset,config=None,seed=0):
-
-    if dataset.model_cfg['class'] == 'FFTRadNet':
-        collate_func = RADIal_collate
-    elif dataset.model_cfg['class'] == 'RODNet':
-        collate_func = ROD_collate
-
-    if(config['splitmode']=='random'):
-        # generated training and validation set
-        # number of images used for training and validation
-        n_images = dataset.__len__()
-
-        split = np.array(config['split_random'])
-        if(np.sum(split)!=1):
-            raise NameError('The sum of the train/val/test split should be equal to 1')
-            return
-
-        n_train = int(config['split'][0] * n_images)
-        n_val = int(config['split'][1] * n_images)
-        n_test = n_images - n_train - n_val
-
-        train_dataset, val_dataset, test_dataset = random_split(
-            dataset, [n_train, n_val,n_test], generator=torch.Generator().manual_seed(seed))
-
-        print('===========  Dataset  ==================:')
-        print('      Mode:', config['splitmode'])
-        print('      Train Val ratio:', config['split_random'])
-        print('      Training:', len(train_dataset),' indexes...',train_dataset.indices[:3])
-        print('      Validation:', len(val_dataset),' indexes...',val_dataset.indices[:3])
-        print('      Test:', len(test_dataset),' indexes...',test_dataset.indices[:3])
-        print('')
-
-        # create data_loaders
-        train_loader = DataLoader(train_dataset, 
-                                batch_size=config['train']['batch_size'], 
-                                shuffle=True,
-                                num_workers=config['train']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-        val_loader = DataLoader(val_dataset, 
-                                batch_size=config['val']['batch_size'], 
-                                shuffle=False,
-                                num_workers=config['val']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-        test_loader = DataLoader(test_dataset, 
-                                batch_size=config['test']['batch_size'], 
-                                shuffle=False,
-                                num_workers=config['test']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-
-        train_ids = train_dataset.indices
-        val_ids = val_dataset.indices
-        test_ids = test_dataset.indices
-        return train_loader,val_loader,test_loader,train_ids,val_ids,test_ids
-    elif(config['splitmode']=='sequence'):
-        Sequences = config['split_sequence']
-        
-        if dataset.model_cfg['class'] == 'FFTRadNet':
-            # Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
-            #                            'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
-            #             'test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
-            #                     'RECORD@2020-11-22_12.03.47','RECORD@2020-11-22_12.54.38']}
-            
-            labels = dataset.datasets[0].labels
-            dict_index_to_keys = {s:i for i,s in enumerate(dataset.datasets[0].sample_keys)}
-
-            Val_indexes = []
-            for seq in Sequences['val']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Val_indexes.append(labels[idx,0])
-            Val_indexes = np.unique(np.concatenate(Val_indexes))
-
-            Test_indexes = []
-            for seq in Sequences['test']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Test_indexes.append(labels[idx,0])
-            Test_indexes = np.unique(np.concatenate(Test_indexes))
-
-            val_ids = [dict_index_to_keys[k] for k in Val_indexes]
-            test_ids = [dict_index_to_keys[k] for k in Test_indexes]
-            train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))   
-        else:
-            val_dataset_indices = [i for i, name in enumerate(dataset.dataset_names) if name in Sequences['val']]
-            val_ids = []
-            for idx in val_dataset_indices:
-                start_idx = 0 if idx == 0 else dataset.cumulative_lengths[idx-1]
-                end_idx = dataset.cumulative_lengths[idx]
-                val_ids.extend(range(start_idx, end_idx))
-
-            test_dataset_indices = [i for i, name in enumerate(dataset.dataset_names) if name in Sequences['test']]
-            test_ids = []
-            for idx in test_dataset_indices:
-                start_idx = 0 if idx == 0 else dataset.cumulative_lengths[idx-1]
-                end_idx = dataset.cumulative_lengths[idx]
-                test_ids.extend(range(start_idx, end_idx))
-
-            train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))
-
-        train_dataset = Subset(dataset,train_ids)
-        val_dataset = Subset(dataset,val_ids)
-        test_dataset = Subset(dataset,test_ids)
-
-        print('===========  Dataset  ==================:')
-        print('      Mode:', config['splitmode'])
-        print('      Training:', len(train_dataset))
-        print('      Validation:', len(val_dataset))
-        print('      Test:', len(test_dataset))
-        print('')
-
-        # create data_loaders
-        train_loader = DataLoader(train_dataset, 
-                                batch_size=config['train']['batch_size'], 
-                                shuffle=True,
-                                num_workers=config['train']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-        val_loader =  DataLoader(val_dataset, 
-                                batch_size=config['val']['batch_size'], 
-                                shuffle=False,
-                                num_workers=config['val']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-        test_loader =  DataLoader(test_dataset, 
-                                batch_size=config['test']['batch_size'], 
-                                shuffle=False,
-                                num_workers=config['test']['num_workers'],
-                                pin_memory=True,
-                                collate_fn=collate_func)
-        print(f"Train/Val/Test Dataloaders in {config['splitmode']} mode created.")
-        return train_loader,val_loader,test_loader,train_ids,val_ids,test_ids
-    else:      
-        raise NameError(config['splitmode'], 'is not supported !')
-        return
 
 
 def decode(map,threshold):
@@ -499,3 +362,18 @@ def worldToImage(x,y,z):
     u = int(min(max(0,imgpts[0][0][0]),ImageWidth-1))
     v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
     return u, v
+
+class SmoothCELoss(nn.Module):
+    """
+    Smooth cross entropy loss
+    SCE = SmoothL1Loss() + BCELoss()
+    By default reduction is mean. 
+    """
+    def __init__(self, alpha):
+        super().__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+        self.bce = nn.BCELoss()
+        self.alpha = alpha
+    
+    def forward(self, input, target):
+        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)

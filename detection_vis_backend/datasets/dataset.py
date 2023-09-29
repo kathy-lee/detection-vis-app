@@ -10,6 +10,8 @@ import torch
 import math
 import pickle
 import json
+import random
+import time
 import numpy as np
 import torchvision.transforms as transform
 import pandas as pd
@@ -24,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, qaut_to_angle
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -622,6 +624,9 @@ class RADIal(Dataset):
                 gt.append(label[[9,11]].tolist())
         return gt
     
+    def prepare_for_train(self, features, train_cfg, model_cfg):
+        return
+
     def __len__(self):
         return len(self.label_dict)
 
@@ -1350,18 +1355,18 @@ class CRUW(Dataset):
         n_class = 3
 
         # Create pkl file to keep data infos in the seq file
-        self.pkl_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
-        self.pkl_path.mkdir(parents=True, exist_ok=True)
-        save_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
-        print("Sequence %s saving to %s" % (self.seq_name, save_path))
+        self.feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
+        self.feature_path.mkdir(parents=True, exist_ok=True)
+        self.pkl_path = os.path.join(self.feature_path, self.seq_name + '.pkl')
+        print("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
         overwrite = False
         # if overwrite:
         #     if os.path.exists(os.path.join(data_dir, split)):
         #         shutil.rmtree(os.path.join(data_dir, split))
         #     os.makedirs(os.path.join(data_dir, split))
         try:
-            if not overwrite and os.path.exists(save_path):
-                print("%s already exists, skip" % save_path)
+            if not overwrite and os.path.exists(self.pkl_path):
+                print("%s already exists, skip" % self.pkl_path)
                 return
 
             image_dir = os.path.join(self.root_path, 'TRAIN_CAM_0', self.seq_name, camera_configs['image_folder'])
@@ -1374,27 +1379,6 @@ class CRUW(Dataset):
                 n_frame = None
 
             radar_dir = os.path.join(self.root_path, 'TRAIN_RAD_H', self.seq_name, radar_configs['chirp_folder'])
-            # if radar_configs['data_type'] == 'RI' or radar_configs['data_type'] == 'AP':
-            #     radar_paths = sorted([os.path.join(radar_dir, name) for name in os.listdir(radar_dir) if
-            #                         name.endswith(dataset.sensor_cfg.radar_cfg['ext'])])
-            #     n_radar_frame = len(radar_paths)
-            #     assert n_frame == n_radar_frame
-            # elif radar_configs['data_type'] == 'RISEP' or radar_configs['data_type'] == 'APSEP':
-            #     radar_paths_chirp = []
-            #     for chirp_id in range(n_chirp):
-            #         chirp_dir = os.path.join(radar_dir, '%04d' % chirp_id)
-            #         paths = sorted([os.path.join(chirp_dir, name) for name in os.listdir(chirp_dir) if
-            #                         name.endswith(config_dict['dataset_cfg']['radar_cfg']['ext'])])
-            #         n_radar_frame = len(paths)
-            #         assert n_frame == n_radar_frame
-            #         radar_paths_chirp.append(paths)
-            #     radar_paths = []
-            #     for frame_id in range(n_frame):
-            #         frame_paths = []
-            #         for chirp_id in range(n_chirp):
-            #             frame_paths.append(radar_paths_chirp[chirp_id][frame_id])
-            #         radar_paths.append(frame_paths)
-            # elif radar_configs['data_type'] == 'ROD2021':
             if n_frame is not None:
                 assert len(os.listdir(radar_dir)) == n_frame * len(radar_configs['chirp_ids'])
             else:  # radar frames are not available
@@ -1422,7 +1406,7 @@ class CRUW(Dataset):
 
             # if split == 'demo' or not os.path.exists(seq_anno_path):
             #     # no labels need to be saved
-            #     pickle.dump(data_dict, open(save_path, 'wb'))
+            #     pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             #     continue
             # else:
             anno_obj = {}
@@ -1439,7 +1423,7 @@ class CRUW(Dataset):
             anno_obj['confmaps'] = generate_confmaps(anno_obj['metadata'], n_class, False, radar_configs)
             data_dict['anno'] = anno_obj
             # save pkl files
-            pickle.dump(data_dict, open(save_path, 'wb'))
+            pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             # end frames loop
         except Exception as e:
             print("Error while preparing %s: %s" % (self.seq_name, e))
@@ -1476,13 +1460,6 @@ class CRUW(Dataset):
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
 
-    def __len__(self):
-        return self.frame_sync
-
-    def __getitem__(self, index):
-        
-       return None
-    
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
             'RAD': self.get_RAD,
@@ -1498,8 +1475,7 @@ class CRUW(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
-        pkl_file_path = os.path.join(self.pkl_path, self.seq_name + '.pkl')
-        seq_details = pickle.load(open(pkl_file_path, 'rb'))
+        seq_details = pickle.load(open(self.pkl_path, 'rb'))
         lst_categories = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['categories']
         lst_center_ids = seq_details['anno']['metadata'][idx]['rad_h']['obj_info']['center_ids']
 
@@ -1510,6 +1486,139 @@ class CRUW(Dataset):
                 gt.append(center_id + [category])
         return gt
     
+    def prepare_for_train(self, features, train_cfg, model_cfg):
+        self.n_class = 3 # dataset.object_cfg.n_class
+
+        if 'win_size' in train_cfg: 
+            self.win_size = train_cfg['win_size'] 
+        if 'train_step' in train_cfg:
+            self.step = train_cfg['train_step']
+        if 'train_stride' in train_cfg:
+            self.stride = train_cfg['train_stride']
+
+        # if split == 'train' or split == 'valid':
+        #     self.step = train_cfg['train_step']
+        #     self.stride = train_cfg['train_stride']
+        # else:
+        #     self.step = train_cfg['test_step']
+        #     self.stride = train_cfg['test_stride']
+
+        self.is_random_chirp = True
+        self.noise_channel = False
+
+        # Dataloader for MNet
+        if 'mnet_cfg' in model_cfg:
+            in_chirps, _ = model_cfg['mnet_cfg']
+            self.n_chirps = in_chirps
+        elif self.model_cfg['class'] == 'RECORD':
+            self.n_chirps = 4
+        else:
+            self.n_chirps = 1
+
+        self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
+
+        data_details = pickle.load(open(self.pkl_path, 'rb'))
+        self.image_paths = data_details['image_paths']
+        self.radar_paths = data_details['radar_paths']
+        if data_details['anno'] is not None:
+            self.obj_infos = data_details['anno']['metadata']
+            self.confmaps = data_details['anno']['confmaps']
+        n_frame = data_details['n_frame']
+        n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
+            1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
+        self.datasamples_length = n_data_in_seq
+        return
+    
+    def __len__(self):
+        return self.datasamples_length #self.frame_sync
+
+    def __getitem__(self, index):
+        data_dict = dict(
+            status=True,
+            seq_names=self.seq_name,
+            image_paths=[]
+        )
+
+        if self.is_random_chirp:
+            chirp_id = random.randint(0, len(self.chirp_ids) - 1)
+        else:
+            chirp_id = 0
+
+        # Dataloader for MNet
+        if self.n_chirps > 1:
+            chirp_id = self.chirp_ids
+        # if 'mnet_cfg' in self.model_cfg:
+        #     chirp_id = self.chirp_ids
+
+        radar_configs = self.sensor_cfg['radar_cfg']
+        ramap_rsize = radar_configs['ramap_rsize']
+        ramap_asize = radar_configs['ramap_asize']
+
+        # Load radar data
+        try:
+            data_id = index * self.stride
+            if isinstance(chirp_id, int):
+                radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
+                for idx, frameid in enumerate(
+                        range(data_id, data_id + self.win_size * self.step, self.step)):
+                    radar_npy_win[idx, :, :, :] = np.load(self.radar_paths[frameid][chirp_id])
+                    data_dict['image_paths'].append(self.image_paths[frameid])
+            elif isinstance(chirp_id, list):
+                radar_npy_win = np.zeros((self.win_size, self.n_chirps, ramap_rsize, ramap_asize, 2), dtype=np.float32)
+                for idx, frameid in enumerate(
+                        range(data_id, data_id + self.win_size * self.step, self.step)):
+                    for cid, c in enumerate(chirp_id):
+                        npy_path = self.radar_paths[frameid][cid]
+                        radar_npy_win[idx, cid, :, :, :] = np.load(npy_path)
+                    data_dict['image_paths'].append(self.image_paths[frameid])
+            else:
+                raise TypeError
+            
+            data_dict['start_frame'] = data_id
+            data_dict['end_frame'] = data_id + self.win_size * self.step - 1
+            #print(f"############################ {data_dict['start_frame']} ~~~  {data_dict['end_frame']}")
+        except:
+            # in case load npy fail
+            data_dict['status'] = False
+            if not os.path.exists('./tmp'):
+                os.makedirs('./tmp')
+            log_name = 'loadnpyfail-' + time.strftime("%Y%m%d-%H%M%S") + '.txt'
+            with open(os.path.join('./tmp', log_name), 'w') as f_log:
+                f_log.write('npy path: ' + self.radar_paths[frameid][chirp_id] + \
+                            '\nframe indices: %d:%d:%d' % (data_id, data_id + self.win_size * self.step, self.step))
+            return data_dict
+
+        # Dataloader for MNet
+        if self.n_chirps > 1: # if 'mnet_cfg' in self.model_cfg:
+            radar_npy_win = np.transpose(radar_npy_win, (4, 0, 1, 2, 3))
+            assert radar_npy_win.shape == (
+                2, self.win_size, self.n_chirps, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+        else:
+            radar_npy_win = np.transpose(radar_npy_win, (3, 0, 1, 2))
+            assert radar_npy_win.shape == (2, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+
+        data_dict['radar_data'] = radar_npy_win
+
+        # Load annotations
+        if len(self.confmaps) != 0:
+            confmap_gt = self.confmaps[data_id:data_id + self.win_size * self.step:self.step]
+            confmap_gt = np.transpose(confmap_gt, (1, 0, 2, 3))
+            obj_info = self.obj_infos[data_id:data_id + self.win_size * self.step:self.step]
+            if self.noise_channel:
+                assert confmap_gt.shape == \
+                    (self.n_class + 1, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+            else:
+                confmap_gt = confmap_gt[:self.n_class]
+                assert confmap_gt.shape == \
+                    (self.n_class, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+
+            data_dict['anno'] = dict(
+                obj_infos=obj_info,
+                confmaps=confmap_gt,
+            )
+        else:
+            data_dict['anno'] = None
+        return data_dict
 
 
 class CARRADA(Dataset):
@@ -1526,16 +1635,17 @@ class CARRADA(Dataset):
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
+        self.path_to_frames = os.path.join(self.root_path, 'Carrada', file_name)
 
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
-        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'camera_images'))
-        self.RD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'range_doppler_numpy'))
-        self.RA_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'range_angle_numpy'))
-        self.AD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada', file_name, 'angle_doppler_raw'))
-        self.frame_sync = len(self.image_filenames)
+        self.image_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'camera_images'))
+        self.RD_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'range_doppler_numpy'))
+        self.RA_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'range_angle_numpy'))
+        self.AD_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'angle_doppler_raw'))
+        self.frame_sync = len(self.RD_filenames)
         self.RAD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada_RAD', file_name, 'RAD_numpy'))
 
         anno_path = os.path.join(self.root_path, 'Carrada', 'annotations_frame_oriented.json')
@@ -1572,13 +1682,6 @@ class CARRADA(Dataset):
       
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-
-    def __len__(self):
-        return self.frame_sync
-
-    def __getitem__(self, index):
-        
-       return None
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
@@ -1619,6 +1722,212 @@ class CARRADA(Dataset):
                     ]
                     gt.append([obj[0], obj[1], obj[2], obj[3], category])
         return gt
+
+    def transform(self, frame, is_vflip=False, is_hflip=False):
+        if self.transformations is not None:
+            for function in self.transformations:
+                if isinstance(function, VFlip):
+                    if is_vflip:
+                        frame = function(frame)
+                    else:
+                        continue
+                if isinstance(function, HFlip):
+                    if is_hflip:
+                        frame = function(frame)
+                    else:
+                        continue
+                if not isinstance(function, VFlip) and not isinstance(function, HFlip):
+                    frame = function(frame)
+        return frame
+    
+    def prepare_for_train(self, features, train_cfg, model_cfg):
+        # self.dataset = dataset
+        self.process_signal = True
+        self.n_frames = model_cfg['win_size']
+        # self.dataset = self.dataset[self.n_frames-1:]  # remove n first frames
+        self.transformations = get_transformations(transform_names=train_cfg['transformations'].split(','), 
+                                                   sizes=(train_cfg['preprocess']['w_size'], train_cfg['preprocess']['h_size']))
+        self.add_temp = True
+        self.annotation_type = 'dense'
+        self.path_to_annots = os.path.join(self.path_to_frames, 'annotations', self.annotation_type)
+
+        self.features = features
+
+    def __len__(self):
+        return self.frame_sync - self.n_frames + 1
+
+    def __getitem__(self, index):
+        frame_id = index + self.n_frames - 1
+        init_frame_name = "{:06d}".format(frame_id)
+        frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.n_frames+1, frame_id+1)]
+        if self.features == ['RD']:  
+            rd_matrices = list()
+            rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name, 'range_doppler.npy'))
+
+            for frame_name in frame_names:
+                if self.process_signal:
+                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_doppler_processed',
+                                                    frame_name + '.npy'))
+                else:
+                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_doppler_raw',
+                                                    frame_name + '.npy'))
+
+                rd_matrices.append(rd_matrix)
+
+            camera_path = os.path.join(self.path_to_frames, 'camera_images', frame_name + '.jpg')
+            # Apply the same transfo to all representations
+            if np.random.uniform(0, 1) > 0.5:
+                is_vflip = True
+            else:
+                is_vflip = False
+            if np.random.uniform(0, 1) > 0.5:
+                is_hflip = True
+            else:
+                is_hflip = False
+
+            rd_matrix = np.dstack(rd_matrices)
+            rd_matrix = np.rollaxis(rd_matrix, axis=-1)
+            rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
+            rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            if self.add_temp:
+                if isinstance(self.add_temp, bool):
+                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
+                else:
+                    assert isinstance(self.add_temp, int)
+                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
+                                                        axis=self.add_temp)
+
+            frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'], 'image_path': camera_path}
+        elif self.features == ['RA']:
+            ra_matrices = list()
+            ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
+                                        'range_angle.npy'))
+
+            for frame_name in frame_names:
+                if self.process_signal:
+                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_angle_processed',
+                                                    frame_name + '.npy'))
+                else:
+                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_angle_raw',
+                                                    frame_name + '.npy'))
+
+                ra_matrices.append(ra_matrix)
+
+            camera_path = os.path.join(self.path_to_frames, 'camera_images', frame_name + '.jpg')
+            # Apply the same transfo to all representations
+            if np.random.uniform(0, 1) > 0.5:
+                is_vflip = True
+            else:
+                is_vflip = False
+            if np.random.uniform(0, 1) > 0.5:
+                is_hflip = True
+            else:
+                is_hflip = False
+
+            ra_matrix = np.dstack(ra_matrices)
+            ra_matrix = np.rollaxis(ra_matrix, axis=-1)
+            ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
+            ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            if self.add_temp:
+                if isinstance(self.add_temp, bool):
+                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
+                else:
+                    assert isinstance(self.add_temp, int)
+                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
+                                                        axis=self.add_temp)
+
+            frame = {'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'], 'image_path': camera_path}
+        elif len(self.features) > 1:
+            rd_matrices = list()
+            ra_matrices = list()
+            ad_matrices = list()
+            rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
+                                        'range_doppler.npy'))
+            ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
+                                        'range_angle.npy'))
+            for frame_name in frame_names:
+                if self.process_signal:
+                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_doppler_processed',
+                                                    frame_name + '.npy'))
+                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_angle_processed',
+                                                    frame_name + '.npy'))
+                    ad_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'angle_doppler_processed',
+                                                    frame_name + '.npy'))
+                else:
+                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_doppler_raw',
+                                                    frame_name + '.npy'))
+                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'range_angle_raw',
+                                                    frame_name + '.npy'))
+                    ad_matrix = np.load(os.path.join(self.path_to_frames,
+                                                    'angle_doppler_raw',
+                                                    frame_name + '.npy'))
+
+                rd_matrices.append(rd_matrix)
+                ra_matrices.append(ra_matrix)
+                ad_matrices.append(ad_matrix)
+
+            # Apply the same transfo to all representations
+            if np.random.uniform(0, 1) > 0.5:
+                is_vflip = True
+            else:
+                is_vflip = False
+            if np.random.uniform(0, 1) > 0.5:
+                is_hflip = True
+            else:
+                is_hflip = False
+
+            rd_matrix = np.dstack(rd_matrices)
+            rd_matrix = np.rollaxis(rd_matrix, axis=-1)
+            rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
+            rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            if self.add_temp:
+                if isinstance(self.add_temp, bool):
+                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
+                else:
+                    assert isinstance(self.add_temp, int)
+                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
+                                                        axis=self.add_temp)
+
+            ra_matrix = np.dstack(ra_matrices)
+            ra_matrix = np.rollaxis(ra_matrix, axis=-1)
+            ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
+            ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            if self.add_temp:
+                if isinstance(self.add_temp, bool):
+                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
+                else:
+                    assert isinstance(self.add_temp, int)
+                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
+                                                        axis=self.add_temp)
+
+            ad_matrix = np.dstack(ad_matrices)
+            ad_matrix = np.rollaxis(ad_matrix, axis=-1)
+            # Fill fake mask just to apply transform
+            ad_frame = {'matrix': ad_matrix, 'mask': rd_mask.copy()}
+            ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            if self.add_temp:
+                if isinstance(self.add_temp, bool):
+                    ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'], axis=0)
+                else:
+                    assert isinstance(self.add_temp, int)
+                    ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'],
+                                                        axis=self.add_temp)
+
+            frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
+                    'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
+                    'ad_matrix': ad_frame['matrix']}
+
+        return frame
+
 
 
 class RADDetDataset(Dataset):
@@ -1692,13 +2001,6 @@ class RADDetDataset(Dataset):
       
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-
-    def __len__(self):
-        return self.frame_sync
-
-    def __getitem__(self, index):
-        
-       return None
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
@@ -1736,6 +2038,16 @@ class RADDetDataset(Dataset):
                 print([x1, y1, x2, y2, cls])
             #cart_box = np.array([cart_box])   
         return gt
+    
+    def prepare_for_train(self, features, train_cfg, model_cfg):
+        return 
+    
+    def __len__(self):
+        return self.frame_sync
+
+    def __getitem__(self, index):
+        
+       return None
     
 
 class Astyx(Dataset):
@@ -1788,13 +2100,6 @@ class Astyx(Dataset):
       
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-
-    def __len__(self):
-        return self.frame_sync
-
-    def __getitem__(self, index):
-        
-       return None
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
@@ -1890,3 +2195,13 @@ class Astyx(Dataset):
                 objects_2Dimage.append(obj_image)
                 gt.append(obj_image.flatten().tolist() + [cls])
         return gt
+    
+    def prepare_for_train(self, features, train_cfg, model_cfg):
+        return 
+
+    def __len__(self):
+        return self.frame_sync
+
+    def __getitem__(self, index):
+        
+       return None
