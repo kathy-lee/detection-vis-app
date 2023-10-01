@@ -19,13 +19,6 @@
     }
   },
   "dataloader": {
-    "splitmode": "sequence",
-    "split_sequence": {
-      "train": ["2019_04_09_BMS1000", "2019_04_09_BMS1001"],
-      "val": ["2019_04_09_BMS1002"],
-      "test": ["2019_04_09_CMS1002"]
-    },
-    "split_random":[0.7,0.15,0.15],
     "train": {
       "batch_size": 4,
       "num_workers": 4

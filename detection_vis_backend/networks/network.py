@@ -179,7 +179,7 @@ class RODNet(nn.Module):
         return out
     
 
-class Record(nn.Module):
+class RECORD(nn.Module):
     def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
         """
         RECurrent Online object detectOR (RECORD) model class
@@ -190,8 +190,8 @@ class Record(nn.Module):
         @param n_class: number of classes (default: 3)
         @param shallow: load a shallow version of RECORD (fewer channels in the decoder)
         """
-        super(Record, self).__init__()
-        self.encoder = RecordEncoder(encoder_config, in_channels=in_channels, norm=norm)
+        super(RECORD, self).__init__()
+        self.encoder = RecordEncoder(in_channels=in_channels, config=encoder_config, norm=norm)
         self.decoder = RecordDecoder(decoder_config, n_class=n_class)
         self.sigmoid = nn.Sigmoid()
 

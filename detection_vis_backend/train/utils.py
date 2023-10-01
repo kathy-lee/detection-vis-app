@@ -30,7 +30,7 @@ def FFTRadNet_collate(batch):
     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
 
-def ROD_collate(batch):
+def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
 
     np_str_obj_array_pattern = re.compile(r'[SaUO]')
@@ -60,7 +60,7 @@ def ROD_collate(batch):
             if np_str_obj_array_pattern.search(elem.dtype.str) is not None:
                 raise TypeError(default_collate_err_msg_format.format(elem.dtype))
 
-            return ROD_collate([torch.as_tensor(b) for b in batch])
+            return default_collate([torch.as_tensor(b) for b in batch])
         elif elem.shape == ():  # scalars
             return torch.as_tensor(batch)
     elif isinstance(elem, float):
@@ -72,9 +72,9 @@ def ROD_collate(batch):
     elif isinstance(elem, str): # string_classes
         return batch
     elif isinstance(elem, dict): # container_abcs.Mapping
-        return {key: ROD_collate([d[key] for d in batch]) for key in elem}
+        return {key: default_collate([d[key] for d in batch]) for key in elem}
     elif isinstance(elem, tuple) and hasattr(elem, '_fields'):  # namedtuple
-        return elem_type(*(ROD_collate(samples) for samples in zip(*batch)))
+        return elem_type(*(default_collate(samples) for samples in zip(*batch)))
     elif isinstance(elem, (list, tuple)): # container_abcs.Sequence
         # transposed = zip(*batch)
         # return [cr_collate(samples) for samples in transposed]

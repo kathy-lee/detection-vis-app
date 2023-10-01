@@ -7,6 +7,7 @@
         "weight": [1,100,100]
     },
     "lr_scheduler": {
+        "type": "step",
         "step_size": 10,
         "gamma": 0.9
     },

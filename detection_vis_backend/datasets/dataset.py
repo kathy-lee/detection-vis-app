@@ -624,7 +624,7 @@ class RADIal(Dataset):
                 gt.append(label[[9,11]].tolist())
         return gt
     
-    def prepare_for_train(self, features, train_cfg, model_cfg):
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         return
 
     def __len__(self):
@@ -1486,22 +1486,16 @@ class CRUW(Dataset):
                 gt.append(center_id + [category])
         return gt
     
-    def prepare_for_train(self, features, train_cfg, model_cfg):
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         self.n_class = 3 # dataset.object_cfg.n_class
+        self.win_size = train_cfg['win_size'] 
 
-        if 'win_size' in train_cfg: 
-            self.win_size = train_cfg['win_size'] 
-        if 'train_step' in train_cfg:
+        if splittype in ('train', 'val') or splittype is None:
             self.step = train_cfg['train_step']
-        if 'train_stride' in train_cfg:
             self.stride = train_cfg['train_stride']
-
-        # if split == 'train' or split == 'valid':
-        #     self.step = train_cfg['train_step']
-        #     self.stride = train_cfg['train_stride']
-        # else:
-        #     self.step = train_cfg['test_step']
-        #     self.stride = train_cfg['test_stride']
+        else:
+            self.step = train_cfg['test_step']
+            self.stride = train_cfg['test_stride']
 
         self.is_random_chirp = True
         self.noise_channel = False
@@ -1510,7 +1504,7 @@ class CRUW(Dataset):
         if 'mnet_cfg' in model_cfg:
             in_chirps, _ = model_cfg['mnet_cfg']
             self.n_chirps = in_chirps
-        elif self.model_cfg['class'] == 'RECORD':
+        elif model_cfg['class'] == 'RECORD':
             self.n_chirps = 4
         else:
             self.n_chirps = 1
@@ -1527,6 +1521,8 @@ class CRUW(Dataset):
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
+
+        self.model_type = model_cfg['class']
         return
     
     def __len__(self):
@@ -1557,26 +1553,58 @@ class CRUW(Dataset):
         # Load radar data
         try:
             data_id = index * self.stride
-            if isinstance(chirp_id, int):
-                radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                for idx, frameid in enumerate(
-                        range(data_id, data_id + self.win_size * self.step, self.step)):
-                    radar_npy_win[idx, :, :, :] = np.load(self.radar_paths[frameid][chirp_id])
-                    data_dict['image_paths'].append(self.image_paths[frameid])
-            elif isinstance(chirp_id, list):
-                radar_npy_win = np.zeros((self.win_size, self.n_chirps, ramap_rsize, ramap_asize, 2), dtype=np.float32)
-                for idx, frameid in enumerate(
-                        range(data_id, data_id + self.win_size * self.step, self.step)):
-                    for cid, c in enumerate(chirp_id):
-                        npy_path = self.radar_paths[frameid][cid]
-                        radar_npy_win[idx, cid, :, :, :] = np.load(npy_path)
-                    data_dict['image_paths'].append(self.image_paths[frameid])
+            if self.model_type == 'RODNet':
+                if isinstance(chirp_id, int):
+                    radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
+                    for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
+                        radar_npy_win[idx, :, :, :] = np.load(self.radar_paths[frameid][chirp_id])
+                        data_dict['image_paths'].append(self.image_paths[frameid])
+                elif isinstance(chirp_id, list):
+                    radar_npy_win = np.zeros((self.win_size, self.n_chirps, ramap_rsize, ramap_asize, 2), dtype=np.float32)
+                    for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
+                        for cid, c in enumerate(chirp_id):
+                            npy_path = self.radar_paths[frameid][cid]
+                            radar_npy_win[idx, cid, :, :, :] = np.load(npy_path)
+                        data_dict['image_paths'].append(self.image_paths[frameid])
+                else:
+                    raise TypeError
+                
+                # Dataloader for MNet
+                if self.n_chirps > 1: # if 'mnet_cfg' in self.model_cfg:
+                    radar_npy_win = np.transpose(radar_npy_win, (4, 0, 1, 2, 3))
+                    assert radar_npy_win.shape == (2, self.win_size, self.n_chirps, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
+                else:
+                    radar_npy_win = np.transpose(radar_npy_win, (3, 0, 1, 2))
+                    assert radar_npy_win.shape == (2, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
             else:
-                raise TypeError
+                if isinstance(chirp_id, int):
+                    radar_npy_win = torch.zeros((self.win_size, 2, ramap_rsize, ramap_asize), dtype=torch.float32)
+                    for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
+                        radar_npy_win[idx, :, :, :] = torch.from_numpy(
+                            np.transpose(np.load(self.radar_paths[frameid][chirp_id]), (2, 0, 1)))
+                        #if self.split != 'test':
+                        data_dict['image_paths'].append(self.image_paths[frameid])
+                        # else:
+                        #     data_dict['image_paths'].append(self.radar_paths[frameid])
+                elif isinstance(chirp_id, list):
+                    radar_npy_win = torch.zeros((self.win_size, self.n_chirps * 2, ramap_rsize, ramap_asize), dtype=torch.float32)
+                    for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
+                        for cid, c in enumerate(chirp_id):
+                            npy_path = self.radar_paths[frameid][cid]
+                            radar_npy_win[idx, cid * 2:cid * 2 + 2, :, :] = torch.from_numpy(
+                                np.transpose(np.load(npy_path), (2, 0, 1)))
+                        # if self.split != 'test':
+                        data_dict['image_paths'].append(self.image_paths[frameid])
+                        # else:
+                        #     data_dict['image_paths'].append(self.radar_paths[frameid])
+                else:
+                    raise TypeError
+                radar_npy_win = radar_npy_win.transpose(1, 0)
             
+            data_dict['radar_data'] = radar_npy_win
             data_dict['start_frame'] = data_id
             data_dict['end_frame'] = data_id + self.win_size * self.step - 1
-            #print(f"############################ {data_dict['start_frame']} ~~~  {data_dict['end_frame']}")
+            #print(f"############################ {data_dict['start_frame']} - {data_dict['end_frame']}")
         except:
             # in case load npy fail
             data_dict['status'] = False
@@ -1588,16 +1616,6 @@ class CRUW(Dataset):
                             '\nframe indices: %d:%d:%d' % (data_id, data_id + self.win_size * self.step, self.step))
             return data_dict
 
-        # Dataloader for MNet
-        if self.n_chirps > 1: # if 'mnet_cfg' in self.model_cfg:
-            radar_npy_win = np.transpose(radar_npy_win, (4, 0, 1, 2, 3))
-            assert radar_npy_win.shape == (
-                2, self.win_size, self.n_chirps, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-        else:
-            radar_npy_win = np.transpose(radar_npy_win, (3, 0, 1, 2))
-            assert radar_npy_win.shape == (2, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-
-        data_dict['radar_data'] = radar_npy_win
 
         # Load annotations
         if len(self.confmaps) != 0:
@@ -1618,6 +1636,10 @@ class CRUW(Dataset):
             )
         else:
             data_dict['anno'] = None
+
+        if self.model_type == 'RECORD':
+            if data_dict['anno'] is not None: # self.all_confmaps and 
+                data_dict['anno']['confmaps'] = data_dict['anno']['confmaps'][:, -1]
         return data_dict
 
 
@@ -1740,7 +1762,7 @@ class CARRADA(Dataset):
                     frame = function(frame)
         return frame
     
-    def prepare_for_train(self, features, train_cfg, model_cfg):
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         # self.dataset = dataset
         self.process_signal = True
         self.n_frames = model_cfg['win_size']
@@ -2039,7 +2061,7 @@ class RADDetDataset(Dataset):
             #cart_box = np.array([cart_box])   
         return gt
     
-    def prepare_for_train(self, features, train_cfg, model_cfg):
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         return 
     
     def __len__(self):
@@ -2196,7 +2218,7 @@ class Astyx(Dataset):
                 gt.append(obj_image.flatten().tolist() + [cls])
         return gt
     
-    def prepare_for_train(self, features, train_cfg, model_cfg):
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         return 
 
     def __len__(self):

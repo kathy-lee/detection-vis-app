@@ -26,13 +26,13 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, ROD_collate, pixor_loss, SmoothCELoss
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss
 from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation, RECORD_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
-    'RODNet': ROD_collate,
-    'RECORD': None,
+    'RODNet': default_collate,
+    'RECORD': default_collate,
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
@@ -43,19 +43,19 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             dataset_inst_list = []
             for file in train_config['dataloader']['split_sequence']['train']:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
+                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='train')
                 dataset_inst_list.append(dataset_inst)
             train_dataset = ConcatDataset(dataset_inst_list)
             dataset_inst_list = []
             for file in train_config['dataloader']['split_sequence']['val']:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
+                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='val')
                 dataset_inst_list.append(dataset_inst)
             val_dataset = ConcatDataset(dataset_inst_list)
             dataset_inst_list = []
             for file in train_config['dataloader']['split_sequence']['test']:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
+                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='test')
                 dataset_inst_list.append(dataset_inst)
             test_dataset = ConcatDataset(dataset_inst_list)
             with open(split_info_path, 'w') as f:
@@ -206,27 +206,27 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
     print(exp_name)
 
-    # save model path(also model name)
-    with open("exp_info.txt", 'w') as f:
-        f.write(exp_name)
+    # # save model path(also model name)
+    # with open("exp_info.txt", 'w') as f:
+    #     f.write(exp_name)
 
     # Initialize tensorboard
-    output_folder = Path(os.getenv('MODEL_ROOTDIR'))
-    output_folder.mkdir(parents=True, exist_ok=True)
-    (output_folder / exp_name).mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(output_folder / exp_name)
+    output_root = Path(os.getenv('MODEL_ROOTDIR'))
+    (output_root / exp_name).mkdir(parents=True, exist_ok=True)
+    output_dir = output_root / exp_name
+    writer = SummaryWriter(output_dir)
 
-    split_info_path = os.path.join(output_folder, exp_name, 'samples_split.txt')
+    split_info_path = os.path.join(output_dir, 'samples_split.txt')
     train_loader, val_loader, test_loader = CreateDataLoaders(datafiles, features, model_config, train_config, use_original_split, split_info_path)
 
     # save model lineage info
-    train_info_path = os.path.join(output_folder, exp_name, 'train_info.txt')
+    train_info_path = os.path.join(output_dir, 'train_info.txt')
     with open(train_info_path, 'w') as f:
         json.dump({"datafiles": datafiles, "features": features, "model_config": model_config, "train_config": train_config}, f)
 
     # save the evaluation of val dataset and test dataset
-    val_eval_path = os.path.join(output_folder, exp_name, "val_eval.csv")
-    test_eval_path = os.path.join(output_folder, exp_name, "test_eval.csv")
+    val_eval_path = os.path.join(output_dir, "val_eval.csv")
+    test_eval_path = os.path.join(output_dir, "test_eval.csv")
     df_val_eval = pd.DataFrame(columns=['Epoch', 'loss', 'mAP', 'mAR', 'mIoU'])
 
     # set device
@@ -244,16 +244,19 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     # Optimizer
     lr = float(train_config['optimizer']['lr'])
-    step_size = int(train_config['lr_scheduler']['step_size'])
     gamma = float(train_config['lr_scheduler']['gamma'])
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    if train_config['lr_scheduler']['type'] == 'step':
+        step_size = int(train_config['lr_scheduler']['step_size'])
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    elif train_config['lr_scheduler']['type'] == 'exp':
+        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    else:
+        raise ValueError
     num_epochs=int(train_config['num_epochs'])
 
     print('===========  Optimizer  ==================:')
     print('      LR:', lr)
-    print('      step_size:', step_size)
-    print('      gamma:', gamma)
     print('      num_epochs:', num_epochs)
     print('')
 
@@ -292,13 +295,15 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label_map = data[1].to(device).float()
                 if model_config['segmentation_head']:
                     seg_map_label = data[2].to(device).double()
-            elif model_type == "RODNet":
+            elif model_type in ("RODNet", "RECORD"):
                 inputs = data['radar_data'].to(device).float()
                 confmap_gt = data['anno']['confmaps'].to(device).float()
+            else:
+                raise ValueError
 
             # reset the gradient
             optimizer.zero_grad()
-            
+
             # forward pass, enable to track our gradient
             with torch.set_grad_enabled(True):
                 outputs = net(inputs)
@@ -331,7 +336,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 else:
                     loss = criterion(outputs, confmap_gt)
             elif model_type == "RECORD":
-                loss_type = train_config['loss']
+                loss_type = train_config['losses']
                 if loss_type == 'bce':
                     criterion = nn.BCELoss()
                 elif loss_type == 'mse':
@@ -342,6 +347,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 else:
                     raise ValueError
                 loss = criterion(outputs, confmap_gt)
+            else:
+                raise ValueError
 
             # backprop
             loss.backward()
@@ -373,9 +380,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                                     segmentation_loss=freespace_loss, losses_params=train_config['losses'],
                                     device=device)
         elif model_type == "RODNet":
-            eval = RODNet_evaluation(net, val_loader, val_eval_path, train_config, model_config, device)
+            eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
         elif model_type == "RECORD":
-            eval = RECORD_evaluation(net, val_loader, val_eval_path, train_config, model_config, device, model_type)
+            eval = RECORD_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
+        else:
+            raise ValueError
             
         history['val_loss'].append(eval['loss'])
         history['mAP'].append(eval['mAP'])
@@ -396,7 +405,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
         # Saving all checkpoint as the best checkpoint for multi-task is a balance between both --> up to the user to decide
         name_output_file = model_type + '_epoch{:02d}_loss_{:.4f}_AP_{:.4f}_AR_{:.4f}_IOU_{:.4f}.pth'.format(epoch, eval['loss'],eval['mAP'],eval['mAR'],eval['mIoU'])
-        filename = output_folder / exp_name / name_output_file
+        filename = output_dir / name_output_file
 
         checkpoint={}
         checkpoint['net_state_dict'] = net.state_dict()
@@ -409,12 +418,19 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         torch.save(checkpoint,filename)
 
     df_val_eval.to_csv(val_eval_path, index=False)
+
     print(f'=========== Evaluation of Test data ===========')
     if model_type == "FFTRadNet":
-        FFTRadNet_FullEvaluation(net, test_loader, test_eval_path, device=device)
+        eval = FFTRadNet_FullEvaluation(net, test_loader, device=device)
     elif model_type == "RODNet":
-        eval = RODNet_evaluation(net, test_loader, test_eval_path, train_config, model_config, device)
-            
+        eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
+    elif model_type == "RECORD":
+        eval = RECORD_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
+    else:
+        raise ValueError
+    
+    df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
+    df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
 
 
