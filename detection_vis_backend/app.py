@@ -256,9 +256,9 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 @app.post("/train")
 async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, use_original_split: bool = False, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try: 
-        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, use_original_split)
-        with open('exp_info.txt', 'r') as f:
-            exp_name = f.read()
+        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, use_original_split)
+        # with open('exp_info.txt', 'r') as f:
+        #     exp_name = f.read()
 
         model_meta = schemas.MLModelCreate(name=exp_name,description="info")
         crud.add_model(db=db, mlmodel=model_meta)
@@ -444,9 +444,9 @@ async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_cho
         for file in os.listdir(os.path.join(model_rootdir, model.name)):
             if pattern in file and file.endswith(".pth"):  
                 checkpoint = os.path.join(model_rootdir, model.name, file)
-        train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
-        with open('exp_info.txt', 'r') as f:
-            exp_name = f.read()
+        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
+        # with open('exp_info.txt', 'r') as f:
+        #     exp_name = f.read()
 
         model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
         crud.add_model(db=db, mlmodel=model_meta)

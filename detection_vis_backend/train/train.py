@@ -206,9 +206,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
     print(exp_name)
 
-    # save model path(also model name)
-    with open("exp_info.txt", 'w') as f:
-        f.write(exp_name)
+    # # save model path(also model name)
+    # with open("exp_info.txt", 'w') as f:
+    #     f.write(exp_name)
 
     # Initialize tensorboard
     output_root = Path(os.getenv('MODEL_ROOTDIR'))
