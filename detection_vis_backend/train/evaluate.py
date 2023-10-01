@@ -71,7 +71,7 @@ def FFTRadNet_evaluation(net,loader,check_perf=False, detection_loss=None,segmen
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def FFTRadNet_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold=0.5):
+def FFTRadNet_FullEvaluation(net, loader, device='cpu', iou_threshold=0.5):
 
     net.eval()
     
@@ -106,9 +106,6 @@ def FFTRadNet_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold
         print(f'Step {i+1}/{len(loader)}')
         
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
-    # Write the metrics into file
-    df = pd.DataFrame({'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score]})
-    df.to_csv(eval_path, index=False)
 
     mIoU = []
     for i in range(len(predictions['prediction']['freespace'])):
@@ -124,6 +121,7 @@ def FFTRadNet_FullEvaluation(net, loader, eval_path, device='cpu', iou_threshold
     mIoU = np.asarray(mIoU).mean()
     print('------- Freespace Scores ------------')
     print('  mIoU',mIoU*100,'%')
+    return {'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score], 'mIoU': [mIoU*100]}
 
 
 def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_threshold=0.5):
@@ -951,6 +949,7 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     total_time = 0
     total_count = 0
     load_tic = time.time()
+    sequences = []
     for iter, data_dict in enumerate(dataloader):
         load_time = time.time() - load_tic
         data = data_dict['radar_data'].to(device).float()
@@ -960,6 +959,9 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
             print('warning: fail to load RGB images, will not visualize results')
             image_paths = None
         seq_name = data_dict['seq_names'][0]
+        if seq_name not in sequences:
+            sequences.append(seq_name)
+
         # if not args.demo:
         confmap_gt = data_dict['anno']['confmaps']
         obj_info = data_dict['anno']['obj_infos']
@@ -980,7 +982,6 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
             confmap_pred = confmap_pred[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
         else:
             confmap_pred = confmap_pred.cpu().detach().numpy()
-        #print(f"################################### {iter}-02")
 
         infer_time = time.time() - tic
         total_time += infer_time
@@ -1013,7 +1014,6 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
             #         visualize_test_img_wo_gt(fig_name, img_path, radar_input, confmap_pred_0, res_final_0,
             #                                     dataset, sybl=sybl)
             init_genConfmap = init_genConfmap.next
-        #print(f"################################### {iter}-03")
 
         if iter == len(dataloader) - 1:
             offset = train_cfg['train_stride'] # test_stride
@@ -1051,15 +1051,11 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
         load_tic = time.time()
     print("ave time: %f" % (total_time / total_count))
 
-
     # 2.Evaluation the detection predictions with Ground-truth annotations
-    sequences = train_cfg['dataloader']['split_sequence']['val']
-
     evalImgs_all = []
     n_frames_all = 0
 
-    for seq in sequences:
-        seq_name = seq['name']
+    for seq_name in sequences:
         gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         res_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
@@ -1091,11 +1087,15 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
+    net.eval()
+    sequences = []
     for iter, data_dict in enumerate(dataloader):
         ra_maps = data_dict['radar_data'].to(device).float()
         confmap_gts = data_dict['anno']['confmaps'].float()
         image_paths = data_dict['image_paths']
         seq_name = data_dict['seq_names'][0]
+        if seq_name not in sequences:
+            sequences.append(seq_name)
         save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
 
         if confmap_gts is not None:
@@ -1116,8 +1116,34 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
                 res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
 
-        confmap_pred = net(ra_maps)
+        with torch.set_grad_enabled(False):
+            confmap_pred = net(ra_maps)
 
         # Write results
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
+    
+    # 2.Evaluation the detection predictions with Ground-truth annotations
+    evalImgs_all = []
+    n_frames_all = 0
+    for seq_name in sequences:
+        gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
+        res_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+        n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
+
+        olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
+        recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
+        evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
+
+        eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+        stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+        print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+
+        n_frames_all += n_frame
+        evalImgs_all.extend(evalImgs)
+        
+    eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
+    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+    print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+
