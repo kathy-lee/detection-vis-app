@@ -27,12 +27,14 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss
-from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation, RECORD_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
     'RODNet': default_collate,
     'RECORD': default_collate,
+    'RECORDNoLstm': default_collate,
+    'RECORDNoLstmMulti': default_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
@@ -295,9 +297,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label_map = data[1].to(device).float()
                 if model_config['segmentation_head']:
                     seg_map_label = data[2].to(device).double()
-            elif model_type in ("RODNet", "RECORD"):
+            elif model_type in ("RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
                 inputs = data['radar_data'].to(device).float()
                 confmap_gt = data['anno']['confmaps'].to(device).float()
+                # print(f"###input:{inputs.shape}")
+                # print(f"###confmap:{confmap_gt.shape}")
             else:
                 raise ValueError
 
@@ -307,6 +311,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # forward pass, enable to track our gradient
             with torch.set_grad_enabled(True):
                 outputs = net(inputs)
+                # print(f"###out:{outputs.shape}")
 
             if model_type == "FFTRadNet":
                 classif_loss,reg_loss = pixor_loss(outputs['Detection'], label_map, train_config['losses'])           
@@ -319,8 +324,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 classif_loss *= train_config['losses']['weight'][0]
                 reg_loss *= train_config['losses']['weight'][1]
                 loss_seg *= train_config['losses']['weight'][2]
-
-
                 loss = classif_loss + reg_loss + loss_seg
 
                 writer.add_scalar('Loss/train', loss.item(), global_step)
@@ -335,7 +338,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                         loss += loss_cur
                 else:
                     loss = criterion(outputs, confmap_gt)
-            elif model_type == "RECORD":
+            elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
                 loss_type = train_config['losses']
                 if loss_type == 'bce':
                     criterion = nn.BCELoss()
@@ -376,12 +379,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = FFTRadNet_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
+            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
                                     segmentation_loss=freespace_loss, losses_params=train_config['losses'],
                                     device=device)
         elif model_type == "RODNet":
             eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
-        elif model_type == "RECORD":
+        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
             eval = RECORD_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
         else:
             raise ValueError
@@ -421,10 +424,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     print(f'=========== Evaluation of Test data ===========')
     if model_type == "FFTRadNet":
-        eval = FFTRadNet_FullEvaluation(net, test_loader, device=device)
+        eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
     elif model_type == "RODNet":
         eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
-    elif model_type == "RECORD":
+    elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
         eval = RECORD_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
     else:
         raise ValueError

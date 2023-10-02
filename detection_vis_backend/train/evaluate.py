@@ -15,7 +15,7 @@ from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
 
 
 
-def FFTRadNet_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
+def FFTRadNet_val_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
 
     metrics = Metrics()
     metrics.reset()
@@ -71,7 +71,7 @@ def FFTRadNet_evaluation(net,loader,check_perf=False, detection_loss=None,segmen
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def FFTRadNet_FullEvaluation(net, loader, device='cpu', iou_threshold=0.5):
+def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
 
     net.eval()
     
@@ -925,6 +925,23 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
+def validate(net, dataloader, criterion, device):
+    net.eval()
+    running_loss = 0.0
+    
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    for i, data_dict in enumerate(dataloader):
+        data = data_dict['radar_data'].to(device).float()
+        confmap_gt = data['anno']['confmaps'].to(device).float()
+        with torch.set_grad_enabled(False):
+            confmap_pred = net(data)
+        loss = criterion(confmap_pred, confmap_gt)
+        print(f'val loss of sample {i}: {loss}')
+        running_loss += loss.item() * data.size(0)
+        kbar.update(i)
+    return
+
+
 def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
@@ -1090,6 +1107,8 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
     net.eval()
     sequences = []
     for iter, data_dict in enumerate(dataloader):
+        print(f"Sample {iter}")
+        
         ra_maps = data_dict['radar_data'].to(device).float()
         confmap_gts = data_dict['anno']['confmaps'].float()
         image_paths = data_dict['image_paths']
@@ -1107,7 +1126,7 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
             frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
             frame_id = int(frame_name)
 
-        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstmSingle'):
+        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstm'):
             for tmp_frame_id in range(frame_id):
                 print("Eval frame", tmp_frame_id)
                 tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
@@ -1118,17 +1137,24 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
 
         with torch.set_grad_enabled(False):
             confmap_pred = net(ra_maps)
-
+            
         # Write results
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
-    
+    print(f'record_res.txt file(s) for {sequences} created')
+
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
     n_frames_all = 0
     for seq_name in sequences:
-        gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         res_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+        # with open(res_path, 'r') as f:
+        #     content = f.read().strip()
+        # if not content:
+        #     print(f"No objects detected in {seq_name}.")
+        #     continue
+
+        gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
 
         olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)

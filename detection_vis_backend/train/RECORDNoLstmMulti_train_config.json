@@ -1,0 +1,44 @@
+
+{
+    "seed":3,
+    "losses": "bce",
+    "lr_scheduler": {
+      "type": "exp",
+      "gamma": 0.9
+    },
+    "optimizer": {
+      "lr": 1e-3
+    },
+    "num_epochs":1,
+    "preprocess": {
+      "normalize": false,
+      "aug": {
+        "mirror": 0.5,
+        "reverse": 0.5,
+        "gaussian": 0.0
+      }
+    },
+    "dataloader": {
+      "train": {
+        "batch_size": 4,
+        "num_workers": 4
+      },
+      "val": {
+        "batch_size": 1,
+        "num_workers": 1
+      },
+      "test": {
+        "batch_size": 1,
+        "num_workers": 1
+      }
+    },
+  
+    "win_size": 12,
+    "train_step": 1,
+    "train_stride": 4,
+    "test_step": 1,
+    "test_stride": 1,
+    "max_dets": 20,
+    "peak_thres": 0.3,
+    "ols_thres": 0.3
+}
