@@ -1107,7 +1107,7 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
             frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
             frame_id = int(frame_name)
 
-        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstmSingle'):
+        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstm'):
             for tmp_frame_id in range(frame_id):
                 print("Eval frame", tmp_frame_id)
                 tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
