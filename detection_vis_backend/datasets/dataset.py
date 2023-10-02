@@ -1504,7 +1504,7 @@ class CRUW(Dataset):
         if 'mnet_cfg' in model_cfg:
             in_chirps, _ = model_cfg['mnet_cfg']
             self.n_chirps = in_chirps
-        elif model_cfg['class'] == 'RECORD':
+        elif model_cfg['class'] in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
             self.n_chirps = 4
         else:
             self.n_chirps = 1
@@ -1576,7 +1576,7 @@ class CRUW(Dataset):
                 else:
                     radar_npy_win = np.transpose(radar_npy_win, (3, 0, 1, 2))
                     assert radar_npy_win.shape == (2, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
-            else:
+            elif self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
                 if isinstance(chirp_id, int):
                     radar_npy_win = torch.zeros((self.win_size, 2, ramap_rsize, ramap_asize), dtype=torch.float32)
                     for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
@@ -1600,6 +1600,17 @@ class CRUW(Dataset):
                 else:
                     raise TypeError
                 radar_npy_win = radar_npy_win.transpose(1, 0)
+
+                if self.model_type == 'RECORDNoLstmMulti':
+                    c, t, h, w = radar_npy_win.shape
+                    radar_npy_win = radar_npy_win.reshape(c*t, h, w)
+                elif self.model_type == 'RECORDNoLstm':
+                    c, t, h, w = radar_npy_win.shape
+                    assert t == 1
+                    radar_npy_win = radar_npy_win.reshape(c, h, w)
+                    
+            else:
+                raise ValueError
             
             data_dict['radar_data'] = radar_npy_win
             data_dict['start_frame'] = data_id
@@ -1637,7 +1648,7 @@ class CRUW(Dataset):
         else:
             data_dict['anno'] = None
 
-        if self.model_type == 'RECORD':
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
             if data_dict['anno'] is not None: # self.all_confmaps and 
                 data_dict['anno']['confmaps'] = data_dict['anno']['confmaps'][:, -1]
         return data_dict
