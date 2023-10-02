@@ -12,7 +12,7 @@ from torchvision.transforms.transforms import Sequence
 
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d
-from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder
+from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
 
 
 class NetworkFactory:
@@ -211,3 +211,33 @@ class RECORD(nn.Module):
 
         confmap_pred = self.decoder(st_features_lstm1, st_features_lstm2, st_features_backbone)
         return self.sigmoid(confmap_pred)
+    
+
+class RECORDNoLstm(nn.Module):
+    def __init__(self, encoder_config, decoder_config,  in_channels=8, norm='layer', n_class=3):
+        """
+        RECurrent Online object detectOR (RECORD) model class for online inference
+        @param config: configuration file of the model
+        @param in_channels: number of input channels (default: 8)
+        @param norm: type of normalisation (default: LayerNorm). Other normalisation are not supported yet.
+        @param n_class: number of classes (default: 3)
+        """
+        super(RECORDNoLstm, self).__init__()
+        self.encoder = RecordEncoderNoLstm(config=encoder_config, in_channels=in_channels, norm=norm)
+        self.decoder = RecordDecoder(config=decoder_config, n_class=n_class)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Forward pass RECORD-OI model
+        @param x: input tensor with shape (B, C, T, H, W) where T is the number of timesteps
+        @return: ConfMap prediction of the last time step with shape (B, n_classes, H, W)
+        """
+        x3, x2, x1 = self.encoder(x)
+        confmap_pred = self.decoder(x3, x2, x1)
+        return self.sigmoid(confmap_pred)
+
+
+class RECORDNoLstmMulti(RECORDNoLstm):
+    def __init__(self, encoder_config, decoder_config, in_channels=96, norm='layer', n_class=3):
+        super().__init__(encoder_config, decoder_config, in_channels=in_channels, norm=norm, n_class=n_class)
