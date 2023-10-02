@@ -27,7 +27,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss
-from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, FFTRadNet_FullEvaluation, RODNet_evaluation, RECORD_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
@@ -379,7 +379,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = FFTRadNet_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
+            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
                                     segmentation_loss=freespace_loss, losses_params=train_config['losses'],
                                     device=device)
         elif model_type == "RODNet":
@@ -424,7 +424,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     print(f'=========== Evaluation of Test data ===========')
     if model_type == "FFTRadNet":
-        eval = FFTRadNet_FullEvaluation(net, test_loader, device=device)
+        eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
     elif model_type == "RODNet":
         eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
     elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
