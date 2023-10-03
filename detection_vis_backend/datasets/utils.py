@@ -884,3 +884,43 @@ def get_transformations(transform_names, split='train', sizes=None):
     if 'hflip' in transform_names and split == 'train':
         transformations.append(HFlip())
     return transformations
+
+
+def normalize(data, signal_type, proj_path, norm_type='local'):
+    """
+    Method to normalise the radar views
+    @param data: radar view
+    @param signal_type: signal to normalise ('range_doppler', 'range_angle' and 'angle_doppler')
+    @param proj_path: path to the project to load weights
+    @param norm_type: type of normalisation to apply ('local' or 'tvt')
+    @return: normalised data
+    """
+    if norm_type in ('local'):
+        min_value = np.min(data)
+        max_value = np.max(data)
+        norm_data = (data - min_value) / (max_value - min_value)
+        return norm_data
+
+    elif signal_type == 'range_doppler':
+        if norm_type == 'tvt':
+            rd_stats = {"mean": 58.47112418237332, "std": 3.748725977590863, "min_val": 37.59535773996415, "max_val": 119.08313902425246}
+        min_value = float(rd_stats['min_val'])
+        max_value = float(rd_stats['max_val'])
+
+    elif signal_type == 'range_angle':
+        if norm_type == 'tvt':
+            ra_stats = {"mean": 56.00209075744544, "std": 5.761533706342774, "min_val": 40.40928894952408, "max_val": 103.80548746494114}
+        min_value = float(ra_stats['min_val'])
+        max_value = float(ra_stats['max_val'])
+
+    elif signal_type == 'angle_doppler':
+        if norm_type == 'tvt':
+            ad_stats = {"mean": 59.62242439612116, "std": 4.212092368314555, "min_val": 54.42604354196056, "max_val": 105.79746676271202}
+        min_value = float(ad_stats['min_val'])
+        max_value = float(ad_stats['max_val'])
+
+    else:
+        raise TypeError('Signal {} is not supported.'.format(signal_type))
+
+    norm_data = (data - min_value) / (max_value - min_value)
+    return norm_data
