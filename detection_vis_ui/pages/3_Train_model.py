@@ -120,7 +120,6 @@ def config_editor(model_cfg, train_cfg):
                 readonly=False,
                 annotations=None)
   model_configs = json.loads(formatted_model_configs)
-  model_configs["class"] = model
   st.session_state.model_configs = model_configs
   
   st.write("Train config:")
@@ -141,6 +140,42 @@ def config_editor(model_cfg, train_cfg):
   return 
 
 
+def find_default_configs(dataset, feature, model):
+  if model in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD"):
+    with open(os.path.join('detection_vis_backend', 'networks', 'RECORD_model_config.json'), 'r') as file:
+      data = json.load(file)
+      if model == "RECORD":
+        if len(feature) > 1:
+          st.error('RECORD network supports only single feature as input', icon="🚨")
+        if dataset in data[model].keys():
+          if feature in data[model][dataset]:
+            model_cfg = data[model][dataset][feature]
+          else:
+            model_cfg = data[model][dataset]
+        else:
+          model_cfg = data[model]
+        # if dataset == "CRUW":
+        #   model_cfg = data[model][dataset]
+        # elif dataset == "CARRADA":
+        #   model_cfg = data[model][dataset][feature]
+      else:
+        model_cfg = data[model]
+  else:
+    with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
+      data = json.load(file)
+      model_cfg = data
+    
+  with open(os.path.join('detection_vis_backend', 'train', f'{model}_train_config.json'), 'r') as file:
+    data = json.load(file)
+    if 'default' in data.keys():
+      train_cfg = data['default'].copy()  
+      if dataset in data.keys():
+        train_cfg.update(data[dataset])  
+    else:
+      train_cfg = data
+  return model_cfg, train_cfg
+
+
 # Optinon 1: Train from scratch
 model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]   # This will be changed when streamlit support selectbox with None as default option
 
@@ -149,15 +184,12 @@ if train_mode == train_modes[0]:
   if model != model_zoo[0]:  
     st.write("Model description")
 
-    with open(os.path.join('detection_vis_backend', 'networks', 'default_model_config.json'), 'r') as file:
-      data = json.load(file)
-      model_configs = data[model]
-    
-    with open(os.path.join('detection_vis_backend', 'train', f'{model}_train_config.json'), 'r') as file:
-      data = json.load(file)
-      train_configs = data
+    model_configs, train_configs = find_default_configs(dataset_name, st.session_state.features_chosen, model)
 
     config_editor(model_configs, train_configs)
+
+    st.session_state.model_configs["class"] = model
+
     if st.session_state.split_mode == 'sequence':
       st.session_state.train_configs["dataloader"]["splitmode"] = "sequence"
       st.session_state.train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
