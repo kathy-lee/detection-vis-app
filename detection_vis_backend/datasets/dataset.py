@@ -26,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -1779,12 +1779,13 @@ class CARRADA(Dataset):
         self.n_frames = model_cfg['win_size']
         # self.dataset = self.dataset[self.n_frames-1:]  # remove n first frames
         self.transformations = get_transformations(transform_names=train_cfg['transformations'].split(','), 
-                                                   sizes=(train_cfg['preprocess']['w_size'], train_cfg['preprocess']['h_size']))
+                                                   sizes=(train_cfg['w_size'], train_cfg['h_size']))
         self.add_temp = True
         self.annotation_type = 'dense'
         self.path_to_annots = os.path.join(self.path_to_frames, 'annotations', self.annotation_type)
 
         self.features = features
+        self.norm_type = train_cfg['norm_type']
 
     def __len__(self):
         return self.frame_sync - self.n_frames + 1
@@ -1829,9 +1830,9 @@ class CARRADA(Dataset):
                     rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
                 else:
                     assert isinstance(self.add_temp, int)
-                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
-                                                        axis=self.add_temp)
-
+                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=self.add_temp)
+            
+            rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
             frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'], 'image_path': camera_path}
         elif self.features == ['RA']:
             ra_matrices = list()
@@ -1872,7 +1873,8 @@ class CARRADA(Dataset):
                     assert isinstance(self.add_temp, int)
                     ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
                                                         axis=self.add_temp)
-
+                    
+            ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
             frame = {'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'], 'image_path': camera_path}
         elif len(self.features) > 1:
             rd_matrices = list()
@@ -1955,6 +1957,9 @@ class CARRADA(Dataset):
                     ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'],
                                                         axis=self.add_temp)
 
+            rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
+            ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
+            ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
             frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
                     'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
                     'ad_matrix': ad_frame['matrix']}
