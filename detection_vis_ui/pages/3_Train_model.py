@@ -148,8 +148,8 @@ def find_default_configs(dataset, feature, model):
         if len(feature) > 1:
           st.error('RECORD network supports only single feature as input', icon="🚨")
         if dataset in data[model].keys():
-          if feature in data[model][dataset]:
-            model_cfg = data[model][dataset][feature]
+          if feature[0] in data[model][dataset].keys():
+            model_cfg = data[model][dataset][feature[0]]
           else:
             model_cfg = data[model][dataset]
         else:
