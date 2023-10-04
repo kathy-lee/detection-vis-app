@@ -886,7 +886,7 @@ def get_transformations(transform_names, split='train', sizes=None):
     return transformations
 
 
-def normalize(data, signal_type, proj_path, norm_type='local'):
+def normalize(data, signal_type, norm_type='local'):
     """
     Method to normalise the radar views
     @param data: radar view

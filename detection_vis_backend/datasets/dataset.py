@@ -1776,10 +1776,9 @@ class CARRADA(Dataset):
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         # self.dataset = dataset
         self.process_signal = True
-        self.n_frames = model_cfg['win_size']
+        self.n_frames = train_cfg['win_size']
         # self.dataset = self.dataset[self.n_frames-1:]  # remove n first frames
-        self.transformations = get_transformations(transform_names=train_cfg['transformations'].split(','), 
-                                                   sizes=(train_cfg['w_size'], train_cfg['h_size']))
+        self.transformations = get_transformations(transform_names=train_cfg['transformations'])
         self.add_temp = True
         self.annotation_type = 'dense'
         self.path_to_annots = os.path.join(self.path_to_frames, 'annotations', self.annotation_type)
