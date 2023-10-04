@@ -8,8 +8,10 @@ import math
 import json
 
 from shapely.geometry import Polygon
+from scipy.stats import hmean
+from sklearn.metrics import confusion_matrix
 
-from detection_vis_backend.train.utils import decode
+from detection_vis_backend.train.utils import decode, get_metrics
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
 
 
@@ -42,11 +44,9 @@ def FFTRadNet_val_evaluation(net,loader,check_perf=False, detection_loss=None,se
             loss_seg = segmentation_loss(prediction, label)
             loss_seg *= inputs.size(0)
                 
-
             classif_loss *= losses_params['weight'][0]
             reg_loss *= losses_params['weight'][1]
             loss_seg *=losses_params['weight'][2]
-
 
             loss = classif_loss + reg_loss + loss_seg
 
@@ -1094,7 +1094,7 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
 
-def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, model_type):
+def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, model_type):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -1173,3 +1173,171 @@ def RECORD_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, m
     print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
+
+class Evaluator:
+    """Class to evaluate a model with quantitative metrics
+    using a ground truth mask and a predicted mask.
+
+    PARAMETERS
+    ----------
+    num_class: int
+    """
+
+    def __init__(self, num_class):
+        self.num_class = num_class
+        self.confusion_matrix = np.zeros((self.num_class,) * 2)
+
+    def get_pixel_prec_class(self, harmonic_mean=False):
+        """Pixel Precision"""
+        prec_by_class = np.diag(self.confusion_matrix) / np.nansum(self.confusion_matrix, axis=0)
+        prec_by_class = np.nan_to_num(prec_by_class)
+        if harmonic_mean:
+            prec = hmean(prec_by_class)
+        else:
+            prec = np.mean(prec_by_class)
+        return prec, prec_by_class
+
+    def get_pixel_recall_class(self, harmonic_mean=False):
+        """Pixel Recall"""
+        recall_by_class = np.diag(self.confusion_matrix) / np.nansum(self.confusion_matrix, axis=1)
+        recall_by_class = np.nan_to_num(recall_by_class)
+        if harmonic_mean:
+            recall = hmean(recall_by_class)
+        else:
+            recall = np.mean(recall_by_class)
+        return recall, recall_by_class
+
+    def get_pixel_acc_class(self, harmonic_mean=False):
+        """Pixel Accuracy"""
+        acc_by_class = np.diag(self.confusion_matrix).sum() / (np.nansum(self.confusion_matrix, axis=1)
+                                                               + np.nansum(self.confusion_matrix, axis=0)
+                                                               + np.diag(self.confusion_matrix).sum()
+                                                               - 2*np.diag(self.confusion_matrix))
+        acc_by_class = np.nan_to_num(acc_by_class)
+        if harmonic_mean:
+            acc = hmean(acc_by_class)
+        else:
+            acc = np.mean(acc_by_class)
+        return acc, acc_by_class
+
+    def get_miou_class(self, harmonic_mean=False):
+        """Mean Intersection over Union"""
+        miou_by_class = np.diag(self.confusion_matrix) / (np.nansum(self.confusion_matrix, axis=1)
+                                                          + np.nansum(self.confusion_matrix, axis=0)
+                                                          - np.diag(self.confusion_matrix))
+        miou_by_class = np.nan_to_num(miou_by_class)
+        if harmonic_mean:
+            miou = hmean(miou_by_class)
+        else:
+            miou = np.mean(miou_by_class)
+        return miou, miou_by_class
+
+    def get_dice_class(self, harmonic_mean=False):
+        """Dice"""
+        _, prec_by_class = self.get_pixel_prec_class()
+        _, recall_by_class = self.get_pixel_recall_class()
+        # Add epsilon term to avoid /0
+        dice_by_class = 2*prec_by_class*recall_by_class/(prec_by_class + recall_by_class + 1e-8)
+        if harmonic_mean:
+            dice = hmean(dice_by_class)
+        else:
+            dice = np.mean(dice_by_class)
+        return dice, dice_by_class
+
+    def _generate_matrix(self, labels, predictions):
+        matrix = confusion_matrix(labels.flatten(), predictions.flatten(),
+                                  labels=list(range(self.num_class)))
+        return matrix
+
+    def add_batch(self, labels, predictions):
+        """Method to add ground truth and predicted masks by batch
+        and update the global confusion matrix (entire dataset)
+
+        PARAMETERS
+        ----------
+        labels: torch tensor or numpy array
+            Ground truth masks
+        predictions: torch tensor or numpy array
+            Predicted masks
+        """
+        assert labels.shape == predictions.shape
+        self.confusion_matrix += self._generate_matrix(labels, predictions)
+
+    def reset(self):
+        """Method to reset the confusion matrix"""
+        self.confusion_matrix = np.zeros((self.num_class,) * 2)
+
+
+def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
+    net.eval()
+    metrics = Evaluator(4) # number of classes
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    for iter, data in enumerate(dataloader):
+        print(f"Sample {iter}")
+        if features == ['RD']:
+            input = data['rd_matrix'].to(device).float()
+            label = data['rd_mask'].to(device).float()
+        elif features == ['RA']:
+            input = data['ra_matrix'].to(device).float()
+            label = data['ra_mask'].to(device).float()
+     
+        with torch.set_grad_enabled(False):
+            outputs = net(input)
+
+        losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
+        loss = torch.mean(torch.stack(losses))
+        running_loss += loss.item() * input.size(0)
+        metrics.add_batch(torch.argmax(label, axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
+        kbar.update(iter)
+
+    metrics_dict = get_metrics(metrics)
+
+    mAP = sum(metrics_dict['prec_by_class']) / len(metrics_dict['prec_by_class'])
+    mAR = sum(metrics_dict['recall_by_class']) / len(metrics_dict['recall_by_class'])
+    return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':metrics_dict['miou']}
+   
+
+def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_criterion, device):
+    net.eval()
+    rd_metrics = Evaluator(4) # number of classes
+    ra_metrics = Evaluator(4) # number of classes
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    for iter, data in enumerate(dataloader):
+        print(f"Sample {iter}")
+        input = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
+        label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
+            
+        with torch.set_grad_enabled(False):
+            outputs = net(input)
+
+        rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
+        rd_loss = torch.mean(torch.stack(rd_losses))
+        
+        ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
+        ra_loss = torch.mean(torch.stack(ra_losses))
+
+        loss = torch.mean(rd_loss + ra_loss)
+        running_loss += loss.item() * input.size(0)
+
+        rd_metrics.add_batch(torch.argmax(label['rd'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
+        ra_metrics.add_batch(torch.argmax(label['ra'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
+        kbar.update(iter)
+
+    metrics_dict = dict()
+    metrics_dict['range_doppler'] = get_metrics(rd_metrics)
+    metrics_dict['range_angle'] = get_metrics(ra_metrics)
+
+    metrics_dict['global_acc'] = (1/2)*(metrics_dict['range_doppler']['acc'] + metrics_dict['range_angle']['acc'])
+    metrics_dict['global_prec'] = (1/2)*(metrics_dict['range_doppler']['prec'] + metrics_dict['range_angle']['prec'])
+    metrics_dict['global_dice'] = (1/2)*(metrics_dict['range_doppler']['dice'] + metrics_dict['range_angle']['dice'])
+
+    mAP = sum(metrics_dict['range_doppler']['prec_by_class']) / len(metrics_dict['range_doppler']['prec_by_class']) / 2 + \
+            sum(metrics_dict['range_angle']['prec_by_class']) / len(metrics_dict['range_angle']['prec_by_class']) / 2 
+    mAR = sum(metrics_dict['range_doppler']['recall_by_class']) / len(metrics_dict['range_doppler']['recall_by_class']) / 2 + \
+            sum(metrics_dict['range_angle']['recall_by_class']) / len(metrics_dict['range_angle']['recall_by_class']) / 2
+    return {'loss': running_loss, 
+            'mAP': mAP, 
+            'mAR': mAR, 
+            'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
