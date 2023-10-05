@@ -26,15 +26,16 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_evaluation
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss, SoftDiceLoss
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
     'RODNet': default_collate,
     'RECORD': default_collate,
     'RECORDNoLstm': default_collate,
-    'RECORDNoLstmMulti': default_collate
+    'RECORDNoLstmMulti': default_collate,
+    'MVRECORD': default_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
@@ -208,6 +209,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
     print(exp_name)
 
+    # check if all datafiles from the same dataset
+    dataset_type = datafiles[0]["parse"]
+
     # # save model path(also model name)
     # with open("exp_info.txt", 'w') as f:
     #     f.write(exp_name)
@@ -298,10 +302,24 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 if model_config['segmentation_head']:
                     seg_map_label = data[2].to(device).double()
             elif model_type in ("RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-                inputs = data['radar_data'].to(device).float()
-                confmap_gt = data['anno']['confmaps'].to(device).float()
-                # print(f"###input:{inputs.shape}")
-                # print(f"###confmap:{confmap_gt.shape}")
+                if dataset_type == "CRUW":
+                    inputs = data['radar_data'].to(device).float()
+                    confmap_gt = data['anno']['confmaps'].to(device).float()
+                    # print(f"###input:{inputs.shape}")
+                    # print(f"###confmap:{confmap_gt.shape}")
+                elif dataset_type == "CARRADA":
+                    if features == ['RD']:
+                        inputs = data['rd_matrix'].to(device).float()
+                        label = data['rd_mask'].to(device).float()
+                    elif features == ['RA']:
+                        inputs = data['ra_matrix'].to(device).float()
+                        label = data['ra_mask'].to(device).float()
+                    #print(f"###input:{inputs.shape}")
+                    #print(f"###label:{label.shape}")
+            elif model_type == "MVRECORD":
+                inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
+                label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
+                #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
             else:
                 raise ValueError
 
@@ -311,8 +329,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # forward pass, enable to track our gradient
             with torch.set_grad_enabled(True):
                 outputs = net(inputs)
-                # print(f"###out:{outputs.shape}")
+                #print(f"###out:{outputs.shape}")
 
+            # loss = get_loss(outputs, label, model_type, dataset_type, feature)
             if model_type == "FFTRadNet":
                 classif_loss,reg_loss = pixor_loss(outputs['Detection'], label_map, train_config['losses'])           
                 
@@ -342,14 +361,42 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 loss_type = train_config['losses']
                 if loss_type == 'bce':
                     criterion = nn.BCELoss()
+                    loss = criterion(outputs, confmap_gt)
                 elif loss_type == 'mse':
                     criterion = nn.SmoothL1Loss()
+                    loss = criterion(outputs, confmap_gt)
                 elif loss_type == 'smooth_ce':
                     alpha = train_config['alpha_loss']
                     criterion = SmoothCELoss(alpha)
+                    loss = criterion(outputs, confmap_gt)
+                elif loss_type == 'wce_w10sdice':
+                    # weights order: background, pedestrian, cyclist, car
+                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
+                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
+                    weights = weights_rd if features == ['RD'] else weights_ra
+                    ce_loss = nn.CrossEntropyLoss(weight=weights)
+                    criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+                    losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
+                    loss = torch.mean(torch.stack(losses))
                 else:
-                    raise ValueError
-                loss = criterion(outputs, confmap_gt)
+                    loss = nn.CrossEntropyLoss()
+            elif model_type == "MVRECORD":
+                loss_type = train_config['losses']
+                if loss_type == 'wce_w10sdice': 
+                    # weights order: background, pedestrian, cyclist, car
+                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
+                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
+                    ce_loss = nn.CrossEntropyLoss(weight=weights_rd)
+                    rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
+                    rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
+                    rd_loss = torch.mean(torch.stack(rd_losses))
+
+                    ce_loss = nn.CrossEntropyLoss(weight=weights_ra)
+                    ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+                    ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
+                    ra_loss = torch.mean(torch.stack(ra_losses))
+
+                    loss = torch.mean(rd_loss + ra_loss)
             else:
                 raise ValueError
 
@@ -358,7 +405,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             optimizer.step()
 
             # statistics
-            running_loss += loss.item() * inputs.size(0)
+            running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
         
             # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
             # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
@@ -384,8 +431,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                                     device=device)
         elif model_type == "RODNet":
             eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
-        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-            eval = RECORD_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
+        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
+            eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
+        elif model_type == "RECORD" and dataset_type == "CARRADA":
+            eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+        elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+            eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
         else:
             raise ValueError
             
@@ -427,8 +478,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
     elif model_type == "RODNet":
         eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
-    elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-        eval = RECORD_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
+    elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
+        eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
+    elif model_type == "RECORD" and dataset_type == "CARRADA":
+        eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+    elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+        eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
     else:
         raise ValueError
     
