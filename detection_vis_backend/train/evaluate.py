@@ -1319,7 +1319,7 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_crit
         ra_loss = torch.mean(torch.stack(ra_losses))
 
         loss = torch.mean(rd_loss + ra_loss)
-        running_loss += loss.item() * input.size(0)
+        running_loss += loss.item() * input[0].size(0)
 
         rd_metrics.add_batch(torch.argmax(label['rd'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
         ra_metrics.add_batch(torch.argmax(label['ra'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
