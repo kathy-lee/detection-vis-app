@@ -34,7 +34,8 @@ collate_func = {
     'RODNet': default_collate,
     'RECORD': default_collate,
     'RECORDNoLstm': default_collate,
-    'RECORDNoLstmMulti': default_collate
+    'RECORDNoLstmMulti': default_collate,
+    'MVRECORD': default_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
@@ -318,6 +319,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             elif model_type == "MVRECORD":
                 inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
                 label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
+                #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
             else:
                 raise ValueError
 
@@ -379,10 +381,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 else:
                     loss = nn.CrossEntropyLoss()
             elif model_type == "MVRECORD":
+                loss_type = train_config['losses']
                 if loss_type == 'wce_w10sdice': 
                     # weights order: background, pedestrian, cyclist, car
-                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555])
-                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382])
+                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
+                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
                     ce_loss = nn.CrossEntropyLoss(weight=weights_rd)
                     rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
                     rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
@@ -402,7 +405,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             optimizer.step()
 
             # statistics
-            running_loss += loss.item() * inputs.size(0)
+            running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
         
             # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
             # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
@@ -430,8 +433,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
             eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
-        elif model_type in ("RECORD", "MVRECORD") and dataset_type == "CARRADA":
+        elif model_type == "RECORD" and dataset_type == "CARRADA":
             eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+        elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+            eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
         else:
             raise ValueError
             
@@ -475,10 +480,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
     elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
         eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
-    elif model_type in ("RECORD") and dataset_type == "CARRADA":
+    elif model_type == "RECORD" and dataset_type == "CARRADA":
         eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
-    elif model_type in ("MVRECORD") and dataset_type == "CARRADA":
-        eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+    elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+        eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
     else:
         raise ValueError
     
