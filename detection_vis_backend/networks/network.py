@@ -243,8 +243,8 @@ class RECORDNoLstmMulti(RECORDNoLstm):
         super().__init__(encoder_config, decoder_config, in_channels=in_channels, norm=norm, n_class=n_class)
 
 
-class MVRecord(nn.Module):
-    def __init__(self, config, n_frames, in_channels=1, n_classes=4, norm='layer'):
+class MVRECORD(nn.Module):
+    def __init__(self, encoder_ra_config, encoder_rd_config, encoder_ad_config, decoder_ra_config, decoder_rd_config, in_channels=1, n_class=4, norm='layer'):
         """
         Multi view RECurrent Online object detectOR (MV-RECORD) model class
         @param config: config dict to build the model
@@ -253,31 +253,30 @@ class MVRecord(nn.Module):
         @param n_classes: number of classes (default: 4)
         @param norm: type of normalisation (default: LayerNorm). Other normalisation are not supported yet.
         """
-        super(MVRecord, self).__init__()
-        self.n_classes = n_classes
+        super(MVRECORD, self).__init__()
+        self.n_class = n_class
         self.in_channels = in_channels
-        self.n_frames = n_frames
 
         # Backbone (encoder)
-        self.rd_encoder = RecordEncoder(in_channels=self.in_channels, config=config['encoder_rd_config'], norm=norm)
-        self.ra_encoder = RecordEncoder(in_channels=self.in_channels, config=config['encoder_ra_config'], norm=norm)
-        self.ad_encoder = RecordEncoder(in_channels=self.in_channels, config=config['encoder_ad_config'], norm=norm)
+        self.rd_encoder = RecordEncoder(in_channels=self.in_channels, config=encoder_rd_config, norm=norm)
+        self.ra_encoder = RecordEncoder(in_channels=self.in_channels, config=encoder_ra_config, norm=norm)
+        self.ad_encoder = RecordEncoder(in_channels=self.in_channels, config=encoder_ad_config, norm=norm)
 
         # Temporal Multi View Skip Connections
-        in_channels_skip_connection_lstm1 = config['encoder_rd_config']['bottleneck_lstm1']['in_channels'] + \
-                                            config['encoder_ad_config']['bottleneck_lstm1']['in_channels'] + \
-                                            config['encoder_ra_config']['bottleneck_lstm1']['in_channels']
+        in_channels_skip_connection_lstm1 = encoder_rd_config['bottleneck_lstm1']['in_channels'] + \
+                                            encoder_ad_config['bottleneck_lstm1']['in_channels'] + \
+                                            encoder_ra_config['bottleneck_lstm1']['in_channels']
         # We project the concatenation of features to the initial #channels of each view (kernel_size = 1)
         self.skip_connection_lstm1_conv = nn.Conv2d(in_channels=in_channels_skip_connection_lstm1,
-                                                    out_channels=config['encoder_rd_config']['bottleneck_lstm1']['out_channels'],
+                                                    out_channels=encoder_rd_config['bottleneck_lstm1']['out_channels'],
                                                     kernel_size=1)
 
-        in_channels_skip_connection_lstm2 = config['encoder_rd_config']['bottleneck_lstm2']['in_channels'] + \
-                                            config['encoder_ad_config']['bottleneck_lstm2']['in_channels'] + \
-                                            config['encoder_ra_config']['bottleneck_lstm2']['in_channels']
+        in_channels_skip_connection_lstm2 = encoder_rd_config['bottleneck_lstm2']['in_channels'] + \
+                                            encoder_ad_config['bottleneck_lstm2']['in_channels'] + \
+                                            encoder_ra_config['bottleneck_lstm2']['in_channels']
         # We project the concatenation of features to the initial #channels of each view (kernel_size = 1)
         self.skip_connection_lstm2_conv = nn.Conv2d(in_channels=in_channels_skip_connection_lstm2,
-                                                    out_channels=config['encoder_rd_config']['bottleneck_lstm2']['out_channels'],
+                                                    out_channels=encoder_rd_config['bottleneck_lstm2']['out_channels'],
                                                     kernel_size=1)
 
         # We downsample the RA view on the azimuth dimension to match the size of AD and RD view
@@ -285,8 +284,8 @@ class MVRecord(nn.Module):
         self.up_sample_rd_ad_views_skip_connection1 = nn.Upsample(scale_factor=(1, 2))
 
         # Decoding
-        self.rd_decoder = RecordDecoder(config=config['decoder_rd_config'], n_class=self.n_classes)
-        self.ra_decoder = RecordDecoder(config=config['decoder_ra_config'], n_class=self.n_classes)
+        self.rd_decoder = RecordDecoder(config=decoder_rd_config, n_class=self.n_class)
+        self.ra_decoder = RecordDecoder(config=decoder_ra_config, n_class=self.n_class)
 
     def forward(self, inputs):
         """
@@ -297,8 +296,9 @@ class MVRecord(nn.Module):
         @return: RD and RA segmentation masks of the last time step with shape (B, n_class, H, W)
         """
         x_rd, x_ra, x_ad = inputs
+        win_size = x_rd.shape[2]
         # Backbone
-        for t in range(self.n_frames):
+        for t in range(win_size):
             if t == 0:
                 self.ra_encoder.__init_hidden__()
                 self.rd_encoder.__init_hidden__()
