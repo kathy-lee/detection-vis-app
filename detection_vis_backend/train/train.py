@@ -273,8 +273,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     history = {'train_loss':[],'val_loss':[],'lr':[],'mAP':[],'mAR':[],'mIoU':[]}
     best_mAP = 0
 
-    freespace_loss = nn.BCEWithLogitsLoss(reduction='mean')
-
     if pretrained:
         print('===========  Resume training  ==================:')
         dict = torch.load(pretrained)
@@ -339,13 +337,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
             # loss = get_loss(outputs, label, model_type, dataset_type, feature)
             if model_type == "FFTRadNet":
-                classif_loss,reg_loss = pixor_loss(outputs['Detection'], label_map, train_config['losses'])           
-                
+                criterion_det = pixor_loss if train_config['losses']['detection_loss'] == 'PixorLoss' else None
+                criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if train_config['losses']['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
+                classif_loss, reg_loss = criterion_det(outputs['Detection'], label_map, train_config['losses'])           
                 prediction = outputs['Segmentation'].contiguous().flatten()
-                label = seg_map_label.contiguous().flatten()        
-                loss_seg = freespace_loss(prediction, label)
+                label = seg_map_label.contiguous().flatten()   
+                loss_seg = criterion_seg(prediction, label)
                 loss_seg *= inputs.size(0)
-
                 classif_loss *= train_config['losses']['weight'][0]
                 reg_loss *= train_config['losses']['weight'][1]
                 loss_seg *= train_config['losses']['weight'][2]
@@ -437,9 +435,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), detection_loss=pixor_loss, 
-                                    segmentation_loss=freespace_loss, losses_params=train_config['losses'],
-                                    device=device)
+            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), losses_params=train_config['losses'], device=device)
         elif model_type == "RODNet":
             eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":

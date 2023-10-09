@@ -1,10 +1,6 @@
 {
     "seed":3,
     "losses": {
-        "fct":"PixorLoss",
-        "classification": "FocalLoss",
-        "regression": "smoothL1Loss",
-        "weight": [1,100,100]
     },
     "lr_scheduler": {
         "type": "step",
