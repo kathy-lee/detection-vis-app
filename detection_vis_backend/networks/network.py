@@ -13,6 +13,7 @@ from torchvision.transforms.transforms import Sequence
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
+from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
 
 
 class NetworkFactory:
@@ -340,3 +341,19 @@ class MVRECORD(nn.Module):
         pred_ra = self.ra_decoder(rd_ad_ra_latent_space, latent_rd_ad_ra_skip_connection_2, latent_skip_connection1_ra)
 
         return {"rd": pred_rd, "ra": pred_ra}
+    
+
+class RADDet(nn.Module):
+    def __init__(self, input_channels, num_class, num_anchors_layer):
+        super(RADDet, self).__init__()
+
+        self.backbone_stage = RadarResNet3D(input_channels)
+        self.yolohead = YoloHead(num_anchors_layer, num_class, 256, 4) 
+        
+    def forward(self, x):
+        features = self.backbone_stage(x)
+        #print(f"backstone_stage passed. output feature shape: {features.shape}")        
+        yolo_raw = self.yolohead(features)
+        yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
+        #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
+        return yolo_raw

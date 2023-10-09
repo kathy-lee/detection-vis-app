@@ -1,0 +1,45 @@
+{
+    "seed":3,
+    "losses": {
+        
+    },
+    "lr_scheduler": {
+        "type": "step",
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs":1,
+    "dataloader": {
+        "train": {
+            "batch_size": 4,
+            "num_workers": 4
+    	},
+        "val": {
+            "batch_size": 1,
+            "num_workers": 1
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    },
+    
+    "input_size": [256, 256, 64],
+    "yolohead_xyz_scales": [1, 1, 1],
+    "focal_loss_iou_threshold": 0.3,
+    "anchor_boxes": [
+        [6, 9, 5],
+        [19, 17, 8],
+        [19, 28, 19],
+        [22, 45, 28],
+        [19, 36, 60],
+        [26, 75, 61]
+    ],
+    "confidence_threshold": 0.5,
+    "nms_iou3d_threshold": 0.1,
+	"mAP_iou3d_threshold": 0.3
+
+}
