@@ -26,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -2077,14 +2077,100 @@ class RADDetDataset(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        self.data_stats = {
+            "all_classes" : ["person", "bicycle", "car", "motorcycle", "bus", "truck" ],
+            "global_mean_log" : 3.2438383,
+            "global_max_log" : 10.0805629,
+            "global_min_log" : 0.0,
+            "global_variance_log" : 6.8367246,
+            "max_boxes_per_frame" : 30,
+            "trainset_portion" : 0.8
+        }
+        assert model_cfg["num_class"] == len(self.data_stats["all_classes"])
+        self.anchor_boxes = np.array(train_cfg["anchor_boxes"])
+        self.input_shape = train_cfg["input_size"]
+        self.headoutput_shape = [3,16,16,4,78]
+        self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
         return 
     
     def __len__(self):
         return self.frame_sync
 
     def __getitem__(self, index):
+        RAD_complex = np.load(self.RAD_filenames[index])
+        # Gloabl Normalization
+        RAD_data = complexTo2Channels(RAD_complex)
+        RAD_data = (RAD_data - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
         
-       return None
+        with open(self.anno_filenames[index], "rb") as f:
+            gt_instances = pickle.load(f)
+        # decode ground truth boxes to YOLO format
+        gt_labels, has_label, raw_boxes = self.encodeToLabels(gt_instances)
+        return {'radar_data': RAD_data, 'label': gt_labels, 'boxes': raw_boxes}
+    
+    def encodeToLabels(self, gt_instances):
+        """ Transfer ground truth instances into Detection Head format """
+        raw_boxes_xyzwhd = np.zeros((self.data_stats["max_boxes_per_frame"], 7))
+        ### initialize gronud truth labels as np.zeors ###
+        gt_labels = np.zeros(list(self.headoutput_shape[1:4]) + \
+                        [len(self.anchor_boxes)] + \
+                        [len(self.data_stats["all_classes"]) + 7])
+
+        ### start transferring box to ground turth label format ###
+        for i in range(len(gt_instances["classes"])):
+            if i > self.data_stats["max_boxes_per_frame"]:
+                continue
+            class_name = gt_instances["classes"][i]
+            box_xyzwhd = gt_instances["boxes"][i]
+            class_id = self.data_stats["all_classes"].index(class_name)
+            if i < self.data_stats["max_boxes_per_frame"]:
+                raw_boxes_xyzwhd[i, :6] = box_xyzwhd
+                raw_boxes_xyzwhd[i, 6] = class_id
+            class_onehot = smoothOnehot(class_id, len(self.data_stats["all_classes"]))
+            
+            exist_positive = False
+
+            grid_strid = self.grid_strides
+            anchor_stage = self.anchor_boxes
+            box_xyzwhd_scaled = box_xyzwhd[np.newaxis, :].astype(np.float32)
+            box_xyzwhd_scaled[:, :3] /= grid_strid
+            anchorstage_xyzwhd = np.zeros([len(anchor_stage), 6])
+            anchorstage_xyzwhd[:, :3] = np.floor(box_xyzwhd_scaled[:, :3]) + 0.5
+            anchorstage_xyzwhd[:, 3:] = anchor_stage.astype(np.float32)
+
+            iou_scaled = iou3d(box_xyzwhd_scaled, anchorstage_xyzwhd, \
+                                        self.input_shape)
+            ### NOTE: 0.3 is from YOLOv4, maybe this should be different here ###
+            ### it means, as long as iou is over 0.3 with an anchor, the anchor
+            ### should be taken into consideration as a ground truth label
+            iou_mask = iou_scaled > 0.3
+
+            if np.any(iou_mask):
+                xind, yind, zind = np.floor(np.squeeze(box_xyzwhd_scaled)[:3]).\
+                                    astype(np.int32)
+                ### TODO: consider changing the box to raw yolohead output format ###
+                gt_labels[xind, yind, zind, iou_mask, 0:6] = box_xyzwhd
+                gt_labels[xind, yind, zind, iou_mask, 6:7] = 1.
+                gt_labels[xind, yind, zind, iou_mask, 7:] = class_onehot
+                exist_positive = True
+
+            if not exist_positive:
+                ### NOTE: this is the normal one ###
+                ### it means take the anchor box with maximum iou to the raw
+                ### box as the ground truth label
+                anchor_ind = np.argmax(iou_scaled)
+                xind, yind, zind = np.floor(np.squeeze(box_xyzwhd_scaled)[:3]).\
+                                    astype(np.int32)
+                gt_labels[xind, yind, zind, anchor_ind, 0:6] = box_xyzwhd
+                gt_labels[xind, yind, zind, anchor_ind, 6:7] = 1.
+                gt_labels[xind, yind, zind, anchor_ind, 7:] = class_onehot
+
+        has_label = False
+        for label_stage in gt_labels:
+            if label_stage.max() != 0:
+                has_label = True
+        gt_labels = np.array([np.where(gt_i == 0, 1e-16, gt_i) for gt_i in gt_labels])
+        return gt_labels, has_label, raw_boxes_xyzwhd
     
 
 class Astyx(Dataset):

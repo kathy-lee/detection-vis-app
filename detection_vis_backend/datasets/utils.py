@@ -924,3 +924,72 @@ def normalize(data, signal_type, norm_type='local'):
 
     norm_data = (data - min_value) / (max_value - min_value)
     return norm_data
+
+
+def complexTo2Channels(target_array):
+    """ transfer complex a + bi to [a, b]"""
+    assert target_array.dtype == np.complex64
+    ### NOTE: transfer complex to (magnitude) ###
+    output_array = getMagnitude(target_array)
+    output_array = getLog(output_array)
+    return output_array
+
+def getMagnitude(target_array, power_order=2):
+    """ get magnitude out of complex number """
+    target_array = np.abs(target_array)
+    target_array = pow(target_array, power_order)
+    return target_array 
+
+def getLog(target_array, scalar=1., log_10=True):
+    """ get Log values """
+    if log_10:
+        return scalar * np.log10(target_array + 1.)
+    else:
+        return target_array
+    
+def smoothOnehot(class_num, hm_classes, smooth_coef=0.01):
+    """ Transfer class index to one hot class (smoothed) """
+    assert isinstance(class_num, int)
+    assert isinstance(hm_classes, int)
+    assert class_num < hm_classes
+    ### building onehot 
+    onehot = np.zeros(hm_classes, dtype=np.float32) 
+    onehot[class_num] = 1.
+    ### smoothing onehot
+    uniform_distribution = np.full(hm_classes, 1.0/hm_classes)
+    smooth_onehot = (1-smooth_coef) * onehot + smooth_coef * uniform_distribution
+    return smooth_onehot
+
+
+def iou3d(box_xyzwhd_1, box_xyzwhd_2, input_size):
+    """ Numpy version of 3D bounding box IOU calculation 
+    Args:
+        box_xyzwhd_1        ->      box1 [x, y, z, w, h, d]
+        box_xyzwhd_2        ->      box2 [x, y, z, w, h, d]"""
+    assert box_xyzwhd_1.shape[-1] == 6
+    assert box_xyzwhd_2.shape[-1] == 6
+    fft_shift_implement = np.array([0, 0, input_size[2]/2])
+    ### areas of both boxes
+    box1_area = box_xyzwhd_1[..., 3] * box_xyzwhd_1[..., 4] * box_xyzwhd_1[..., 5]
+    box2_area = box_xyzwhd_2[..., 3] * box_xyzwhd_2[..., 4] * box_xyzwhd_2[..., 5]
+    ### find the intersection box
+    box1_min = box_xyzwhd_1[..., :3] + fft_shift_implement - box_xyzwhd_1[..., 3:] * 0.5
+    box1_max = box_xyzwhd_1[..., :3] + fft_shift_implement + box_xyzwhd_1[..., 3:] * 0.5
+    box2_min = box_xyzwhd_2[..., :3] + fft_shift_implement - box_xyzwhd_2[..., 3:] * 0.5
+    box2_max = box_xyzwhd_2[..., :3] + fft_shift_implement + box_xyzwhd_2[..., 3:] * 0.5
+
+    # box1_min = box_xyzwhd_1[..., :3] - box_xyzwhd_1[..., 3:] * 0.5
+    # box1_max = box_xyzwhd_1[..., :3] + box_xyzwhd_1[..., 3:] * 0.5
+    # box2_min = box_xyzwhd_2[..., :3] - box_xyzwhd_2[..., 3:] * 0.5
+    # box2_max = box_xyzwhd_2[..., :3] + box_xyzwhd_2[..., 3:] * 0.5
+
+    left_top = np.maximum(box1_min, box2_min)
+    bottom_right = np.minimum(box1_max, box2_max)
+    ### get intersection area
+    intersection = np.maximum(bottom_right - left_top, 0.0)
+    intersection_area = intersection[..., 0] * intersection[..., 1] * intersection[..., 2]
+    ### get union area
+    union_area = box1_area + box2_area - intersection_area
+    ### get iou
+    iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
+    return iou

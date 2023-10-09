@@ -1,0 +1,5 @@
+{
+    "input_channels": 64,
+    "num_class": 6,
+    "num_anchors_layer": 6
+}
