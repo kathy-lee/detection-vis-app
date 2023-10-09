@@ -10,7 +10,6 @@ import polarTransform
 import re
 
 
-from torch.utils.data import DataLoader, random_split, Subset
 from shapely.geometry import Polygon
 from typing import Optional
 
@@ -540,3 +539,142 @@ def get_metrics(metrics):
     metrics_values['dice'] = dice
     metrics_values['dice_by_class'] = dice_by_class.tolist()
     return metrics_values
+
+
+def boxDecoder(yolohead_output, input_size, anchors_layer, num_class, scale=1., device='cuda:0'):
+    """ Decoder output from yolo head to boxes """    
+    grid_size = yolohead_output.shape[1:4]
+    num_anchors_layer = len(anchors_layer)
+    grid_strides = torch.tensor(input_size, dtype=torch.float32).to(device) / torch.tensor(grid_size, dtype=torch.float32).to(device)
+    
+    reshape_size = [yolohead_output.size(0)] + list(grid_size) + [num_anchors_layer, 7+num_class]
+    pred_raw = yolohead_output.view(reshape_size)
+    
+    raw_xyz, raw_whd, raw_conf, raw_prob = torch.split(pred_raw, (3,3,1,num_class), dim=-1)
+
+    xyz_grid = torch.meshgrid(torch.arange(grid_size[0]).to(device), 
+                              torch.arange(grid_size[1]).to(device),
+                              torch.arange(grid_size[2]).to(device), indexing="ij") # Added indexing style
+    xyz_grid = torch.unsqueeze(torch.stack(xyz_grid, dim=-1).to(device), dim=3)
+    xyz_grid = xyz_grid.permute(1, 0, 2, 3, 4)
+    xyz_grid = xyz_grid.unsqueeze(0).repeat(yolohead_output.size(0), 1, 1, 1, num_anchors_layer, 1)
+
+    pred_xyz = ((torch.sigmoid(raw_xyz) * scale) - 0.5 * (scale - 1) + xyz_grid) * grid_strides
+
+    # Clipping values 
+    raw_whd = torch.clamp(raw_whd, 1e-12, 1e12)
+    
+    pred_whd = torch.exp(raw_whd) * torch.tensor(anchors_layer, dtype=torch.float32).to(device)
+    pred_xyzwhd = torch.cat([pred_xyz, pred_whd], dim=-1)
+
+    pred_conf = torch.sigmoid(raw_conf)
+    pred_prob = torch.sigmoid(raw_prob)
+    
+    return pred_raw, torch.cat([pred_xyzwhd, pred_conf, pred_prob], dim=-1)
+
+
+def extractYoloInfo(yolo_output_format_data):
+    """ Extract box, objectness, class from yolo output format data """
+    box = yolo_output_format_data[..., :6]
+    conf = yolo_output_format_data[..., 6:7]
+    category = yolo_output_format_data[..., 7:]
+    return box, conf, category
+
+
+def yolo1Loss(pred_box, gt_box, gt_conf, input_size, if_box_loss_scale=True):
+    """ loss function for box regression (based on YOLOV1) """
+    assert pred_box.shape == gt_box.shape
+    if if_box_loss_scale:
+        scale = 2.0 - 1.0 * gt_box[..., 3:4] * gt_box[..., 4:5] * gt_box[..., 5:6] /\
+                                    (input_size[0] * input_size[1] * input_size[2])
+    else:
+        scale = 1.0
+        
+    # YOLOv1 original loss function
+    giou_loss = gt_conf * scale * ((pred_box[..., :3] - gt_box[..., :3]).pow(2) + \
+                    (pred_box[..., 3:].sqrt() - gt_box[..., 3:].sqrt()).pow(2))
+    return giou_loss
+
+
+def iou3d(box_xyzwhd_1, box_xyzwhd_2, input_size):
+    """ PyTorch version of 3D bounding box IOU calculation 
+    Args:
+        box_xyzwhd_1        ->      box1 [x, y, z, w, h, d]
+        box_xyzwhd_2        ->      box2 [x, y, z, w, h, d]"""
+    assert box_xyzwhd_1.shape[-1] == 6
+    assert box_xyzwhd_2.shape[-1] == 6
+    fft_shift_implement = torch.tensor([0, 0, input_size[2]/2], dtype=box_xyzwhd_1.dtype, device=box_xyzwhd_1.device)
+    
+    ### areas of both boxes
+    box1_area = box_xyzwhd_1[..., 3] * box_xyzwhd_1[..., 4] * box_xyzwhd_1[..., 5]
+    box2_area = box_xyzwhd_2[..., 3] * box_xyzwhd_2[..., 4] * box_xyzwhd_2[..., 5]
+    
+    box1_min = box_xyzwhd_1[..., :3] + fft_shift_implement - box_xyzwhd_1[..., 3:] * 0.5
+    box1_max = box_xyzwhd_1[..., :3] + fft_shift_implement + box_xyzwhd_1[..., 3:] * 0.5
+    box2_min = box_xyzwhd_2[..., :3] + fft_shift_implement - box_xyzwhd_2[..., 3:] * 0.5
+    box2_max = box_xyzwhd_2[..., :3] + fft_shift_implement + box_xyzwhd_2[..., 3:] * 0.5
+
+    left_top = torch.maximum(box1_min, box2_min)
+    bottom_right = torch.minimum(box1_max, box2_max)
+
+    ### get intersection area
+    intersection = torch.maximum(bottom_right - left_top, torch.tensor(0.0, device=box_xyzwhd_1.device))
+    intersection_area = intersection[..., 0] * intersection[..., 1] * intersection[..., 2]
+    
+    ### get union area
+    union_area = box1_area + box2_area - intersection_area
+    
+    ### get iou
+    iou = intersection_area / (union_area + 1e-10)
+    return iou
+
+
+def focalLoss(raw_conf, pred_conf, gt_conf, pred_box, raw_boxes, input_size, iou_loss_threshold=0.5):
+    """ Calculate focal loss for objectness """
+    iou = iou3d(pred_box.unsqueeze(-2), raw_boxes.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1), input_size)
+    max_iou, _ = iou.max(dim=-1)
+    max_iou = max_iou.unsqueeze(-1)
+
+    gt_conf_negative = (1.0 - gt_conf) * (max_iou < iou_loss_threshold).float()
+    conf_focal = (gt_conf - pred_conf).pow(2)
+    alpha = 0.01
+
+    focal_loss = conf_focal * (
+        gt_conf * F.binary_cross_entropy_with_logits(raw_conf, gt_conf, reduction='none')
+        +
+        alpha * gt_conf_negative * F.binary_cross_entropy_with_logits(raw_conf, gt_conf, reduction='none')
+    )
+    return focal_loss
+
+
+def categoryLoss(raw_category, pred_category, gt_category, gt_conf):
+    """ Category Cross Entropy loss """
+    category_loss = gt_conf * F.binary_cross_entropy_with_logits(input=raw_category, target=gt_category)
+    return category_loss
+
+
+def lossYolo(pred_raw, pred, label, raw_boxes, input_size, focal_loss_iou_threshold):
+    """ Calculate loss function of YOLO HEAD 
+    Args:
+        feature_stages      ->      3 different feature stages after YOLO HEAD
+                                    with shape [None, r, a, d, num_anchors, 7+num_class]
+        gt_stages           ->      3 different ground truth stages 
+                                    with shape [None, r, a, d, num_anchors, 7+num_class]"""
+    assert len(raw_boxes.shape) == 3
+    input_size = torch.tensor(input_size).float()
+    assert pred_raw.shape == label.shape
+    assert pred_raw.shape[0] == len(raw_boxes)
+    assert pred.shape == label.shape
+    assert pred.shape[0] == len(raw_boxes)
+    raw_box, raw_conf, raw_category = extractYoloInfo(pred_raw)
+    pred_box, pred_conf, pred_category = extractYoloInfo(pred)
+    gt_box, gt_conf, gt_category = extractYoloInfo(label)
+    giou_loss = yolo1Loss(pred_box, gt_box, gt_conf, input_size, \
+                            if_box_loss_scale=False)
+    focal_loss = focalLoss(raw_conf, pred_conf, gt_conf, pred_box, raw_boxes, \
+                            input_size, focal_loss_iou_threshold)
+    category_loss = categoryLoss(raw_category, pred_category, gt_category, gt_conf)
+    giou_total_loss = torch.mean(torch.sum(giou_loss, dim=[1, 2, 3, 4]))
+    conf_total_loss = torch.mean(torch.sum(focal_loss, dim=[1, 2, 3, 4]))
+    category_total_loss = torch.mean(torch.sum(category_loss, dim=[1, 2, 3, 4]))
+    return giou_total_loss, conf_total_loss, category_total_loss

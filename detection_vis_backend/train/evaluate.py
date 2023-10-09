@@ -11,8 +11,8 @@ from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 
-from detection_vis_backend.train.utils import decode, get_metrics
-from detection_vis_backend.datasets.utils import confmap2ra, get_class_id
+from detection_vis_backend.train.utils import decode, get_metrics, boxDecoder, lossYolo
+from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 
 
 
@@ -381,6 +381,8 @@ def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
         sorted_class_predictions = sorted_class_predictions[overlap_mask]
 
     return sorted_class_predictions, sorted_box_predictions
+
+
 def bbox_iou(box1, boxes):
 
     # currently inspected box
@@ -656,7 +658,6 @@ def read_gt_txt(txt_path, n_frame, n_class, classes):
 
 
 def read_rodnet_res(filename, n_frame, n_class, classes, rng_grid, agl_grid):
-
     with open(filename, 'r') as df:
         data = df.readlines()
     if len(data) == 0:
@@ -1341,3 +1342,215 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_crit
             'mAP': mAP, 
             'mAR': mAR, 
             'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+
+
+def yoloheadToPredictions(yolohead_output, conf_threshold=0.5):
+    """ Transfer YOLO HEAD output to [:, 8], where 8 means
+    [x, y, z, w, h, d, score, class_index]"""
+    prediction = yolohead_output.reshape(-1, yolohead_output.shape[-1])
+    prediction_class = np.argmax(prediction[:, 7:], axis=-1)
+    predictions = np.concatenate([prediction[:, :7], \
+                    np.expand_dims(prediction_class, axis=-1)], axis=-1)
+    conf_mask = (predictions[:, 6] >= conf_threshold)
+    predictions = predictions[conf_mask]
+    return predictions
+
+
+def iou2d(box_xywh_1, box_xywh_2):
+    """ Numpy version of 3D bounding box IOU calculation 
+    Args:
+        box_xywh_1        ->      box1 [x, y, w, h]
+        box_xywh_2        ->      box2 [x, y, w, h]"""
+    assert box_xywh_1.shape[-1] == 4
+    assert box_xywh_2.shape[-1] == 4
+    ### areas of both boxes
+    box1_area = box_xywh_1[..., 2] * box_xywh_1[..., 3]
+    box2_area = box_xywh_2[..., 2] * box_xywh_2[..., 3]
+    ### find the intersection box
+    box1_min = box_xywh_1[..., :2] - box_xywh_1[..., 2:] * 0.5
+    box1_max = box_xywh_1[..., :2] + box_xywh_1[..., 2:] * 0.5
+    box2_min = box_xywh_2[..., :2] - box_xywh_2[..., 2:] * 0.5
+    box2_max = box_xywh_2[..., :2] + box_xywh_2[..., 2:] * 0.5
+
+    left_top = np.maximum(box1_min, box2_min)
+    bottom_right = np.minimum(box1_max, box2_max)
+    ### get intersection area
+    intersection = np.maximum(bottom_right - left_top, 0.0)
+    intersection_area = intersection[..., 0] * intersection[..., 1]
+    ### get union area
+    union_area = box1_area + box2_area - intersection_area
+    ### get iou
+    iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
+    return iou
+
+
+def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
+    """ Bboxes format [x, y, z, w, h, d, score, class_index] """
+    """ Implemented the same way as YOLOv4 """ 
+    assert method in ['nms', 'soft-nms']
+    if len(bboxes) == 0:
+        best_bboxes = np.zeros([0, 8])
+    else:
+        all_pred_classes = list(set(bboxes[:, 7]))
+        unique_classes = list(np.unique(all_pred_classes))
+        best_bboxes = []
+        for cls in unique_classes:
+            cls_mask = (bboxes[:, 7] == cls)
+            cls_bboxes = bboxes[cls_mask]
+            ### NOTE: start looping over boxes to find the best one ###
+            while len(cls_bboxes) > 0:
+                max_ind = np.argmax(cls_bboxes[:, 6])
+                best_bbox = cls_bboxes[max_ind]
+                best_bboxes.append(best_bbox)
+                cls_bboxes = np.concatenate([cls_bboxes[: max_ind], cls_bboxes[max_ind + 1:]])
+                iou = iou3d(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
+                            input_size)
+                weight = np.ones((len(iou),), dtype=np.float32)
+                if method == 'nms':
+                    iou_mask = iou > iou_threshold
+                    weight[iou_mask] = 0.0
+                if method == 'soft-nms':
+                    weight = np.exp(-(1.0 * iou ** 2 / sigma))
+                cls_bboxes[:, 6] = cls_bboxes[:, 6] * weight
+                score_mask = cls_bboxes[:, 6] > 0.
+                cls_bboxes = cls_bboxes[score_mask]
+        if len(best_bboxes) != 0:
+            best_bboxes = np.array(best_bboxes)
+        else:
+            best_bboxes = np.zeros([0, 8])
+    return best_bboxes
+
+
+def getTruePositive(pred, gt, input_size, iou_threshold=0.5, mode="3D"):
+    """ output tp (true positive) with size [num_pred, ] """
+    assert mode in ["3D", "2D"]
+    tp = np.zeros(len(pred))
+    detected_gt_boxes = []
+    for i in range(len(pred)):
+        current_pred = pred[i]
+        if mode == "3D":
+            current_pred_box = current_pred[:6]
+            current_pred_score = current_pred[6]
+            current_pred_class = current_pred[7]
+            gt_box = gt[..., :6]
+            gt_class = gt[..., 6]
+        else:
+            current_pred_box = current_pred[:4]
+            current_pred_score = current_pred[4]
+            current_pred_class = current_pred[5]
+            gt_box = gt[..., :4]
+            gt_class = gt[..., 4]
+
+        if len(detected_gt_boxes) == len(gt): break
+        
+        if mode == "3D":
+            iou = iou3d(current_pred_box[np.newaxis, ...], gt_box, input_size)
+        else:
+            iou = iou2d(current_pred_box[np.newaxis, ...], gt_box)
+        iou_max_idx = np.argmax(iou)
+        iou_max = iou[iou_max_idx]
+        if iou_max >= iou_threshold and iou_max_idx not in detected_gt_boxes:
+            tp[i] = 1.
+            detected_gt_boxes.append(iou_max_idx)
+    fp = 1. - tp
+    return tp, fp
+
+
+def computeAP(tp, fp, num_gt_class):
+    """ Compute Average Precision """
+    tp_cumsum = np.cumsum(tp).astype(np.float32)
+    fp_cumsum = np.cumsum(fp).astype(np.float32)
+    recall = tp_cumsum / (num_gt_class + 1e-16)
+    precision = tp_cumsum / (tp_cumsum + fp_cumsum)
+    ########## NOTE: the following is under the reference of the repo ###########
+    recall = np.insert(recall, 0, 0.0)
+    recall = np.append(recall, 1.0)
+    precision = np.insert(precision, 0, 0.0)
+    precision = np.append(precision, 0.0)
+    mrec = recall.copy()
+    mpre = precision.copy()
+
+    for i in range(len(mpre)-2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i+1])
+
+    i_list = []
+    for i in range(1, len(mrec)):
+        if mrec[i] != mrec[i-1]:
+            i_list.append(i) # if it was matlab would be i + 1
+
+    ap = 0.0
+    for i in i_list:
+        ap += ((mrec[i]-mrec[i-1])*mpre[i])
+    return ap, mrec, mpre
+
+
+def mAP(predictions, gts, input_size, ap_each_class, tp_iou_threshold=0.5, mode="3D"):
+    """ Main function for calculating mAP 
+    Args:
+        predictions         ->      [num_pred, 6 + score + class]
+        gts                 ->      [num_gt, 6 + class]"""
+    gts = gts[gts[..., :6].any(axis=-1) > 0]
+    all_gt_classes = np.unique(gts[:, 6])
+    ap_all = []
+    # ap_all_classes = np.zeros(num_all_classes).astype(np.float32)
+    for class_i in all_gt_classes:
+        ### NOTE: get the prediction per class and sort it ###
+        pred_class = predictions[predictions[..., 7] == class_i]
+        pred_class = pred_class[np.argsort(pred_class[..., 6])[::-1]]
+        ### NOTE: get the ground truth per class ###
+        gt_class = gts[gts[..., 6] == class_i]
+        tp, fp = getTruePositive(pred_class, gt_class, input_size, \
+                                iou_threshold=tp_iou_threshold, mode=mode)
+        ap, mrecall, mprecision = computeAP(tp, fp, len(gt_class))
+        ap_all.append(ap)
+        ap_each_class[int(class_i)].append(ap)
+    mean_ap = np.mean(ap_all)
+    return mean_ap, ap_each_class
+
+
+def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, device):
+    net.eval()
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    mean_ap_test = 0.0
+    ap_all_class_test = []
+    ap_all_class = []
+    for class_id in range(model_config['num_class']):
+        ap_all_class.append([])
+    with torch.set_grad_enabled(False):
+        for iter, data in enumerate(dataloader):
+            inputs = data['radar_data'].to(device).float().permute(0, 3, 1, 2)
+            label = data['label'].to(device).float()
+            raw_boxes = data['boxes'].to(device).float()
+            outputs = net(inputs)
+            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+            box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, raw_boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
+            box_loss *= 1e-1
+            loss = box_loss + conf_loss + category_loss
+            running_loss += loss.item() * inputs.size(0)
+            pred = pred.detach().cpu().numpy()
+            raw_boxes = raw_boxes.detach().cpu().numpy()
+            for batch_id in range(raw_boxes.shape[0]):
+                raw_boxes_frame = raw_boxes[batch_id]
+                pred_frame = pred[batch_id]
+                predicitons = yoloheadToPredictions(pred_frame, \
+                                    conf_threshold=train_config["confidence_threshold"])
+                nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
+                                train_config["input_size"], sigma=0.3, method="nms")
+                mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
+                                        train_config["input_size"], ap_all_class, \
+                                        tp_iou_threshold=train_config["mAP_iou3d_threshold"])
+                mean_ap_test += mean_ap
+            kbar.update(iter)
+    for ap_class_i in ap_all_class:
+        if len(ap_class_i) == 0:
+            class_ap = 0.
+        else:
+            class_ap = np.mean(ap_class_i)
+        ap_all_class_test.append(class_ap)
+    mean_ap_test /= batch_size * len(dataloader)
+    print("-------> ap: %.6f"%(mean_ap_test))
+    return {'loss': running_loss, 
+            'mAP': mean_ap_test, 
+            'mAR': 0.0, 
+            'mIoU': 0.0}
