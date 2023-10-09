@@ -26,8 +26,8 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss, SoftDiceLoss
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
@@ -35,7 +35,8 @@ collate_func = {
     'RECORD': default_collate,
     'RECORDNoLstm': default_collate,
     'RECORDNoLstmMulti': default_collate,
-    'MVRECORD': default_collate
+    'MVRECORD': default_collate,
+    'RADDet': default_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
@@ -320,6 +321,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
                 label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
                 #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
+            elif model_type == "RADDet":
+                inputs = data['radar_data'].to(device).float().permute(0, 3, 1, 2)
+                label = data['label'].to(device).float()
+                boxes = data['boxes'].to(device).float()
+                #print(inputs.shape, label.shape, boxes.shape)
             else:
                 raise ValueError
 
@@ -397,6 +403,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     ra_loss = torch.mean(torch.stack(ra_losses))
 
                     loss = torch.mean(rd_loss + ra_loss)
+            elif model_type == "RADDet":
+                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+                box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
+                box_loss *= 1e-1
+                loss = box_loss + conf_loss + category_loss
             else:
                 raise ValueError
 
@@ -437,6 +448,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
         elif model_type == "MVRECORD" and dataset_type == "CARRADA":
             eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
+        elif model_type == "RADDet":
+            eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
         else:
             raise ValueError
             
@@ -481,9 +494,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
         eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
     elif model_type == "RECORD" and dataset_type == "CARRADA":
-        eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+        eval = RECORD_CARRADA_evaluation(net, test_loader, features, criterion, device)
     elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-        eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
+        eval = MVRECORD_CARRADA_evaluation(net, test_loader, features, rd_criterion, ra_criterion, device)
+    elif model_type == "RADDet":
+            eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
     else:
         raise ValueError
     
