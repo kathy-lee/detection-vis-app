@@ -6,29 +6,29 @@ import time
 import os
 import math
 import json
+import torch.nn as nn
+
 
 from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 
-from detection_vis_backend.train.utils import decode, get_metrics, boxDecoder, lossYolo
+from detection_vis_backend.train.utils import pixor_loss, decode, get_metrics, boxDecoder, lossYolo
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 
 
 
 
-def FFTRadNet_val_evaluation(net,loader,check_perf=False, detection_loss=None,segmentation_loss=None,losses_params=None, device='cpu'):
-
-    metrics = Metrics()
-    metrics.reset()
-
+def FFTRadNet_val_evaluation(net, loader, check_perf=False, losses_params=None, device='cpu'):
     net.eval()
     running_loss = 0.0
-    
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
+    metrics = Metrics()
+    metrics.reset()
+    criterion_det = pixor_loss if losses_params['detection_loss'] == 'PixorLoss' else None
+    criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if losses_params['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
 
     for i, data in enumerate(loader):
-
         # input, out_label,segmap,labels
         inputs = data[0].to(device).float()
         label_map = data[1].to(device).float()
@@ -37,11 +37,11 @@ def FFTRadNet_val_evaluation(net,loader,check_perf=False, detection_loss=None,se
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
 
-        if(detection_loss!=None and segmentation_loss!=None):
-            classif_loss,reg_loss = detection_loss(outputs['Detection'], label_map,losses_params)           
+        if(criterion_det!=None and criterion_seg!=None):
+            classif_loss,reg_loss = criterion_det(outputs['Detection'], label_map,losses_params)           
             prediction = outputs['Segmentation'].contiguous().flatten()
             label = seg_map_label.contiguous().flatten()        
-            loss_seg = segmentation_loss(prediction, label)
+            loss_seg = criterion_seg(prediction, label)
             loss_seg *= inputs.size(0)
                 
             classif_loss *= losses_params['weight'][0]
@@ -61,7 +61,6 @@ def FFTRadNet_val_evaluation(net,loader,check_perf=False, detection_loss=None,se
             label_freespace = seg_map_label.detach().cpu().numpy().copy()
 
             for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels,label_freespace):
-
                 metrics.update(pred_map[0],true_map,np.asarray(decode(pred_obj,0.05)),true_obj,threshold=0.2,range_min=5,range_max=100) 
                 
         kbar.update(i)
