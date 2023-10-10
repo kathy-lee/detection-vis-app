@@ -14,6 +14,7 @@ from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_De
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
+from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
 
 
 class NetworkFactory:
@@ -357,3 +358,109 @@ class RADDet(nn.Module):
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
         #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
         return yolo_raw
+    
+
+class DAROD(nn.Module):
+    def __init__(self, config, anchors):
+        super(DAROD, self).__init__()
+        self.config = config
+        self.anchors = anchors
+
+        self.use_doppler = config["training"]["use_doppler"]
+        self.use_dropout = config["training"]["use_dropout"]
+        self.variances = config["fastrcnn"]["variances_boxes"]
+        self.total_labels = config["data"]["total_labels"]
+        self.frcnn_num_pred = config["fastrcnn"]["frcnn_num_pred"]
+        self.box_nms_iou = config["fastrcnn"]["box_nms_iou"]
+        self.box_nms_score = config["fastrcnn"]["box_nms_score"]
+        self.dropout_rate = config["training"]["dropout_rate"]
+        self.layout = config["model"]["layout"]
+        self.use_bn = config["training"]["use_bn"]
+        self.dilation_rate = config["model"]["dilation_rate"]
+
+        if self.use_bn:
+            block_norm = "group_norm"  # By default for this model
+        else:
+            block_norm = None
+
+        # Backbone
+        self.block1 = DARODBlock2D(filters=64, padding="same", kernel_size=(3, 3),
+                                   num_conv=2, dilation_rate=self.dilation_rate, activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 2),
+                                   pooling_strides=(2, 2), name="darod_block1")
+
+        self.block2 = DARODBlock2D(filters=128, padding="same", kernel_size=(3, 3),
+                                   num_conv=2, dilation_rate=self.dilation_rate, activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 1),
+                                   pooling_strides=(2, 1), name="darod_block2")
+
+        self.block3 = DARODBlock2D(filters=256, padding="same", kernel_size=(3, 3),
+                                   num_conv=3, dilation_rate=(1, 1), activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 1),
+                                   pooling_strides=(2, 1), name="darod_block3")
+        
+        # RPN
+        self.rpn_conv = nn.Conv2d(in_channels=YOUR_INPUT_CHANNELS, 
+                          out_channels=config["rpn"]["rpn_channels"], 
+                          kernel_size=config["rpn"]["rpn_window"], 
+                          padding=config["rpn"]["rpn_window"]//2)
+        self.rpn_cls_output = nn.Conv2d(in_channels=config["rpn"]["rpn_channels"], 
+                                out_channels=config["rpn"]["anchor_count"], 
+                                kernel_size=1)
+        self.rpn_reg_output = nn.Conv2d(in_channels=config["rpn"]["rpn_channels"], 
+                                out_channels=4 * config["rpn"]["anchor_count"], 
+                                kernel_size=1)
+
+        # Fast RCNN
+        self.roi_bbox = RoIBBox(anchors, config)
+        self.radar_features = RadarFeatures(config)
+        self.roi_pooled = RoIPooling(config)
+
+        self.flatten = nn.Flatten()
+
+        self.fc1 = nn.Linear(config["fastrcnn"]["input_size"], config["fastrcnn"]["in_channels_1"])
+        self.fc2 = nn.Linear(config["fastrcnn"]["in_channels_1"], config["fastrcnn"]["in_channels_2"])
+        self.frcnn_cls = nn.Linear(config["fastrcnn"]["in_channels_2"], config["data"]["total_labels"])
+        self.frcnn_reg = nn.Linear(config["fastrcnn"]["in_channels_2"], config["data"]["total_labels"] * 4)
+
+        self.decoder = Decoder(self.variances, self.total_labels, self.frcnn_num_pred, self.box_nms_score, self.box_nms_iou)
+
+        if self.use_dropout:
+            self.dropout = nn.Dropout(p=self.dropout_rate)
+
+    def forward(self, inputs, step="frcnn", training=False):
+        x = self.block1(inputs)
+        x = self.block2(x)
+        x = self.block3(x)
+
+        rpn_out = F.relu(self.rpn_conv(x))
+        rpn_cls_pred = self.rpn_cls_output(rpn_out)
+        rpn_delta_pred = self.rpn_reg_output(rpn_out)
+
+        if step == "rpn":
+            return rpn_cls_pred, rpn_delta_pred
+
+        roi_bboxes_out, roi_bboxes_scores = self.roi_bbox([rpn_delta_pred, rpn_cls_pred])
+        roi_pooled_out = self.roi_pooled([x, roi_bboxes_out])
+
+        output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
+        features = self.radar_features([roi_bboxes_out, roi_bboxes_scores])
+        output = torch.cat([output, features], dim=-1)
+
+        # Reshape for applying layers:  (batch_size * time_steps, input_dim)         
+        output_reshaped = output.view(-1, output.shape[2]) 
+        output_reshaped = F.relu(self.fc1(output_reshaped))
+        if self.use_dropout:
+            output_reshaped = self.dropout(output_reshaped)
+        output_reshaped = F.relu(self.fc2(output_reshaped))
+        if self.use_dropout:
+            output_reshaped = self.dropout(output_reshaped)
+        frcnn_cls_pred_reshaped = self.frcnn_cls(output_reshaped)
+        frcnn_reg_pred_reshaped = self.frcnn_reg(output_reshaped)
+        # Reshape predictions back to original form: (batch_size, time_steps, output_dim)
+        frcnn_cls_pred = frcnn_cls_pred_reshaped.view(output.shape[0], output.shape[1], -1)
+        frcnn_reg_pred = frcnn_reg_pred_reshaped.view(output.shape[0], output.shape[1], -1)
+
+        decoder_output = self.decoder([roi_bboxes_out, frcnn_reg_pred, F.softmax(frcnn_cls_pred, dim=-1)])
+
+        return rpn_cls_pred, rpn_delta_pred, frcnn_cls_pred, frcnn_reg_pred, roi_bboxes_out, decoder_output
