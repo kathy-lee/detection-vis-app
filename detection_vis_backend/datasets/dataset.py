@@ -1793,21 +1793,18 @@ class CARRADA(Dataset):
         frame_id = index + self.n_frames - 1
         init_frame_name = "{:06d}".format(frame_id)
         frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.n_frames+1, frame_id+1)]
-        if self.features == ['RD']:  
-            rd_matrices = list()
-            rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name, 'range_doppler.npy'))
+        if self.features == ['RD'] or self.features == ['RA']: 
+            featurestr = 'range_doppler' if self.features == ['RD'] else 'range_angle'
+            feature_matrices = list()
+            mask = np.load(os.path.join(self.path_to_annots, init_frame_name, f'{featurestr}.npy'))
 
             for frame_name in frame_names:
                 if self.process_signal:
-                    rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_doppler_processed',
-                                                    frame_name + '.npy'))
+                    feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_processed', frame_name + '.npy'))
                 else:
-                    rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_doppler_raw',
-                                                    frame_name + '.npy'))
+                    feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_raw', frame_name + '.npy'))
 
-                rd_matrices.append(rd_matrix)
+                feature_matrices.append(feature_matrix)
 
             camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
             # Apply the same transfo to all representations
@@ -1820,61 +1817,19 @@ class CARRADA(Dataset):
             else:
                 is_hflip = False
 
-            rd_matrix = np.dstack(rd_matrices)
-            rd_matrix = np.rollaxis(rd_matrix, axis=-1)
-            rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
-            rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+            feature_matrix = np.dstack(feature_matrices)
+            feature_matrix = np.rollaxis(feature_matrix, axis=-1)
+            feature_frame = {'matrix': feature_matrix, 'mask': mask}
+            feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
             if self.add_temp:
                 if isinstance(self.add_temp, bool):
-                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
+                    feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
                 else:
                     assert isinstance(self.add_temp, int)
-                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=self.add_temp)
+                    feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
             
-            rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
-            frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'], 'image_path': camera_path}
-        elif self.features == ['RA']:
-            ra_matrices = list()
-            ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
-                                        'range_angle.npy'))
-
-            for frame_name in frame_names:
-                if self.process_signal:
-                    ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_angle_processed',
-                                                    frame_name + '.npy'))
-                else:
-                    ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_angle_raw',
-                                                    frame_name + '.npy'))
-
-                ra_matrices.append(ra_matrix)
-
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            # Apply the same transfo to all representations
-            if np.random.uniform(0, 1) > 0.5:
-                is_vflip = True
-            else:
-                is_vflip = False
-            if np.random.uniform(0, 1) > 0.5:
-                is_hflip = True
-            else:
-                is_hflip = False
-
-            ra_matrix = np.dstack(ra_matrices)
-            ra_matrix = np.rollaxis(ra_matrix, axis=-1)
-            ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
-            ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            if self.add_temp:
-                if isinstance(self.add_temp, bool):
-                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
-                else:
-                    assert isinstance(self.add_temp, int)
-                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
-                                                        axis=self.add_temp)
-                    
-            ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
-            frame = {'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'], 'image_path': camera_path}
+            feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
+            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask'], 'image_path': camera_path}
         elif len(self.features) > 1:
             rd_matrices = list()
             ra_matrices = list()

@@ -307,12 +307,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     # print(f"###input:{inputs.shape}")
                     # print(f"###confmap:{confmap_gt.shape}")
                 elif dataset_type == "CARRADA":
-                    if features == ['RD']:
-                        inputs = data['rd_matrix'].to(device).float()
-                        label = data['rd_mask'].to(device).float()
-                    elif features == ['RA']:
-                        inputs = data['ra_matrix'].to(device).float()
-                        label = data['ra_mask'].to(device).float()
+                    inputs = data['radar'].to(device).float()
+                    label = data['mask'].to(device).float()
                     #print(f"###input:{inputs.shape}")
                     #print(f"###label:{label.shape}")
             elif model_type == "MVRECORD":
@@ -324,6 +320,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label = data['label'].to(device).float()
                 boxes = data['boxes'].to(device).float()
                 #print(inputs.shape, label.shape, boxes.shape)
+            elif model_type == "DAROD":
+                inputs = data['radar_data'].to(device).float()
+                label = data['label'].to(device).float()
+                boxes = data['boxes'].to(device).float()
             else:
                 raise ValueError
 
