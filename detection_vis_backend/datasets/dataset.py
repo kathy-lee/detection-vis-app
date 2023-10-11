@@ -1668,16 +1668,16 @@ class CARRADA(Dataset):
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
-        self.path_to_frames = os.path.join(self.root_path, 'Carrada', file_name)
+        self.path_to_seq = os.path.join(self.root_path, 'Carrada', file_name)
 
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
         
-        self.image_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'camera_images'))
-        self.RD_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'range_doppler_numpy'))
-        self.RA_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'range_angle_numpy'))
-        self.AD_filenames = get_sorted_filenames(os.path.join(self.path_to_frames, 'angle_doppler_raw'))
+        self.image_filenames = get_sorted_filenames(os.path.join(self.path_to_seq, 'camera_images'))
+        self.RD_filenames = get_sorted_filenames(os.path.join(self.path_to_seq, 'range_doppler_numpy'))
+        self.RA_filenames = get_sorted_filenames(os.path.join(self.path_to_seq, 'range_angle_numpy'))
+        self.AD_filenames = get_sorted_filenames(os.path.join(self.path_to_seq, 'angle_doppler_raw'))
         self.frame_sync = len(self.RD_filenames)
         self.RAD_filenames = get_sorted_filenames(os.path.join(self.root_path, 'Carrada_RAD', file_name, 'RAD_numpy'))
 
@@ -1781,7 +1781,7 @@ class CARRADA(Dataset):
         self.transformations = get_transformations(transform_names=train_cfg['transformations'])
         self.add_temp = True
         self.annotation_type = 'dense'
-        self.path_to_annots = os.path.join(self.path_to_frames, 'annotations', self.annotation_type)
+        self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
 
         self.features = features
         self.norm_type = train_cfg['norm_type']
@@ -1799,17 +1799,17 @@ class CARRADA(Dataset):
 
             for frame_name in frame_names:
                 if self.process_signal:
-                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                    rd_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_doppler_processed',
                                                     frame_name + '.npy'))
                 else:
-                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                    rd_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_doppler_raw',
                                                     frame_name + '.npy'))
 
                 rd_matrices.append(rd_matrix)
 
-            camera_path = os.path.join(self.path_to_frames, 'camera_images', frame_name + '.jpg')
+            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
             # Apply the same transfo to all representations
             if np.random.uniform(0, 1) > 0.5:
                 is_vflip = True
@@ -1840,17 +1840,17 @@ class CARRADA(Dataset):
 
             for frame_name in frame_names:
                 if self.process_signal:
-                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                    ra_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_angle_processed',
                                                     frame_name + '.npy'))
                 else:
-                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                    ra_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_angle_raw',
                                                     frame_name + '.npy'))
 
                 ra_matrices.append(ra_matrix)
 
-            camera_path = os.path.join(self.path_to_frames, 'camera_images', frame_name + '.jpg')
+            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
             # Apply the same transfo to all representations
             if np.random.uniform(0, 1) > 0.5:
                 is_vflip = True
@@ -1885,23 +1885,23 @@ class CARRADA(Dataset):
                                         'range_angle.npy'))
             for frame_name in frame_names:
                 if self.process_signal:
-                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                    rd_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_doppler_processed',
                                                     frame_name + '.npy'))
-                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                    ra_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_angle_processed',
                                                     frame_name + '.npy'))
-                    ad_matrix = np.load(os.path.join(self.path_to_frames,
+                    ad_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'angle_doppler_processed',
                                                     frame_name + '.npy'))
                 else:
-                    rd_matrix = np.load(os.path.join(self.path_to_frames,
+                    rd_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_doppler_raw',
                                                     frame_name + '.npy'))
-                    ra_matrix = np.load(os.path.join(self.path_to_frames,
+                    ra_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'range_angle_raw',
                                                     frame_name + '.npy'))
-                    ad_matrix = np.load(os.path.join(self.path_to_frames,
+                    ad_matrix = np.load(os.path.join(self.path_to_seq,
                                                     'angle_doppler_raw',
                                                     frame_name + '.npy'))
 
