@@ -1776,8 +1776,8 @@ class CARRADA(Dataset):
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         # self.dataset = dataset
         self.process_signal = True
-        self.n_frames = train_cfg['win_size']
-        # self.dataset = self.dataset[self.n_frames-1:]  # remove n first frames
+        self.win_frames = train_cfg['win_size']
+        # self.dataset = self.dataset[self.win_frames-1:]  # remove n first frames
         self.transformations = get_transformations(transform_names=train_cfg['transformations'])
         self.add_temp = True
         self.annotation_type = 'dense'
@@ -1787,13 +1787,14 @@ class CARRADA(Dataset):
         self.norm_type = train_cfg['norm_type']
 
     def __len__(self):
-        return self.frame_sync - self.n_frames + 1
+        return self.frame_sync - self.win_frames + 1
 
     def __getitem__(self, index):
-        frame_id = index + self.n_frames - 1
+        frame_id = index + self.win_frames - 1
         init_frame_name = "{:06d}".format(frame_id)
-        frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.n_frames+1, frame_id+1)]
+        frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
         if self.features == ['RD'] or self.features == ['RA']: 
+            # Get radar feature data 
             featurestr = 'range_doppler' if self.features == ['RD'] else 'range_angle'
             feature_matrices = list()
             mask = np.load(os.path.join(self.path_to_annots, init_frame_name, f'{featurestr}.npy'))
@@ -1803,11 +1804,11 @@ class CARRADA(Dataset):
                     feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_processed', frame_name + '.npy'))
                 else:
                     feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_raw', frame_name + '.npy'))
-
                 feature_matrices.append(feature_matrix)
-
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            # Apply the same transfo to all representations
+            feature_matrix = np.dstack(feature_matrices)
+            feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
+            feature_frame = {'matrix': feature_matrix, 'mask': mask}
+            # Apply the same transform to all representations
             if np.random.uniform(0, 1) > 0.5:
                 is_vflip = True
             else:
@@ -1816,20 +1817,28 @@ class CARRADA(Dataset):
                 is_hflip = True
             else:
                 is_hflip = False
-
-            feature_matrix = np.dstack(feature_matrices)
-            feature_matrix = np.rollaxis(feature_matrix, axis=-1)
-            feature_frame = {'matrix': feature_matrix, 'mask': mask}
             feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            if self.add_temp:
+            # Expand one more dim
+            if self.add_temp and self.win_frames > 1:
                 if isinstance(self.add_temp, bool):
                     feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
                 else:
                     assert isinstance(self.add_temp, int)
                     feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
-            
+            # Apply normalization
             feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask'], 'image_path': camera_path}
+            # Get ground truth boxes and labels
+            gt_boxes = []
+            gt_labels = []
+            if self.annos[self.seq_name][init_frame_name]:
+                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    #obj_anno['range_doppler']['dense']
+                    gt_boxes.append(obj_anno[featurestr]['box'])
+                    gt_labels.append(obj_anno[featurestr]['label'])
+            gt_boxes = np.array(gt_boxes)
+            gt_labels = np.array(gt_labels)
+            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask'], 'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes}
         elif len(self.features) > 1:
             rd_matrices = list()
             ra_matrices = list()
@@ -1917,7 +1926,6 @@ class CARRADA(Dataset):
             frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
                     'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
                     'ad_matrix': ad_frame['matrix']}
-
         return frame
 
 
