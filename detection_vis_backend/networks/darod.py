@@ -91,17 +91,22 @@ class DARODBlock2D(nn.Module):
     
 
 class RoIBBox(nn.Module):
-    def __init__(self, anchors, config):
+    def __init__(self, anchors, pre_nms_topn_train, pre_nms_topn_test, post_nms_topn_train, post_nms_topn_test, rpn_nms_iou, rpn_variances):
         super(RoIBBox, self).__init__()
-        self.config = config
-        self.anchors = torch.tensor(anchors, dtype=torch.float32)
+        self.pre_nms_topn_train = pre_nms_topn_train
+        self.pre_nms_topn_test = pre_nms_topn_test
+        self.post_nms_topn_train = post_nms_topn_train
+        self.post_nms_topn_test = post_nms_topn_test
+        self.rpn_nms_iou = rpn_nms_iou
+        self.rpn_variances = rpn_variances
 
-    def forward(self, rpn_bbox_deltas, rpn_labels, training=True):
+        self.anchors = anchors.clone().detach()
+
+    def forward(self, rpn_bbox_deltas, rpn_labels):
         anchors = self.anchors
-        pre_nms_topn = self.config["fastrcnn"]["pre_nms_topn_train"] if training else self.config["fastrcnn"]["pre_nms_topn_test"]
-        post_nms_topn = self.config["fastrcnn"]["post_nms_topn_train"] if training else self.config["fastrcnn"]["post_nms_topn_test"]
-        nms_iou_threshold = self.config["rpn"]["rpn_nms_iou"]
-        variances = torch.tensor(self.config["rpn"]["variances"])
+        pre_nms_topn = self.pre_nms_topn_train if self.training else self.pre_nms_topn_test
+        post_nms_topn = self.post_nms_topn_train if self.training else self.post_nms_topn_test
+        nms_iou_threshold = self.rpn_nms_iou
         total_anchors = anchors.shape[0]
         batch_size = rpn_bbox_deltas.shape[0]
         rpn_bbox_deltas = rpn_bbox_deltas.view(batch_size, total_anchors, 4)
@@ -109,11 +114,10 @@ class RoIBBox(nn.Module):
         # Convert softmax in PyTorch
         rpn_labels = F.softmax(rpn_labels, dim=-1)
         rpn_labels = rpn_labels.view(batch_size, total_anchors)
-        
-        rpn_bbox_deltas *= variances
+        variances = torch.tensor(self.rpn_variances).to(rpn_bbox_deltas.device)
+        rpn_bbox_deltas *= variances.unsqueeze(0).unsqueeze(1)
         # Custom utility function
-        rpn_bboxes = get_bboxes_from_deltas(anchors, rpn_bbox_deltas)
-
+        rpn_bboxes = get_bboxes_from_deltas(anchors.to(rpn_bbox_deltas.device), rpn_bbox_deltas)
         # Use PyTorch's topk() for this functionality
         _, pre_indices = torch.topk(rpn_labels, pre_nms_topn, dim=1)
 
@@ -124,13 +128,12 @@ class RoIBBox(nn.Module):
         # Reshaping using view in PyTorch
         pre_roi_bboxes = pre_roi_bboxes.view(batch_size, pre_nms_topn, 1, 4)
         pre_roi_labels = pre_roi_labels.view(batch_size, pre_nms_topn, 1)
-
         # Assuming the custom utility function is adapted for PyTorch
+        print(f"before nms: {pre_roi_bboxes.shape}, {pre_roi_labels.shape}")
         roi_bboxes, roi_scores, _, _ = non_max_suppression(pre_roi_bboxes, pre_roi_labels,
-                                                                      max_output_size_per_class=post_nms_topn,
-                                                                      max_total_size=post_nms_topn,
-                                                                      iou_threshold=nms_iou_threshold)
-
+                                                            max_output_size_per_class=post_nms_topn, max_total_size=post_nms_topn,
+                                                            iou_threshold=nms_iou_threshold)
+        print(f"after nms: {roi_bboxes.shape}, {roi_scores.shape}")
         return roi_bboxes.detach(), roi_scores.detach()
 
 
@@ -141,9 +144,11 @@ class RadarFeatures(nn.Module):
     boxes which have scores > 0.5. Otherwise, range and Doppler values
     are set to -1
     """
-    def __init__(self, config):
+    def __init__(self, input_size, range_res, doppler_res):
         super(RadarFeatures, self).__init__()
-        self.config = config
+        self.input_size = input_size
+        self.range_res = range_res
+        self.doppler_res = doppler_res
 
     def forward(self, roi_bboxes, roi_scores):
         """
@@ -154,8 +159,8 @@ class RadarFeatures(nn.Module):
 
         # Denormalize bounding boxes
         roi_bboxes = self.denormalize_bboxes(roi_bboxes, 
-                                             height=self.config["model"]["input_size"][0],
-                                             width=self.config["model"]["input_size"][1])
+                                             height=self.input_size[0],
+                                             width=self.input_size[1])
 
         # Get centers of roi boxes
         h = roi_bboxes[..., 2] - roi_bboxes[..., 0]
@@ -165,8 +170,8 @@ class RadarFeatures(nn.Module):
         ctr_x = roi_bboxes[..., 1] + w / 2
 
         # Get radar feature
-        range_values = self.config["data"]["range_res"] * ctr_y.float()
-        doppler_values = torch.abs(32 - (self.config["data"]["doppler_res"] * ctr_x.float()))
+        range_values = self.range_res * ctr_y.float()
+        doppler_values = torch.abs(32 - (self.doppler_res * ctr_x.float()))
         radar_features = torch.stack([range_values, doppler_values], dim=-1)
 
         # Get valid radar features
@@ -189,9 +194,10 @@ class RoIDelta(nn.Module):
     Calculating faster rcnn actual bounding box deltas and labels.
     This layer only runs in the training phase.
     """
-    def __init__(self, config):
+    def __init__(self, total_labels, fastrcnn_cfg):
         super(RoIDelta, self).__init__()
-        self.config = config
+        self.total_labels = total_labels
+        self.fastrcnn_cfg = fastrcnn_cfg
 
     def forward(self, roi_bboxes, gt_boxes, gt_labels):
         """
@@ -200,12 +206,12 @@ class RoIDelta(nn.Module):
         :param gt_labels: Ground truth labels
         :return: Depending on config, either ROI box deltas and labels or expanded ROI boxes, GT boxes, and labels.
         """
-        total_labels = self.config["data"]["total_labels"]
-        total_pos_bboxes = int(self.config["fastrcnn"]["frcnn_boxes"] / 3)
-        total_neg_bboxes = int(self.config["fastrcnn"]["frcnn_boxes"] * (2 / 3))
-        variances = torch.tensor(self.config["fastrcnn"]["variances_boxes"])
-        adaptive_ratio = self.config["fastrcnn"]["adaptive_ratio"]
-        positive_th = self.config["fastrcnn"]["positive_th"]
+        total_labels = self.total_labels
+        total_pos_bboxes = int(self.fastrcnn_cfg["frcnn_boxes"] / 3)
+        total_neg_bboxes = int(self.fastrcnn_cfg["frcnn_boxes"] * (2 / 3))
+        variances = torch.tensor(self.fastrcnn_cfg["variances_boxes"])
+        adaptive_ratio = self.fastrcnn_cfg["adaptive_ratio"]
+        positive_th = self.fastrcnn_cfg["positive_th"]
 
         batch_size, total_bboxes = roi_bboxes.shape[0], roi_bboxes.shape[1]
         iou_map = generate_iou_map(roi_bboxes, gt_boxes)
@@ -258,11 +264,10 @@ class RoIPooling(torch.nn.Module):
     Reducing all feature maps to the same size.
     Firstly cropping bounding boxes from the feature maps and then resizing it to the pooling size.
     """
-    def __init__(self, config):
+    def __init__(self, pooling_size):
         super(RoIPooling, self).__init__()
-        self.config = config
-        self.pooling_size = self.config["fastrcnn"]["pooling_size"]
-        self.roi_pool = torchvision.ops.RoIPool(output_size=(self.pooling_size, self.pooling_size), spatial_scale=1.0)
+        self.pooling_size = pooling_size
+        self.roi_pool = torchvision.ops.RoIPool(output_size=self.pooling_size, spatial_scale=1.0)
 
     def forward(self, feature_map, roi_bboxes):
         """
@@ -273,10 +278,11 @@ class RoIPooling(torch.nn.Module):
         batch_size, total_bboxes = roi_bboxes.shape[0], roi_bboxes.shape[1]
         
         # We need to arrange bbox indices for each batch
-        pooling_bbox_indices = torch.arange(batch_size).unsqueeze(1).repeat(1, total_bboxes)
+        device = roi_bboxes.device
+        pooling_bbox_indices = torch.arange(batch_size, device=device).unsqueeze(1).repeat(1, total_bboxes)
         pooling_bboxes = roi_bboxes.reshape(-1, 4)
         rois = torch.cat([pooling_bbox_indices.view(-1,1).float(), pooling_bboxes], dim=1)
-
+        
         # Use RoIPooling
         pooling_feature_map = self.roi_pool(feature_map, rois)
         final_pooling_feature_map = pooling_feature_map.view(batch_size, total_bboxes, pooling_feature_map.shape[1], pooling_feature_map.shape[2], pooling_feature_map.shape[3])
@@ -353,44 +359,87 @@ def generate_iou_map(bboxes, gt_boxes):
     return intersection_area / torch.clamp(union_area, min=1e-7)
 
 
-def non_max_suppression(pred_bboxes, pred_labels, iou_threshold=0.5, top_k=200):
+def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size, iou_threshold, score_threshold=float('-inf')):
     """
-    Applying non maximum suppression using torchvision's nms function.
+    Applying non maximum suppression.
+    Details could be found on tensorflow documentation.
+    https://www.tensorflow.org/api_docs/python/tf/image/combined_non_max_suppression
 
-    :param pred_bboxes: (batch_size, total_bboxes, [y1, x1, y2, x2]), total_labels should be 1 for binary operations like in rpn
+    :param pred_bboxes: (batch_size, total_bboxes, total_labels, [y1, x1, y2, x2]), total_labels should be 1 for binary operations like in rpn
     :param pred_labels: (batch_size, total_bboxes, total_labels)
-    :param iou_threshold: threshold for IOU to determine when to suppress boxes
-    :param top_k: maximum number of bounding boxes to consider
-
-    :return: list of [nms_boxes, nms_scores, nms_classes]
-             where each item in the list corresponds to a batch.
+    :param kwargs: other parameters
+    :return: nms_boxes = (batch_size, max_detections, [y1, x1, y2, x2])
+            nmsed_scores = (batch_size, max_detections)
+            nmsed_classes = (batch_size, max_detections)
+            valid_detections = (batch_size)
+                Only the top valid_detections[i] entries in nms_boxes[i], nms_scores[i] and nms_class[i] are valid.
+                The rest of the entries are zero paddings.
     """
-    batch_size = pred_bboxes.shape[0]
-    nms_boxes_list = []
-    nms_scores_list = []
-    nms_classes_list = []
+    batch_size, num_boxes, num_classes = scores.shape
+    
+    all_nms_boxes = []
+    all_nms_scores = []
+    all_nms_classes = []
+    all_valid_detections = []
+    
+    for b in range(batch_size):
+        batch_boxes = []
+        batch_scores = []
+        batch_classes = []
+        
+        for c in range(num_classes):
+            class_scores = scores[b, :, c]
+            valid_inds = class_scores > score_threshold
+            class_scores = class_scores[valid_inds]
+            class_boxes = boxes[b, valid_inds, c, :]
+            
+            # Sort class_scores and keep top max_output_size_per_class
+            sorted_scores, sorted_indices = class_scores.sort(descending=True)
+            sorted_scores = sorted_scores[:max_output_size_per_class]
+            sorted_boxes = class_boxes[sorted_indices][:max_output_size_per_class]
+            
+            # Apply NMS
+            keep_indices = nms(sorted_boxes, sorted_scores, iou_threshold)
+            keep_boxes = sorted_boxes[keep_indices]
+            keep_scores = sorted_scores[keep_indices]
+            
+            batch_boxes.append(keep_boxes)
+            batch_scores.append(keep_scores)
+            batch_classes.append(torch.full((len(keep_scores),), c, dtype=torch.float32))
+        
+        # Concatenate results of all classes
+        batch_boxes = torch.cat(batch_boxes, dim=0)
+        batch_scores = torch.cat(batch_scores, dim=0)
+        batch_classes = torch.cat(batch_classes, dim=0)
+        
+        # Keep only top `max_total_size` detections
+        if len(batch_scores) > max_total_size:
+            _, top_indices = batch_scores.sort(descending=True)
+            top_indices = top_indices[:max_total_size]
+            batch_boxes = batch_boxes[top_indices]
+            batch_scores = batch_scores[top_indices]
+            batch_classes = batch_classes[top_indices]
+        
+        all_nms_boxes.append(batch_boxes)
+        all_nms_scores.append(batch_scores)
+        all_nms_classes.append(batch_classes)
+        all_valid_detections.append(len(batch_boxes))
 
-    for i in range(batch_size):
-        boxes = pred_bboxes[i]
-        scores = pred_labels[i]
-
-        # Sort scores and boxes based on scores
-        _, indices = scores.sort(descending=True)
-        boxes = boxes[indices]
-        scores = scores[indices]
-
-        # Apply NMS
-        keep_indices = nms(boxes, scores, iou_threshold)[:top_k]
-        keep_boxes = boxes[keep_indices]
-        keep_scores = scores[keep_indices]
-
-        nms_boxes_list.append(keep_boxes)
-        nms_scores_list.append(keep_scores)
-        # Assuming that classes are just the index of the max score
-        keep_classes = scores.argmax(dim=1)[keep_indices]
-        nms_classes_list.append(keep_classes)
-
-    return nms_boxes_list, nms_scores_list, nms_classes_list
+    max_len = max([b.shape[0] for b in all_nms_boxes])
+    
+    device = all_nms_boxes[0].device
+    all_nms_classes = [c.to(device) for c in all_nms_classes]
+    padded_nms_boxes = [torch.cat([b, torch.zeros((max_len - b.shape[0], 4), device=device)], dim=0) for b in all_nms_boxes]
+    padded_nms_scores = [torch.cat([s, torch.zeros(max_len - s.shape[0], device=device)], dim=0) for s in all_nms_scores]
+    padded_nms_classes = [torch.cat([c, torch.zeros(max_len - c.shape[0], device=device)], dim=0) for c in all_nms_classes]
+    # Stack these padded tensors
+    all_nms_boxes = torch.stack(padded_nms_boxes)
+    all_nms_scores = torch.stack(padded_nms_scores)
+    all_nms_classes = torch.stack(padded_nms_classes)
+    all_valid_detections = torch.tensor(all_valid_detections, device=device)
+    
+    print(f"after nms: {all_nms_boxes.shape}; {all_nms_scores.shape}; {all_nms_classes.shape}")    
+    return all_nms_boxes, all_nms_scores, all_nms_classes, all_valid_detections
 
 
 def get_bboxes_from_deltas(anchors, deltas):
@@ -453,7 +502,7 @@ class Decoder(nn.Module):
         self.score_threshold = score_threshold
         self.iou_threshold = iou_threshold
 
-    def call(self, inputs):
+    def forward(self, inputs):
         """
         Make final predictions from DAROD outputs
         :param inputs: DAROD outputs (roi boxes, deltas, and probas)
@@ -463,7 +512,8 @@ class Decoder(nn.Module):
         batch_size = pred_deltas.shape[0]
         #
         pred_deltas = pred_deltas.view(batch_size, -1, self.total_labels, 4)
-        pred_deltas *= self.variances
+        variances = torch.tensor(self.variances).to(pred_deltas.device)
+        pred_deltas *= variances.unsqueeze(0).unsqueeze(1)
         #
         expanded_roi_bboxes = roi_bboxes.unsqueeze(-2).expand(-1, -1, self.total_labels, -1)
         pred_bboxes = get_bboxes_from_deltas(expanded_roi_bboxes, pred_deltas)
