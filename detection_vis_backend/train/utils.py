@@ -29,6 +29,30 @@ def FFTRadNet_collate(batch):
         labels.append(torch.from_numpy(box_labels))    
     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
+def DAROD_collate(batch):
+    radar = [torch.tensor(item['radar']) for item in batch]
+    gt_labels = [torch.tensor(item['label']) for item in batch]
+    gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
+    # print("------------0---------------")
+    # print(gt_boxes[0], gt_labels[0])
+    # print("------------1---------------")
+    # print(gt_boxes[1], gt_labels[1])
+    # print("------------2---------------")
+    # print(gt_boxes[2], gt_labels[2])
+    # print("-------------3--------------")
+    # print(gt_boxes[3], gt_labels[3])
+    #print(f"Before padding: {gt_boxes[0]['boxes'].shape},{gt_boxes[1]['boxes'].shape},{gt_boxes[2]['boxes'].shape},{gt_boxes[2]['boxes'].shape}")
+    radar = torch.stack(radar, 0)
+    max_boxes = max([box.shape[0] for box in gt_boxes])
+    # Initialize tensors for bboxes and labels filled with appropriate padding values
+    padded_bboxes = torch.zeros(len(batch), max_boxes, 4)
+    padded_labels = torch.full((len(batch), max_boxes), fill_value=-2, dtype=torch.long)  # Using -2 as padding value
+    
+    for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
+        padded_bboxes[idx, :box.shape[0]] = box
+        padded_labels[idx, :label.shape[0]] = label
+    # print(f"After padding: {padded_bboxes.shape}, {padded_labels.shape}")
+    return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
@@ -43,14 +67,6 @@ def default_collate(batch):
     if elem is None:
         return None
     elif isinstance(elem, torch.Tensor):
-        # out = None
-        # if torch.utils.data.get_worker_info() is not None:
-        #     # If we're in a background process, concatenate directly into a
-        #     # shared memory tensor to avoid an extra copy
-        #     numel = sum([x.numel() for x in batch])
-        #     storage = elem.untyped_storage()._new_shared(numel)
-        #     out = elem.new(storage)
-        # return torch.stack(batch, 0, out=out)
         return torch.stack(batch, 0)
     elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
             and elem_type.__name__ != 'string_':
