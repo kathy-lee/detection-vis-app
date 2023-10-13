@@ -26,7 +26,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation
 
 collate_func = {
@@ -36,11 +36,13 @@ collate_func = {
     'RECORDNoLstm': default_collate,
     'RECORDNoLstmMulti': default_collate,
     'MVRECORD': default_collate,
-    'RADDet': default_collate
+    'RADDet': default_collate,
+    'DAROD': DAROD_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
     dataset_factory = DatasetFactory()
+    dataset_type = datafiles[0]["parse"]
     if not use_original_split:
         if train_config['dataloader']['splitmode'] == 'sequence':
             assert len(datafiles) > 1
@@ -86,8 +88,28 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
                 f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
                 f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+
+        # Filter out data items with empty annotations when the network demands
+        if dataset_type == "CARRADA" and model_config['class'] == "DAROD":
+            print(f"Before filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
+            valid_indices = []
+            for i in range(len(train_dataset)):
+                if train_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            train_dataset = Subset(train_dataset, valid_indices)
+            valid_indices = []
+            for i in range(len(val_dataset)):
+                if val_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            val_dataset = Subset(val_dataset, valid_indices)
+            valid_indices = []
+            for i in range(len(test_dataset)):
+                if test_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            test_dataset = Subset(test_dataset, valid_indices)
+            print(f"After filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
+
     else:
-        dataset_type = datafiles[0]["parse"]
         if dataset_type == "RADIal":
             Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
                                        'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
@@ -321,7 +343,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 boxes = data['boxes'].to(device).float()
                 #print(inputs.shape, label.shape, boxes.shape)
             elif model_type == "DAROD":
-                inputs = data['radar_data'].to(device).float()
+                inputs = data['radar'].to(device).float()
                 label = data['label'].to(device).float()
                 boxes = data['boxes'].to(device).float()
             else:
@@ -406,6 +428,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
+            elif model_type == "DAROD":
+                
             else:
                 raise ValueError
 
