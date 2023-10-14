@@ -129,11 +129,11 @@ class RoIBBox(nn.Module):
         pre_roi_bboxes = pre_roi_bboxes.view(batch_size, pre_nms_topn, 1, 4)
         pre_roi_labels = pre_roi_labels.view(batch_size, pre_nms_topn, 1)
         # Assuming the custom utility function is adapted for PyTorch
-        print(f"before nms: {pre_roi_bboxes.shape}, {pre_roi_labels.shape}")
+        print(f"RoIBBox before nms: {pre_roi_bboxes.shape}, {pre_roi_labels.shape}")
         roi_bboxes, roi_scores, _, _ = non_max_suppression(pre_roi_bboxes, pre_roi_labels,
                                                             max_output_size_per_class=post_nms_topn, max_total_size=post_nms_topn,
                                                             iou_threshold=nms_iou_threshold)
-        print(f"after nms: {roi_bboxes.shape}, {roi_scores.shape}")
+        print(f"RoIBBox after nms: {roi_bboxes.shape}, {roi_scores.shape}")
         return roi_bboxes.detach(), roi_scores.detach()
 
 
@@ -187,76 +187,6 @@ class RadarFeatures(nn.Module):
         bboxes[..., [0, 2]] = bboxes[..., [0, 2]] * height
         bboxes[..., [1, 3]] = bboxes[..., [1, 3]] * width
         return bboxes
-    
-
-class RoIDelta(nn.Module):
-    """
-    Calculating faster rcnn actual bounding box deltas and labels.
-    This layer only runs in the training phase.
-    """
-    def __init__(self, total_labels, fastrcnn_cfg):
-        super(RoIDelta, self).__init__()
-        self.total_labels = total_labels
-        self.fastrcnn_cfg = fastrcnn_cfg
-
-    def forward(self, roi_bboxes, gt_boxes, gt_labels):
-        """
-        :param roi_bboxes: ROI bounding boxes from RPN
-        :param gt_boxes: Ground truth boxes
-        :param gt_labels: Ground truth labels
-        :return: Depending on config, either ROI box deltas and labels or expanded ROI boxes, GT boxes, and labels.
-        """
-        total_labels = self.total_labels
-        total_pos_bboxes = int(self.fastrcnn_cfg["frcnn_boxes"] / 3)
-        total_neg_bboxes = int(self.fastrcnn_cfg["frcnn_boxes"] * (2 / 3))
-        variances = torch.tensor(self.fastrcnn_cfg["variances_boxes"])
-        adaptive_ratio = self.fastrcnn_cfg["adaptive_ratio"]
-        positive_th = self.fastrcnn_cfg["positive_th"]
-
-        batch_size, total_bboxes = roi_bboxes.shape[0], roi_bboxes.shape[1]
-        iou_map = generate_iou_map(roi_bboxes, gt_boxes)
-        max_indices_each_gt_box = torch.argmax(iou_map, dim=2)
-        merged_iou_map = torch.max(iou_map, dim=2).values
-
-        pos_mask = merged_iou_map > positive_th
-        pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]))
-
-        neg_mask = (merged_iou_map < positive_th) & (merged_iou_map >= 0.0)
-        
-        if adaptive_ratio:
-            pos_count = pos_mask.int().sum(dim=-1)
-            # Keep a 33%/66% ratio of positive/negative bboxes
-            total_neg_bboxes = (pos_count + 1) * 3
-            neg_mask = randomly_select_xyz_mask(neg_mask, total_neg_bboxes,
-                                                seed=self.config["training"]["seed"])
-        else:
-            neg_mask = randomly_select_xyz_mask(neg_mask, torch.tensor([total_neg_bboxes], dtype=torch.int32),
-                                                seed=self.config["training"]["seed"])
-
-        gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_gt_box.unsqueeze(-1).expand(-1,-1,4))
-        expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
-
-        gt_labels_map = torch.gather(gt_labels, 1, max_indices_each_gt_box)
-        pos_gt_labels = torch.where(pos_mask, gt_labels_map, torch.tensor(-1, dtype=torch.int32))
-        neg_gt_labels = neg_mask.int()
-        expanded_gt_labels = pos_gt_labels + neg_gt_labels
-
-        roi_bbox_deltas = get_deltas_from_bboxes(roi_bboxes, expanded_gt_boxes) / variances
-
-        roi_bbox_labels = torch.nn.functional.one_hot(expanded_gt_labels, num_classes=total_labels)
-        scatter_indices = roi_bbox_labels.unsqueeze(-1).repeat(1, 1, 1, 4)
-        roi_bbox_deltas = scatter_indices * roi_bbox_deltas.unsqueeze(-2)
-        roi_bbox_deltas = roi_bbox_deltas.reshape(batch_size, total_bboxes * total_labels, 4)
-
-        if self.config["fastrcnn"]["reg_loss"] == "sl1":
-            return roi_bbox_deltas.detach(), roi_bbox_labels.detach()
-        elif self.config["fastrcnn"]["reg_loss"] == "giou":
-            expanded_roi_boxes = scatter_indices * roi_bboxes.unsqueeze(-2)
-            expanded_roi_boxes = expanded_roi_boxes.reshape(batch_size, total_bboxes * total_labels, 4)
-            
-            expanded_gt_boxes = scatter_indices * expanded_gt_boxes.unsqueeze(-2)
-            expanded_gt_boxes = expanded_gt_boxes.reshape(batch_size, total_bboxes * total_labels, 4)
-            return expanded_roi_boxes.detach(), expanded_gt_boxes.detach(), roi_bbox_labels.detach()
 
 
 class RoIPooling(torch.nn.Module):
@@ -296,6 +226,9 @@ def get_deltas_from_bboxes(bboxes, gt_boxes):
     :param gt_boxes: (batch_size, total_bboxes, [y1, x1, y2, x2])
     :return:  final_deltas = (batch_size, total_bboxes, [delta_y, delta_x, delta_h, delta_w])
     """
+    device = bboxes.device
+    gt_boxes = gt_boxes.to(device)
+
     bbox_width = bboxes[..., 3] - bboxes[..., 1]
     bbox_height = bboxes[..., 2] - bboxes[..., 0]
     bbox_ctr_x = bboxes[..., 1] + 0.5 * bbox_width
@@ -305,14 +238,14 @@ def get_deltas_from_bboxes(bboxes, gt_boxes):
     gt_height = gt_boxes[..., 2] - gt_boxes[..., 0]
     gt_ctr_x = gt_boxes[..., 1] + 0.5 * gt_width
     gt_ctr_y = gt_boxes[..., 0] + 0.5 * gt_height
-    
-    bbox_width = torch.where(bbox_width == 0, torch.tensor(1e-3).to(bbox_width.device), bbox_width)
-    bbox_height = torch.where(bbox_height == 0, torch.tensor(1e-3).to(bbox_height.device), bbox_height)
+
+    bbox_width = torch.where(bbox_width == 0, torch.tensor(1e-3).to(device), bbox_width)
+    bbox_height = torch.where(bbox_height == 0, torch.tensor(1e-3).to(device), bbox_height)
+
     delta_x = torch.where(gt_width == 0, torch.zeros_like(gt_width), (gt_ctr_x - bbox_ctr_x) / bbox_width)
     delta_y = torch.where(gt_height == 0, torch.zeros_like(gt_height), (gt_ctr_y - bbox_ctr_y) / bbox_height)
     delta_w = torch.where(gt_width == 0, torch.zeros_like(gt_width), torch.log(gt_width / bbox_width))
     delta_h = torch.where(gt_height == 0, torch.zeros_like(gt_height), torch.log(gt_height / bbox_height))
-    
     return torch.stack([delta_y, delta_x, delta_h, delta_w], dim=-1)
 
 
@@ -326,7 +259,9 @@ def randomly_select_xyz_mask(mask, select_xyz, seed):
     """
     torch.manual_seed(seed)
     maxval = select_xyz.max().item() * 10
-    random_mask = torch.randint(low=1, high=maxval, size=mask.shape, dtype=torch.int32)
+    device = mask.device
+    select_xyz = select_xyz.to(device)
+    random_mask = torch.randint(low=1, high=maxval, size=mask.shape, dtype=torch.int32, device=device)
     multiplied_mask = mask.int() * random_mask
     sorted_mask_indices = torch.argsort(multiplied_mask, descending=True)
     sorted_positions = torch.argsort(sorted_mask_indices)
@@ -344,9 +279,8 @@ def generate_iou_map(bboxes, gt_boxes):
     bbox_y1, bbox_x1, bbox_y2, bbox_x2 = bboxes.split(1, dim=-1)
     gt_y1, gt_x1, gt_y2, gt_x2 = gt_boxes.split(1, dim=-1)
     # Calculate bbox and ground truth boxes areas
-    gt_area = (gt_y2 - gt_y1) * (gt_x2 - gt_x1).squeeze(-1)
-    bbox_area = (bbox_y2 - bbox_y1) * (bbox_x2 - bbox_x1).squeeze(-1)
-    #
+    gt_area = (gt_y2 - gt_y1).squeeze(-1) * (gt_x2 - gt_x1).squeeze(-1)
+    bbox_area = (bbox_y2 - bbox_y1).squeeze(-1) * (bbox_x2 - bbox_x1).squeeze(-1)
     x_top = torch.maximum(bbox_x1, gt_x1.transpose(1, 2))
     y_top = torch.maximum(bbox_y1, gt_y1.transpose(1, 2))
     x_bottom = torch.minimum(bbox_x2, gt_x2.transpose(1, 2))
@@ -437,8 +371,6 @@ def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size
     all_nms_scores = torch.stack(padded_nms_scores)
     all_nms_classes = torch.stack(padded_nms_classes)
     all_valid_detections = torch.tensor(all_valid_detections, device=device)
-    
-    print(f"after nms: {all_nms_boxes.shape}; {all_nms_scores.shape}; {all_nms_classes.shape}")    
     return all_nms_boxes, all_nms_scores, all_nms_classes, all_valid_detections
 
 
@@ -522,11 +454,202 @@ class Decoder(nn.Module):
         pred_labels_map = pred_label_probs.argmax(dim=-1, keepdim=True)
         pred_labels = torch.where(pred_labels_map != 0, pred_label_probs, torch.zeros_like(pred_label_probs))
         #
+        print(f"Decoder before nms: {pred_bboxes.shape}, {pred_labels.shape}")
+        print(self.iou_threshold, self.max_total_size, self.score_threshold)
         final_bboxes, final_scores, final_labels, _ = non_max_suppression(
             pred_bboxes, pred_labels,
             iou_threshold=self.iou_threshold,
             max_output_size_per_class=self.max_total_size,
             max_total_size=self.max_total_size,
             score_threshold=self.score_threshold)
+        print(f"Decoder after nms: {final_bboxes.shape}, {final_scores.shape}")
         #
         return final_bboxes.detach(), final_labels.detach(), final_scores.detach()
+
+
+def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
+    total_labels = model_config["total_labels"]
+    total_pos_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] / 3)
+    total_neg_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] * 2 / 3)
+    device = roi_bboxes.device
+    variances = torch.tensor(model_config["fastrcnn"]["variances_boxes"]).to(device)
+    adaptive_ratio = model_config["fastrcnn"]["adaptive_ratio"]
+    positive_th = model_config["fastrcnn"]["positive_th"]
+
+    batch_size, total_bboxes = roi_bboxes.size(0), roi_bboxes.size(1)
+    # Calculate iou values between each bbox and ground truth boxes
+    iou_map = generate_iou_map(roi_bboxes, gt_boxes)
+    max_indices_each_gt_box = torch.argmax(iou_map, dim=2)
+    merged_iou_map, _ = torch.max(iou_map, dim=2)
+    pos_mask = merged_iou_map > positive_th
+    pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]), seed)
+    neg_mask = (merged_iou_map < positive_th) & (merged_iou_map >= 0.0)
+    if adaptive_ratio:
+        pos_count = torch.sum(pos_mask, dim=1)
+        total_neg_bboxes = (pos_count + 1) * 3
+        neg_mask = randomly_select_xyz_mask(neg_mask, total_neg_bboxes, seed)
+    else:
+        neg_mask = randomly_select_xyz_mask(neg_mask, torch.tensor([total_neg_bboxes]), seed)
+    gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_gt_box.unsqueeze(-1).expand(-1, -1, 4)).squeeze()
+    expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
+    gt_labels_map = torch.gather(gt_labels, 1, max_indices_each_gt_box).squeeze()
+    pos_gt_labels = torch.where(pos_mask, gt_labels_map, torch.tensor(-1, dtype=torch.int32))
+    neg_gt_labels = neg_mask.int()
+    expanded_gt_labels = pos_gt_labels + neg_gt_labels
+    roi_bbox_deltas = get_deltas_from_bboxes(roi_bboxes, expanded_gt_boxes) / variances
+    expanded_gt_labels = expanded_gt_labels.long()
+    roi_bbox_labels = F.one_hot(expanded_gt_labels, num_classes=total_labels)
+    scatter_indices = roi_bbox_labels.unsqueeze(-1).repeat(1, 1, 1, 4)
+    roi_bbox_deltas = scatter_indices * roi_bbox_deltas.unsqueeze(-2)
+    roi_bbox_deltas = roi_bbox_deltas.reshape(batch_size, total_bboxes * total_labels, 4)
+    if model_config["fastrcnn"]["reg_loss"] == "sl1":
+        return roi_bbox_deltas.detach(), roi_bbox_labels.detach()
+    elif model_config["fastrcnn"]["reg_loss"] == "giou":
+        expanded_roi_boxes = scatter_indices * roi_bboxes.unsqueeze(-2)
+        expanded_roi_boxes = expanded_roi_boxes.reshape(batch_size, total_bboxes * total_labels, 4)
+
+        expanded_gt_boxes = scatter_indices * expanded_gt_boxes.unsqueeze(-2)
+        expanded_gt_boxes = expanded_gt_boxes.reshape(batch_size, total_bboxes * total_labels, 4)
+
+        return expanded_roi_boxes.detach(), expanded_gt_boxes.detach(), roi_bbox_labels.detach()
+    else:
+        raise ValueError("Unsupported loss type.")
+
+
+def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
+    """
+    Generating one step data for training or inference. Batch operations supported.
+    :param anchors: (total_anchors, [y1, x1, y2, x2]) these values in normalized format between [0, 1]
+    :param gt_boxes: (batch_size, gt_box_size, [y1, x1, y2, x2]) these values in normalized format between [0, 1]
+    :param gt_labels: (batch_size, gt_box_size)
+    :param config: dictionary
+    :return: bbox_deltas = (batch_size, total_anchors, [delta_y, delta_x, delta_h, delta_w])
+             bbox_labels = (batch_size, feature_map_shape, feature_map_shape, anchor_count)
+    """
+    batch_size = gt_boxes.size(0)
+    device = gt_boxes.device
+    anchor_count = config["rpn"]["anchor_count"]
+    total_pos_bboxes = int(config["rpn"]["rpn_boxes"] / 2)
+    total_neg_bboxes = int(config["rpn"]["rpn_boxes"] / 2)
+    variances = torch.tensor(config["rpn"]["variances"]).to(device)
+    adaptive_ratio = config["rpn"]["adaptive_ratio"]
+    postive_th = config["rpn"]["positive_th"]
+    output_height, output_width = config["feature_map_shape"]
+    anchors = anchors.to(device)
+    iou_map = generate_iou_map(anchors, gt_boxes)  
+    max_indices_each_row = torch.argmax(iou_map, dim=2)
+    max_indices_each_column = torch.argmax(iou_map, dim=1)
+    merged_iou_map = torch.max(iou_map, dim=2).values
+    pos_mask = merged_iou_map > postive_th
+    valid_indices_cond = gt_labels != -1
+    valid_indices = torch.nonzero(valid_indices_cond).squeeze()
+    valid_max_indices = max_indices_each_column[valid_indices_cond]
+    scatter_bbox_indices = torch.stack([valid_indices[:, 0], valid_max_indices], dim=1)
+    max_pos_mask = torch.zeros_like(pos_mask).scatter_(0, scatter_bbox_indices, 1).to(torch.bool)
+    pos_mask = (pos_mask | max_pos_mask) & (torch.sum(anchors, dim=-1) != 0.0)
+    pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]), seed)  
+
+    pos_count = torch.sum(pos_mask.long(), dim=-1)
+    if adaptive_ratio:
+        neg_count = 2 * pos_count
+    else:
+        neg_count = (total_pos_bboxes + total_neg_bboxes) - pos_count
+
+    neg_mask = ((merged_iou_map < 0.3) & (~pos_mask)) & (torch.sum(anchors, dim=-1) != 0.0)
+    neg_mask = randomly_select_xyz_mask(neg_mask, neg_count, seed)  
+
+    pos_labels = torch.where(pos_mask, torch.ones_like(pos_mask, dtype=torch.float32), torch.tensor(-1.0, dtype=torch.float32))
+    neg_labels = neg_mask.float()
+    bbox_labels = pos_labels + neg_labels
+
+    gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_row.unsqueeze(-1).expand(-1,-1,4))
+    expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
+    bbox_deltas = get_deltas_from_bboxes(anchors, expanded_gt_boxes) / variances  
+    bbox_labels = bbox_labels.view(batch_size, output_height, output_width, anchor_count)
+    return bbox_deltas, bbox_labels
+
+
+def darod_loss(network_output, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals):
+    """
+    Calculate loss function for DAROD model
+    :param rpn_cls_pred: RPN classification pred
+    :param rpn_delta_pred: RPN regression pred
+    :param frcnn_cls_pred: FRCNN classification pred
+    :param frcnn_reg_pred: FRCNN regression pred
+    :param bbox_labels: bounding boxes labels
+    :param bbox_deltas: bounding boxes deltas
+    :param frcnn_reg_actuals: faster rcnn regression labels
+    :param frcnn_cls_actuals: faster rcnn classification labels
+    :return: faster rcnn loss
+    """
+    rpn_regression_loss = reg_loss(bbox_deltas, network_output["rpn_delta_pred"])
+    print("rpn reg loss")
+    rpn_classif_loss = rpn_cls_loss(bbox_labels, network_output["rpn_cls_pred"])
+    print("rpn cls loss")
+    frcnn_regression_loss = reg_loss(frcnn_reg_actuals, network_output["frcnn_reg_pred"])
+    print("frcnn reg loss")
+    frcnn_classif_loss = frcnn_cls_loss(frcnn_cls_actuals, network_output["frcnn_cls_pred"])
+    print("frcnn cls loss")
+    return rpn_regression_loss, rpn_classif_loss, frcnn_regression_loss, frcnn_classif_loss
+
+
+def reg_loss(*args):
+    """
+    Calculating rpn / faster rcnn regression loss value.
+    :param args: could be (y_true, y_pred) or ((y_true, y_pred), )
+    :return: regression loss val
+    """
+    y_true, y_pred = args if len(args) == 2 else args[0]
+    y_pred = y_pred.reshape(y_pred.shape[0], -1, 4)
+    
+    # Huber loss
+    loss_for_all = F.smooth_l1_loss(y_true, y_pred, reduction='none', beta=1/9).sum(-1)
+    # loss_for_all = torch.sum(loss_for_all, dim=-1)
+    
+    # Check for any non-zero entries in the last dimension to create a mask
+    pos_cond = torch.any(y_true != 0.0, dim=-1)
+    pos_mask = pos_cond.float()
+    loc_loss = torch.sum(pos_mask * loss_for_all)
+    total_pos_bboxes = max(1.0, pos_mask.sum().item())
+    return loc_loss / total_pos_bboxes
+
+
+def rpn_cls_loss(*args):
+    """
+    Calculating rpn class loss value.
+    :param args: could be (y_true, y_pred) or ((y_true, y_pred), )
+    :return: CE loss
+    """
+    y_true, y_pred = args if len(args) == 2 else args[0]
+
+    # Find indices where y_true is not equal to -1
+    indices = (y_true != -1).nonzero(as_tuple=True)
+    
+    target = y_true[indices]
+    output = y_pred[indices]
+    
+    # Use Binary Cross Entropy with Logits as the loss function
+    lf = nn.BCEWithLogitsLoss()
+    return lf(output, target)
+
+
+def frcnn_cls_loss(*args):
+    """
+    Calculating faster rcnn class loss value.
+    :param args: could be (y_true, y_pred) or ((y_true, y_pred), )
+    :return: CE loss
+    """
+    y_true, y_pred = args if len(args) == 2 else args[0]
+
+    # Using Categorical Cross Entropy with Logits for the loss
+    loss_fn = nn.CrossEntropyLoss(reduction='none')
+    target_classes = torch.argmax(y_true, dim=-1)
+    loss_for_all = loss_fn(y_pred, target_classes)
+    
+    # Create a mask for locations where y_true is not all zeros
+    cond = y_true.any(dim=-1)
+    mask = cond.float()
+
+    conf_loss = torch.sum(mask * loss_for_all)
+    total_boxes = max(1.0, mask.sum().item())
+    return conf_loss / total_boxes
