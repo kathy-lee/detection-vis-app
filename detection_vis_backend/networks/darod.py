@@ -6,6 +6,9 @@ import torchvision
 from torchvision.ops import nms
 from torch.nn import GroupNorm
 
+from detection_vis_backend.train.utils import custom_one_hot
+
+
 class DARODBlock2D(nn.Module):
     def __init__(self, in_channels, filters, padding=1, kernel_size=3, num_conv=2, dilation_rate=1,
                  strides=1, activation="leaky_relu", block_norm=None,
@@ -498,10 +501,15 @@ def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
     expanded_gt_labels = pos_gt_labels + neg_gt_labels
     roi_bbox_deltas = get_deltas_from_bboxes(roi_bboxes, expanded_gt_boxes) / variances
     expanded_gt_labels = expanded_gt_labels.long()
-    roi_bbox_labels = F.one_hot(expanded_gt_labels, num_classes=total_labels)
+    print(torch.unique(expanded_gt_labels))
+    print(expanded_gt_labels.shape)
+    #roi_bbox_labels = F.one_hot(expanded_gt_labels, num_classes=total_labels)
+    roi_bbox_labels = custom_one_hot(expanded_gt_labels, num_classes=total_labels)
+    print(roi_bbox_labels.shape)
     scatter_indices = roi_bbox_labels.unsqueeze(-1).repeat(1, 1, 1, 4)
     roi_bbox_deltas = scatter_indices * roi_bbox_deltas.unsqueeze(-2)
     roi_bbox_deltas = roi_bbox_deltas.reshape(batch_size, total_bboxes * total_labels, 4)
+
     if model_config["fastrcnn"]["reg_loss"] == "sl1":
         return roi_bbox_deltas.detach(), roi_bbox_labels.detach()
     elif model_config["fastrcnn"]["reg_loss"] == "giou":
@@ -583,13 +591,9 @@ def darod_loss(network_output, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcn
     :return: faster rcnn loss
     """
     rpn_regression_loss = reg_loss(bbox_deltas, network_output["rpn_delta_pred"])
-    print("rpn reg loss")
     rpn_classif_loss = rpn_cls_loss(bbox_labels, network_output["rpn_cls_pred"])
-    print("rpn cls loss")
     frcnn_regression_loss = reg_loss(frcnn_reg_actuals, network_output["frcnn_reg_pred"])
-    print("frcnn reg loss")
     frcnn_classif_loss = frcnn_cls_loss(frcnn_cls_actuals, network_output["frcnn_cls_pred"])
-    print("frcnn cls loss")
     return rpn_regression_loss, rpn_classif_loss, frcnn_regression_loss, frcnn_classif_loss
 
 
@@ -601,7 +605,6 @@ def reg_loss(*args):
     """
     y_true, y_pred = args if len(args) == 2 else args[0]
     y_pred = y_pred.reshape(y_pred.shape[0], -1, 4)
-    
     # Huber loss
     loss_for_all = F.smooth_l1_loss(y_true, y_pred, reduction='none', beta=1/9).sum(-1)
     # loss_for_all = torch.sum(loss_for_all, dim=-1)
@@ -621,7 +624,6 @@ def rpn_cls_loss(*args):
     :return: CE loss
     """
     y_true, y_pred = args if len(args) == 2 else args[0]
-
     # Find indices where y_true is not equal to -1
     indices = (y_true != -1).nonzero(as_tuple=True)
     
@@ -640,16 +642,13 @@ def frcnn_cls_loss(*args):
     :return: CE loss
     """
     y_true, y_pred = args if len(args) == 2 else args[0]
-
-    # Using Categorical Cross Entropy with Logits for the loss
-    loss_fn = nn.CrossEntropyLoss(reduction='none')
-    target_classes = torch.argmax(y_true, dim=-1)
-    loss_for_all = loss_fn(y_pred, target_classes)
     
-    # Create a mask for locations where y_true is not all zeros
-    cond = y_true.any(dim=-1)
-    mask = cond.float()
+    y_pred = y_pred.permute(0, 2, 1).contiguous() # Shape to (batch_size, num_of_class, N)
+    
+    loss_for_all = F.cross_entropy(y_pred, torch.argmax(y_true, dim=-1), reduction='none')
 
-    conf_loss = torch.sum(mask * loss_for_all)
-    total_boxes = max(1.0, mask.sum().item())
+    cond = torch.any(y_true != 0.0, dim=-1).float()
+    conf_loss = torch.sum(cond * loss_for_all)
+    total_boxes = torch.maximum(torch.tensor(1.0).to(y_true.device), torch.sum(cond))
+
     return conf_loss / total_boxes
