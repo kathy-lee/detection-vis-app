@@ -26,6 +26,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
+from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation
 
@@ -344,7 +345,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 #print(inputs.shape, label.shape, boxes.shape)
             elif model_type == "DAROD":
                 inputs = data['radar'].to(device).float()
-                label = data['label'].to(device).float()
+                label = data['label'].to(device).int()
                 boxes = data['boxes'].to(device).float()
             else:
                 raise ValueError
@@ -429,7 +430,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
             elif model_type == "DAROD":
-                
+                bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
+                print(f'calculate_rpn_actual_outputs: {bbox_deltas.shape}, {bbox_labels.shape}')
+                frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
+                print(f'roi_delta: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
+                rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
+                print('getting loss...3')
+                loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
             else:
                 raise ValueError
 
