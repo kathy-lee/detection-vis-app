@@ -446,6 +446,25 @@ def one_hot(labels: torch.Tensor,
     return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
 
 
+def custom_one_hot(labels, num_classes):
+    r"""
+    torch.nn.functional.one_hot() could not handle negative class labels, but tf.one_hot() can: 
+    When a negative value is encountered, it results in an all-zero vector in the one-hot encoded output. 
+    This function implements the same as tf.one_hot(). It can also handle 2D input tensor.
+    """
+    # Handle the negative values by increasing them by num_classes
+    labels = torch.where(labels < 0, labels + num_classes, labels)
+    
+    # Apply one hot encoding
+    one_hot = F.one_hot(labels, num_classes=num_classes + 1)  # One additional class for the negative values
+    
+    # If we have the additional "negative" class, remove it (it will be the last class)
+    if one_hot.size(-1) > num_classes:
+        one_hot = one_hot[..., :-1]
+    
+    return one_hot
+
+
 def soft_dice_loss(input: torch.Tensor, target: torch.Tensor, eps: float = 1e-8,
                    global_weight: float = 1.) -> torch.Tensor:
     r"""Function that computes Sørensen-Dice Coefficient loss.
@@ -694,3 +713,4 @@ def lossYolo(pred_raw, pred, label, raw_boxes, input_size, focal_loss_iou_thresh
     conf_total_loss = torch.mean(torch.sum(focal_loss, dim=[1, 2, 3, 4]))
     category_total_loss = torch.mean(torch.sum(category_loss, dim=[1, 2, 3, 4]))
     return giou_total_loss, conf_total_loss, category_total_loss
+
