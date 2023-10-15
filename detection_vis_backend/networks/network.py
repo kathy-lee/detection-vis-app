@@ -472,11 +472,18 @@ class DAROD(nn.Module):
         frcnn_cls_pred = frcnn_cls_pred_reshaped.view(output.shape[0], output.shape[1], -1)
         frcnn_reg_pred = frcnn_reg_pred_reshaped.view(output.shape[0], output.shape[1], -1)
         decoder_output = self.decoder([roi_bboxes_out, frcnn_reg_pred, F.softmax(frcnn_cls_pred, dim=-1)])
+
+        rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
+        rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
         print(f"Network output:")
+        print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
         print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
         print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
         print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        return rpn_cls_pred, rpn_delta_pred, frcnn_cls_pred, frcnn_reg_pred, roi_bboxes_out, decoder_output
+        return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
+                "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
+
     
     def anchors_generation(self,):
         """
