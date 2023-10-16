@@ -30,28 +30,21 @@ def FFTRadNet_collate(batch):
     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
 def DAROD_collate(batch):
+    # raw labels from CARRADA dataset: 1,2,3
     radar = [torch.tensor(item['radar']) for item in batch]
     gt_labels = [torch.tensor(item['label']) for item in batch]
     gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
-    # print("------------0---------------")
-    # print(gt_boxes[0], gt_labels[0])
-    # print("------------1---------------")
-    # print(gt_boxes[1], gt_labels[1])
-    # print("------------2---------------")
-    # print(gt_boxes[2], gt_labels[2])
-    # print("-------------3--------------")
-    # print(gt_boxes[3], gt_labels[3])
-    #print(f"Before padding: {gt_boxes[0]['boxes'].shape},{gt_boxes[1]['boxes'].shape},{gt_boxes[2]['boxes'].shape},{gt_boxes[2]['boxes'].shape}")
+    
     radar = torch.stack(radar, 0)
     max_boxes = max([box.shape[0] for box in gt_boxes])
     # Initialize tensors for bboxes and labels filled with appropriate padding values
     padded_bboxes = torch.zeros(len(batch), max_boxes, 4)
-    padded_labels = torch.full((len(batch), max_boxes), fill_value=-2, dtype=torch.long)  # Using -2 as padding value
+    padded_labels = torch.full((len(batch), max_boxes), fill_value=-1, dtype=torch.long)  
     
     for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
         padded_bboxes[idx, :box.shape[0]] = box
-        padded_labels[idx, :label.shape[0]] = label
-    # print(f"After padding: {padded_bboxes.shape}, {padded_labels.shape}")
+        padded_labels[idx, :label.shape[0]] = label-1
+    print(f"padding: {gt_labels} -> {padded_labels}")
     return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 def default_collate(batch):
