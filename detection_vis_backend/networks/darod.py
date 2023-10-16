@@ -501,11 +501,7 @@ def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
     expanded_gt_labels = pos_gt_labels + neg_gt_labels
     roi_bbox_deltas = get_deltas_from_bboxes(roi_bboxes, expanded_gt_boxes) / variances
     expanded_gt_labels = expanded_gt_labels.long()
-    print(torch.unique(expanded_gt_labels))
-    print(expanded_gt_labels.shape)
-    #roi_bbox_labels = F.one_hot(expanded_gt_labels, num_classes=total_labels)
     roi_bbox_labels = custom_one_hot(expanded_gt_labels, num_classes=total_labels)
-    print(roi_bbox_labels.shape)
     scatter_indices = roi_bbox_labels.unsqueeze(-1).repeat(1, 1, 1, 4)
     roi_bbox_deltas = scatter_indices * roi_bbox_deltas.unsqueeze(-2)
     roi_bbox_deltas = roi_bbox_deltas.reshape(batch_size, total_bboxes * total_labels, 4)
@@ -534,6 +530,9 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     :return: bbox_deltas = (batch_size, total_anchors, [delta_y, delta_x, delta_h, delta_w])
              bbox_labels = (batch_size, feature_map_shape, feature_map_shape, anchor_count)
     """
+    print("INSIDE calculate_rpn_actual_outputs: ")
+    print(gt_labels)
+    print(gt_boxes)
     batch_size = gt_boxes.size(0)
     device = gt_boxes.device
     anchor_count = config["rpn"]["anchor_count"]
@@ -544,32 +543,29 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     postive_th = config["rpn"]["positive_th"]
     output_height, output_width = config["feature_map_shape"]
     anchors = anchors.to(device)
-    iou_map = generate_iou_map(anchors, gt_boxes)  
+    
+    iou_map = generate_iou_map(anchors, gt_boxes) 
     max_indices_each_row = torch.argmax(iou_map, dim=2)
     max_indices_each_column = torch.argmax(iou_map, dim=1)
     merged_iou_map = torch.max(iou_map, dim=2).values
     pos_mask = merged_iou_map > postive_th
     valid_indices_cond = gt_labels != -1
-    valid_indices = torch.nonzero(valid_indices_cond).squeeze()
+    valid_indices = torch.nonzero(valid_indices_cond).int()
     valid_max_indices = max_indices_each_column[valid_indices_cond]
-    scatter_bbox_indices = torch.stack([valid_indices[:, 0], valid_max_indices], dim=1)
+    scatter_bbox_indices = torch.stack([valid_indices[..., 0], valid_max_indices], dim=1)
     max_pos_mask = torch.zeros_like(pos_mask).scatter_(0, scatter_bbox_indices, 1).to(torch.bool)
     pos_mask = (pos_mask | max_pos_mask) & (torch.sum(anchors, dim=-1) != 0.0)
     pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]), seed)  
-
     pos_count = torch.sum(pos_mask.long(), dim=-1)
     if adaptive_ratio:
         neg_count = 2 * pos_count
     else:
         neg_count = (total_pos_bboxes + total_neg_bboxes) - pos_count
-
     neg_mask = ((merged_iou_map < 0.3) & (~pos_mask)) & (torch.sum(anchors, dim=-1) != 0.0)
     neg_mask = randomly_select_xyz_mask(neg_mask, neg_count, seed)  
-
     pos_labels = torch.where(pos_mask, torch.ones_like(pos_mask, dtype=torch.float32), torch.tensor(-1.0, dtype=torch.float32))
     neg_labels = neg_mask.float()
     bbox_labels = pos_labels + neg_labels
-
     gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_row.unsqueeze(-1).expand(-1,-1,4))
     expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
     bbox_deltas = get_deltas_from_bboxes(anchors, expanded_gt_boxes) / variances  
