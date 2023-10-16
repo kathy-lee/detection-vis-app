@@ -1593,8 +1593,6 @@ def accumulate_tp_fp(pred_boxes, pred_labels, pred_scores, gt_boxes, gt_classes,
     pred_labels = pred_labels[keep_idx]
     pred_scores = pred_scores[keep_idx]
     detected_gts = [[] for _ in range(len(iou_thresholds))]
-    # print("****************")
-    # print(gt_classes)
     # Count number of GT for each class
     for i in range(len(gt_classes)):
         gt_temp = gt_classes[i]
@@ -1743,10 +1741,18 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     :return: A dictionary with the AP for each class
     """
     ap_dict = dict()
+    valid_class_ids = []
     # Ignore 0 class which is BG
     for class_id in range(n_classes):
         tp, fp, scores, total_gt = tp_dict[class_id]["tp"], tp_dict[class_id]["fp"], tp_dict[class_id]["scores"], \
             tp_dict[class_id]["total_gt"]
+        print(f"class {class_id}: {total_gt}")
+        # Added begins
+        if total_gt == 0:
+            continue
+        else:
+            valid_class_ids.append(class_id)
+        # Added ends
         ap_dict[class_id] = [[] for _ in range(len(iou_th))]
         ap_dict[class_id] = {
             "AP": [0.0 for _ in range(len(iou_th))],
@@ -1759,15 +1765,16 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
                 = compute_ap_class(tp[iou_idx], fp[iou_idx], scores[iou_idx], total_gt)
             ap_dict[class_id]["F1"][iou_idx] = compute_f1(ap_dict[class_id]["precision"][iou_idx],
                                                           ap_dict[class_id]["recall"][iou_idx])
+    print(valid_class_ids)
     ap_dict["mean"] = {
-        "AP": [np.mean([ap_dict[class_id]["AP"][iou_th] for class_id in range(n_classes)])
-               for iou_th in range(len(ap_dict[0]["AP"]))],
-        "precision": [np.mean([ap_dict[class_id]["precision"][iou_th] for class_id in range(n_classes)])
-                      for iou_th in range(len(ap_dict[0]["precision"]))],
-        "recall": [np.mean([ap_dict[class_id]["recall"][iou_th] for class_id in range(n_classes)])
-                   for iou_th in range(len(ap_dict[0]["recall"]))],
-        "F1": [np.mean([ap_dict[class_id]["F1"][iou_th] for class_id in range(n_classes)])
-               for iou_th in range(len(ap_dict[0]["F1"]))]
+        "AP": [np.mean([ap_dict[class_id]["AP"][iou_th] for class_id in valid_class_ids])
+               for iou_th in range(len(ap_dict[valid_class_ids[0]]["AP"]))],
+        "precision": [np.mean([ap_dict[class_id]["precision"][iou_th] for class_id in valid_class_ids])
+                      for iou_th in range(len(ap_dict[valid_class_ids[0]]["precision"]))],
+        "recall": [np.mean([ap_dict[class_id]["recall"][iou_th] for class_id in valid_class_ids])
+                   for iou_th in range(len(ap_dict[valid_class_ids[0]]["recall"]))],
+        "F1": [np.mean([ap_dict[class_id]["F1"][iou_th] for class_id in valid_class_ids])
+               for iou_th in range(len(ap_dict[valid_class_ids[0]]["F1"]))]
     }
     return ap_dict
 
@@ -1802,8 +1809,8 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
             print("Get loss, begin evaluation")
             if outputs["decoder_output"] is not None:
                 pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
-                print(f"gt_labels:{gt_labels}")
-                print(f"pred_labels:{pred_labels}")
+                # print(f"gt_labels:{gt_labels}")
+                # print(f"pred_labels:{pred_labels}")
                 pred_labels = pred_labels - 1
                 gt_labels = gt_labels - 1
                 for batch_id in range(pred_boxes.shape[0]):
@@ -1813,11 +1820,11 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
                                                     iou_thresholds=iou_thresholds)
             kbar.update(iter)
 
+    print("******************* Eval metrics******************")
     ap_dict = AP(tp_dict, n_classes, iou_thresholds)
-    for class_id in range(n_classes):
-        print(tp_dict[class_id]["total_gt"])
     # Added
     running_loss = val_loss.total
     mAP = np.mean(ap_dict["mean"]["AP"])
     mAR = np.mean(ap_dict["mean"]["recall"])
-    return {'loss': running_loss, 'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+    print("****************** Eval ended **********************")
+    return {'loss': running_loss.cpu(), 'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
