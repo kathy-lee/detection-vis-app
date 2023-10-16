@@ -43,7 +43,7 @@ def DAROD_collate(batch):
     
     for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
         padded_bboxes[idx, :box.shape[0]] = box
-        padded_labels[idx, :label.shape[0]] = label-1
+        padded_labels[idx, :label.shape[0]] = label
     print(f"padding: {gt_labels} -> {padded_labels}")
     return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
