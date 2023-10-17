@@ -993,3 +993,35 @@ def iou3d(box_xyzwhd_1, box_xyzwhd_2, input_size):
     ### get iou
     iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
     return iou
+
+
+def flip_horizontal(img, gt_boxes):
+    """
+    Flip image horizontally and adjust the ground truth boxes.
+    :param img: (height, width, depth)
+    :param gt_boxes: (ground_truth_object_count, [y1, x1, y2, x2])
+    :return: modified_img = (height, width, depth)
+             modified_gt_boxes = (ground_truth_object_count, [y1, x1, y2, x2])
+    """
+    flipped_img = np.fliplr(img)
+    flipped_gt_boxes = np.stack([gt_boxes[..., 0],
+                                 1.0 - gt_boxes[..., 3],
+                                 gt_boxes[..., 2],
+                                 1.0 - gt_boxes[..., 1]], axis=-1)
+    return flipped_img, flipped_gt_boxes
+
+
+def flip_vertical(img, gt_boxes):
+    """
+    Flip image horizontally and adjust the ground truth boxes.
+    :param img: (height, width, depth)
+    :param gt_boxes: (ground_truth_object_count, [y1, x1, y2, x2])
+    :return: modified_img = (height, width, depth)
+             modified_gt_boxes = (ground_truth_object_count, [y1, x1, y2, x2])
+    """
+    flipped_img = np.flipud(img)
+    flipped_gt_boxes = np.stack([1.0 - gt_boxes[..., 2],
+                                 gt_boxes[..., 1],
+                                 1.0 - gt_boxes[..., 0],
+                                 gt_boxes[..., 3]], axis=-1)
+    return flipped_img, flipped_gt_boxes

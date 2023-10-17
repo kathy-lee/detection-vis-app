@@ -26,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -2049,37 +2049,106 @@ class RADDetDataset(Dataset):
             "max_boxes_per_frame" : 30,
             "trainset_portion" : 0.8
         }
-        assert model_cfg["num_class"] == len(self.data_stats["all_classes"])
-        self.anchor_boxes = np.array(train_cfg["anchor_boxes"])
-        self.input_shape = train_cfg["input_size"]
-        self.headoutput_shape = [3,16,16,4,78]
-        self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
+        #assert model_cfg["n_class"] == len(self.data_stats["all_classes"])
+        if 'input_size' in model_cfg:
+            self.input_shape = model_cfg["input_size"]
+        elif 'input_size' in train_cfg:
+            self.input_shape = train_cfg["input_size"]
+        self.features = features
+
+        if 'transformations' in train_cfg:
+            self.transformations = train_cfg['transformations']
+
+        if model_cfg["class"] == "RADDet":
+            self.model_type = "RADDet"
+            self.anchor_boxes = np.array(train_cfg["anchor_boxes"])
+            self.headoutput_shape = [3,16,16,4,78]
+            self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
+        else:
+            self.model_type = model_cfg["class"]
         return 
+    
+    def transform(self, frame, gt_boxes, is_vflip=False, is_hflip=False):
+        func_dict = {
+            'vflip': flip_vertical,
+            'hflip': flip_horizontal
+        }
+        if self.transformations is not None:
+            for transform in self.transformations:
+                frame, gt_boxes = func_dict[transform](frame, gt_boxes)
+        return frame, gt_boxes
     
     def __len__(self):
         return self.frame_sync
 
     def __getitem__(self, index):
-        RAD_complex = np.load(self.RAD_filenames[index])
+        RAD_complex = self.get_RAD(index)
         # Gloabl Normalization
         RAD_data = complexTo2Channels(RAD_complex)
         RAD_data = (RAD_data - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
         
         with open(self.anno_filenames[index], "rb") as f:
             gt_instances = pickle.load(f)
-        # decode ground truth boxes to YOLO format
-        gt_labels, has_label, raw_boxes = self.encodeToLabels(gt_instances)
-        return {'radar_data': RAD_data, 'label': gt_labels, 'boxes': raw_boxes}
+
+        if self.model_type == "RADDet":
+            # decode ground truth boxes to YOLO format
+            gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
+            feature_data = RAD_data
+        else:
+            if self.features == ["RD"]:
+                feature_data = self.get_RD(index)
+            elif self.features == ["RA"]:
+                feature_data = self.get_RA(index)
+
+            x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
+            boxes = gt_instances["boxes"]
+            classes = gt_instances["classes"]
+            gt_boxes = []
+            gt_labels = []
+            for (box, class_) in zip(boxes, classes):
+
+                yc, xc, h, w = box[0], box[2], box[3], box[5]
+                y1, y2, x1, x2 = int(yc - h / 2), int(yc + h / 2), int(xc - w / 2), int(xc + w / 2)
+                if x1 < 0:
+                    # Create 2 boxes
+                    x1 += x_shape
+                    box1 = [y1 / y_shape, x1 / x_shape, y2 / y_shape, x_shape / x_shape]
+                    box2 = [y1 / y_shape, 0 / x_shape, y2 / y_shape, x2 / x_shape]
+                    #
+                    gt_boxes.append(box1)
+                    gt_labels.append(class_)
+                    #
+                    gt_boxes.append(box2)
+                    gt_labels.append(class_)
+                elif x2 >= x_shape:
+                    x2 -= x_shape
+                    box1 = [y1 / y_shape, x1 / x_shape, y2 / y_shape, x_shape / x_shape]
+                    box2 = [y1 / y_shape, 0 / x_shape, y2 / y_shape, x2 / x_shape]
+                    #
+                    gt_boxes.append(box1)
+                    gt_labels.append(class_)
+                    #
+                    gt_boxes.append(box2)
+                    gt_labels.append(class_)
+                else:
+                    gt_boxes.append([y1 / y_shape, x1 / x_shape, y2 / y_shape, x2 / x_shape])
+                    gt_labels.append(class_)
+            
+            gt_labels = [self.data_stats["all_classes"].index(class_name)+1 for class_name in gt_labels]
+            gt_labels = np.array(gt_labels)
+            gt_boxes = np.array(gt_boxes)
+            feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
+            feature_data = np.expand_dims(feature_data, axis=0)  
+        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes}
     
     def encodeToLabels(self, gt_instances):
         """ Transfer ground truth instances into Detection Head format """
         raw_boxes_xyzwhd = np.zeros((self.data_stats["max_boxes_per_frame"], 7))
-        ### initialize gronud truth labels as np.zeors ###
         gt_labels = np.zeros(list(self.headoutput_shape[1:4]) + \
                         [len(self.anchor_boxes)] + \
-                        [len(self.data_stats["all_classes"]) + 7])
+                        [len(self.data_stats["all_classes"]) + 7]) # (16, 16, 4, 6, 13)
 
-        ### start transferring box to ground turth label format ###
+        ### start transferring box to ground truth label format ###
         for i in range(len(gt_instances["classes"])):
             if i > self.data_stats["max_boxes_per_frame"]:
                 continue
