@@ -345,11 +345,11 @@ class MVRECORD(nn.Module):
     
 
 class RADDet(nn.Module):
-    def __init__(self, input_channels, num_class, num_anchors_layer):
+    def __init__(self, input_channels, n_class, num_anchors_layer):
         super(RADDet, self).__init__()
 
         self.backbone_stage = RadarResNet3D(input_channels)
-        self.yolohead = YoloHead(num_anchors_layer, num_class, 256, 4) 
+        self.yolohead = YoloHead(num_anchors_layer, n_class, 256, 4) 
         
     def forward(self, x):
         features = self.backbone_stage(x)
@@ -361,13 +361,13 @@ class RADDet(nn.Module):
     
 
 class DAROD(nn.Module):
-    def __init__(self, input_size, rpn, fastrcnn, total_labels, use_dropout, dropout_rate, use_bn, layout, dilation_rate, feature_map_shape, range_res, doppler_res):
+    def __init__(self, input_size, rpn, fastrcnn, n_class, use_dropout, dropout_rate, use_bn, layout, dilation_rate, feature_map_shape, range_res, doppler_res):
         super(DAROD, self).__init__()
         self.input_size = input_size
         self.use_dropout = use_dropout
         self.dropout_rate = dropout_rate
         self.use_bn = use_bn
-        self.total_labels = total_labels
+        self.total_labels = n_class
         self.fastrcnn_cfg = fastrcnn
         self.rpn_cfg = rpn
         self.feature_map_shape = feature_map_shape
@@ -420,8 +420,8 @@ class DAROD(nn.Module):
 
         self.fc1 = nn.Linear(4098, self.fastrcnn_cfg["in_channels_1"]) 
         self.fc2 = nn.Linear(self.fastrcnn_cfg["in_channels_1"], self.fastrcnn_cfg["in_channels_2"])
-        self.frcnn_cls = nn.Linear(self.fastrcnn_cfg["in_channels_2"], total_labels)
-        self.frcnn_reg = nn.Linear(self.fastrcnn_cfg["in_channels_2"], total_labels * 4)
+        self.frcnn_cls = nn.Linear(self.fastrcnn_cfg["in_channels_2"], self.total_labels)
+        self.frcnn_reg = nn.Linear(self.fastrcnn_cfg["in_channels_2"], self.total_labels * 4)
 
         self.decoder = Decoder(self.fastrcnn_cfg["variances_boxes"], self.total_labels, self.fastrcnn_cfg["frcnn_num_pred"], self.fastrcnn_cfg["box_nms_score"], self.fastrcnn_cfg["box_nms_iou"])
 
@@ -430,8 +430,8 @@ class DAROD(nn.Module):
         return 
 
     def forward(self, input):
-        print("---------------------------------")
-        #print(f"input: {input.shape}")
+        print("---------------network------------------")
+        print(f"input: {input.shape}")
         x = self.block1(input)
         #print(f"after block1: {x.shape}")
         x = self.block2(x)
@@ -476,12 +476,13 @@ class DAROD(nn.Module):
 
         rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
         rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
-        # print(f"Network output:")
-        # print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        # print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
-        # print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
-        # print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
-        # print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
+        print(f"Network output:")
+        print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
+        print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
+        print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
+        print("---------------network------------------")
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 
