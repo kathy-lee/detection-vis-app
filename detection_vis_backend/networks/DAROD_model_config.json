@@ -3,7 +3,7 @@
     "dropout_rate": 0.5,
     "layout": "2D",
     "use_bn": true,
-    "total_labels": 4,
+    "n_class": 4,
     "dilation_rate": [1,1],
     "input_size": [256, 64, 1],
     "feature_map_shape": [32, 32],
