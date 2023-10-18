@@ -31,7 +31,8 @@ def FFTRadNet_collate(batch):
 
 def DAROD_collate(batch):
     # raw labels from CARRADA dataset: 1,2,3
-    radar = [torch.tensor(item['radar']) for item in batch]
+    # raw labels from RADDet dataset: 1,2,3,4,5,6
+    radar = [torch.tensor(item['radar'].copy()) for item in batch]
     gt_labels = [torch.tensor(item['label']) for item in batch]
     gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
     
@@ -44,7 +45,7 @@ def DAROD_collate(batch):
     for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
         padded_bboxes[idx, :box.shape[0]] = box
         padded_labels[idx, :label.shape[0]] = label
-    print(f"padding: {gt_labels} -> {padded_labels}")
+    # print(f"padding: {gt_labels} -> {padded_labels}")
     return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 def default_collate(batch):
