@@ -2134,7 +2134,7 @@ class RADDetDataset(Dataset):
                     gt_boxes.append([y1 / y_shape, x1 / x_shape, y2 / y_shape, x2 / x_shape])
                     gt_labels.append(class_)
             
-            gt_labels = [self.data_stats["all_classes"].index(class_name)+1 for class_name in gt_labels]
+            gt_labels = [self.data_stats["all_classes"].index(class_name)+1 for class_name in gt_labels] # Plus 1: map to 1~6
             gt_labels = np.array(gt_labels)
             gt_boxes = np.array(gt_boxes)
             feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
