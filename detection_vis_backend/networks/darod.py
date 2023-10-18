@@ -471,7 +471,7 @@ class Decoder(nn.Module):
 
 
 def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
-    total_labels = model_config["total_labels"]
+    total_labels = model_config["n_class"]
     total_pos_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] / 3)
     total_neg_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] * 2 / 3)
     device = roi_bboxes.device
@@ -530,6 +530,7 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     :return: bbox_deltas = (batch_size, total_anchors, [delta_y, delta_x, delta_h, delta_w])
              bbox_labels = (batch_size, feature_map_shape, feature_map_shape, anchor_count)
     """
+    
     batch_size = gt_boxes.size(0)
     device = gt_boxes.device
     anchor_count = config["rpn"]["anchor_count"]
@@ -540,7 +541,7 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     postive_th = config["rpn"]["positive_th"]
     output_height, output_width = config["feature_map_shape"]
     anchors = anchors.to(device)
-    
+
     iou_map = generate_iou_map(anchors, gt_boxes) 
     max_indices_each_row = torch.argmax(iou_map, dim=2)
     max_indices_each_column = torch.argmax(iou_map, dim=1)
@@ -550,10 +551,14 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     valid_indices = torch.nonzero(valid_indices_cond).int()
     valid_max_indices = max_indices_each_column[valid_indices_cond]
     scatter_bbox_indices = torch.stack([valid_indices[..., 0], valid_max_indices], dim=1)
-    max_pos_mask = torch.zeros_like(pos_mask).scatter_(0, scatter_bbox_indices, 1).to(torch.bool)
+    #print(pos_mask.shape, scatter_bbox_indices.shape, valid_indices.shape)
+    max_pos_mask = torch.zeros_like(pos_mask)
+    max_pos_mask[scatter_bbox_indices.t().numpy()] = torch.ones((len(valid_indices),), dtype=torch.bool)
+    #print(max_pos_mask.shape)
     pos_mask = (pos_mask | max_pos_mask) & (torch.sum(anchors, dim=-1) != 0.0)
     pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]), seed)  
     pos_count = torch.sum(pos_mask.long(), dim=-1)
+    # Keep a 50%/50% ratio of positive/negative samples
     if adaptive_ratio:
         neg_count = 2 * pos_count
     else:
@@ -563,7 +568,10 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     pos_labels = torch.where(pos_mask, torch.ones_like(pos_mask, dtype=torch.float32), torch.tensor(-1.0, dtype=torch.float32))
     neg_labels = neg_mask.float()
     bbox_labels = pos_labels + neg_labels
+    # print(f"max_indices_each_row: {max_indices_each_row.shape}")
+    # print(f"gt_boxes: {gt_boxes.shape}")
     gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_row.unsqueeze(-1).expand(-1,-1,4))
+    # Replace negative bboxes with zeros
     expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
     bbox_deltas = get_deltas_from_bboxes(anchors, expanded_gt_boxes) / variances  
     bbox_labels = bbox_labels.view(batch_size, output_height, output_width, anchor_count)
