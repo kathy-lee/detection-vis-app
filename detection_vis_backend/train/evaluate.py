@@ -1783,8 +1783,7 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
     net.eval()
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
-    labels = ['bg', 'pedestrian', 'bicyclist', 'car']
-    n_classes = len(labels) - 1 # Ignore 0 class which is BG
+    n_classes = model_config['n_class'] - 1 # Ignore 0 class which is BG
     tp_dict = dict()
     val_loss = RunningAverage()
     for class_id in range(n_classes):
