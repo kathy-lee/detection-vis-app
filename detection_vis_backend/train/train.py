@@ -236,10 +236,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
 
-    # # save model path(also model name)
-    # with open("exp_info.txt", 'w') as f:
-    #     f.write(exp_name)
-
     # Initialize tensorboard
     output_root = Path(os.getenv('MODEL_ROOTDIR'))
     (output_root / exp_name).mkdir(parents=True, exist_ok=True)
@@ -261,6 +257,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     # set device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cpu')
     
     network_factory = NetworkFactory()
     model_type = model_config['class']
@@ -347,9 +344,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 inputs = data['radar'].to(device).float()
                 label = data['label'].to(device).int()
                 boxes = data['boxes'].to(device).float()
+                # print(inputs.shape, label)
             else:
                 raise ValueError
-
+            
             # reset the gradient
             optimizer.zero_grad()
 
@@ -430,12 +428,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
             elif model_type == "DAROD":
+                print("--------loss----------")
+                #print(f"pred_labels: {outputs['decoder_output'][2]}")
                 bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
                 print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
                 frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
-                print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
+                #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
                 rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-                print('got loss')
+                print("--------loss----------")
                 loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
             else:
                 raise ValueError
@@ -529,7 +529,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     elif model_type == "RADDet":
         eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
     elif model_type == "DAROD":
-        eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_threshold=[0.1, 0.3, 0.5, 0.7])
+        eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
     else:
         raise ValueError
     
