@@ -430,8 +430,8 @@ class DAROD(nn.Module):
         return 
 
     def forward(self, input):
-        print("---------------network------------------")
-        print(f"input: {input.shape}")
+        # print("---------------network------------------")
+        # print(f"input: {input.shape}")
         x = self.block1(input)
         #print(f"after block1: {x.shape}")
         x = self.block2(x)
@@ -476,13 +476,13 @@ class DAROD(nn.Module):
 
         rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
         rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
-        print(f"Network output:")
-        print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
-        print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
-        print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
-        print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        print("---------------network------------------")
+        # print(f"Network output:")
+        # print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        # print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        # print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
+        # print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
+        # print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
+        # print("---------------network------------------")
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 
