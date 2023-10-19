@@ -29,6 +29,24 @@ def FFTRadNet_collate(batch):
         labels.append(torch.from_numpy(box_labels))    
     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
 
+def DAROD_collate(batch):
+    # raw labels from CARRADA dataset: 1,2,3
+    # raw labels from RADDet dataset: 1,2,3,4,5,6
+    radar = [torch.tensor(item['radar'].copy()) for item in batch]
+    gt_labels = [torch.tensor(item['label']) for item in batch]
+    gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
+    
+    radar = torch.stack(radar, 0)
+    max_boxes = max([box.shape[0] for box in gt_boxes])
+    # Initialize tensors for bboxes and labels filled with appropriate padding values
+    padded_bboxes = torch.zeros(len(batch), max_boxes, 4)
+    padded_labels = torch.full((len(batch), max_boxes), fill_value=-1, dtype=torch.long)  
+    
+    for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
+        padded_bboxes[idx, :box.shape[0]] = box
+        padded_labels[idx, :label.shape[0]] = label
+    # print(f"padding: {gt_labels} -> {padded_labels}")
+    return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
@@ -43,14 +61,6 @@ def default_collate(batch):
     if elem is None:
         return None
     elif isinstance(elem, torch.Tensor):
-        # out = None
-        # if torch.utils.data.get_worker_info() is not None:
-        #     # If we're in a background process, concatenate directly into a
-        #     # shared memory tensor to avoid an extra copy
-        #     numel = sum([x.numel() for x in batch])
-        #     storage = elem.untyped_storage()._new_shared(numel)
-        #     out = elem.new(storage)
-        # return torch.stack(batch, 0, out=out)
         return torch.stack(batch, 0)
     elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
             and elem_type.__name__ != 'string_':
@@ -430,6 +440,25 @@ def one_hot(labels: torch.Tensor,
     return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
 
 
+def custom_one_hot(labels, num_classes):
+    r"""
+    torch.nn.functional.one_hot() could not handle negative class labels, but tf.one_hot() can: 
+    When a negative value is encountered, it results in an all-zero vector in the one-hot encoded output. 
+    This function implements the same as tf.one_hot(). It can also handle 2D input tensor.
+    """
+    # Handle the negative values by increasing them by num_classes
+    labels = torch.where(labels < 0, labels + num_classes, labels)
+    
+    # Apply one hot encoding
+    one_hot = F.one_hot(labels, num_classes=num_classes + 1)  # One additional class for the negative values
+    
+    # If we have the additional "negative" class, remove it (it will be the last class)
+    if one_hot.size(-1) > num_classes:
+        one_hot = one_hot[..., :-1]
+    
+    return one_hot
+
+
 def soft_dice_loss(input: torch.Tensor, target: torch.Tensor, eps: float = 1e-8,
                    global_weight: float = 1.) -> torch.Tensor:
     r"""Function that computes Sørensen-Dice Coefficient loss.
@@ -678,3 +707,4 @@ def lossYolo(pred_raw, pred, label, raw_boxes, input_size, focal_loss_iou_thresh
     conf_total_loss = torch.mean(torch.sum(focal_loss, dim=[1, 2, 3, 4]))
     category_total_loss = torch.mean(torch.sum(category_loss, dim=[1, 2, 3, 4]))
     return giou_total_loss, conf_total_loss, category_total_loss
+

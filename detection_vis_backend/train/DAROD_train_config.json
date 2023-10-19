@@ -1,0 +1,29 @@
+{
+    "seed":3,
+    "losses": "wce_w10sdice",
+    "lr_scheduler": {
+        "type": "exp",
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-3
+    },
+    "num_epochs":1,
+    "dataloader": {
+        "train": {
+            "batch_size": 4,
+            "num_workers": 4
+        },
+        "val": {
+            "batch_size": 4,
+            "num_workers": 4
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    },
+    "win_size": 1,
+    "transformations": ["hflip", "vflip"],
+    "norm_type": "tvt"
+}

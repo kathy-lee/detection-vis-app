@@ -26,8 +26,9 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation
+from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
 
 collate_func = {
     'FFTRadNet': FFTRadNet_collate,
@@ -36,11 +37,13 @@ collate_func = {
     'RECORDNoLstm': default_collate,
     'RECORDNoLstmMulti': default_collate,
     'MVRECORD': default_collate,
-    'RADDet': default_collate
+    'RADDet': default_collate,
+    'DAROD': DAROD_collate
 }    
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
     dataset_factory = DatasetFactory()
+    dataset_type = datafiles[0]["parse"]
     if not use_original_split:
         if train_config['dataloader']['splitmode'] == 'sequence':
             assert len(datafiles) > 1
@@ -86,8 +89,28 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
                 f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
                 f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+
+        # Filter out data items with empty annotations when the network demands
+        if dataset_type == "CARRADA" and model_config['class'] == "DAROD":
+            print(f"Before filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
+            valid_indices = []
+            for i in range(len(train_dataset)):
+                if train_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            train_dataset = Subset(train_dataset, valid_indices)
+            valid_indices = []
+            for i in range(len(val_dataset)):
+                if val_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            val_dataset = Subset(val_dataset, valid_indices)
+            valid_indices = []
+            for i in range(len(test_dataset)):
+                if test_dataset[i]['label'].size > 0:  
+                    valid_indices.append(i)
+            test_dataset = Subset(test_dataset, valid_indices)
+            print(f"After filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
+
     else:
-        dataset_type = datafiles[0]["parse"]
         if dataset_type == "RADIal":
             Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
                                        'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
@@ -213,10 +236,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
 
-    # # save model path(also model name)
-    # with open("exp_info.txt", 'w') as f:
-    #     f.write(exp_name)
-
     # Initialize tensorboard
     output_root = Path(os.getenv('MODEL_ROOTDIR'))
     (output_root / exp_name).mkdir(parents=True, exist_ok=True)
@@ -238,6 +257,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     # set device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cpu')
     
     network_factory = NetworkFactory()
     model_type = model_config['class']
@@ -307,12 +327,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     # print(f"###input:{inputs.shape}")
                     # print(f"###confmap:{confmap_gt.shape}")
                 elif dataset_type == "CARRADA":
-                    if features == ['RD']:
-                        inputs = data['rd_matrix'].to(device).float()
-                        label = data['rd_mask'].to(device).float()
-                    elif features == ['RA']:
-                        inputs = data['ra_matrix'].to(device).float()
-                        label = data['ra_mask'].to(device).float()
+                    inputs = data['radar'].to(device).float()
+                    label = data['mask'].to(device).float()
                     #print(f"###input:{inputs.shape}")
                     #print(f"###label:{label.shape}")
             elif model_type == "MVRECORD":
@@ -324,9 +340,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label = data['label'].to(device).float()
                 boxes = data['boxes'].to(device).float()
                 #print(inputs.shape, label.shape, boxes.shape)
+            elif model_type == "DAROD":
+                inputs = data['radar'].to(device).float()
+                label = data['label'].to(device).int()
+                boxes = data['boxes'].to(device).float()
+                # print(inputs.shape, label)
             else:
                 raise ValueError
-
+            
             # reset the gradient
             optimizer.zero_grad()
 
@@ -406,6 +427,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
+            elif model_type == "DAROD":
+                print("--------loss----------")
+                #print(f"pred_labels: {outputs['decoder_output'][2]}")
+                bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
+                print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
+                frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
+                #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
+                rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
+                print("--------loss----------")
+                loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
             else:
                 raise ValueError
 
@@ -446,6 +477,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
         elif model_type == "RADDet":
             eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
+        elif model_type == "DAROD":
+            eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
         else:
             raise ValueError
             
@@ -494,7 +527,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     elif model_type == "MVRECORD" and dataset_type == "CARRADA":
         eval = MVRECORD_CARRADA_evaluation(net, test_loader, features, rd_criterion, ra_criterion, device)
     elif model_type == "RADDet":
-            eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
+        eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
+    elif model_type == "DAROD":
+        eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
     else:
         raise ValueError
     

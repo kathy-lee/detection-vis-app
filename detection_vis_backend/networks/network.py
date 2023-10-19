@@ -14,6 +14,7 @@ from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_De
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, RadarStackedHourglass_HGwI2d
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
+from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
 
 
 class NetworkFactory:
@@ -344,11 +345,11 @@ class MVRECORD(nn.Module):
     
 
 class RADDet(nn.Module):
-    def __init__(self, input_channels, num_class, num_anchors_layer):
+    def __init__(self, input_channels, n_class, num_anchors_layer):
         super(RADDet, self).__init__()
 
         self.backbone_stage = RadarResNet3D(input_channels)
-        self.yolohead = YoloHead(num_anchors_layer, num_class, 256, 4) 
+        self.yolohead = YoloHead(num_anchors_layer, n_class, 256, 4) 
         
     def forward(self, x):
         features = self.backbone_stage(x)
@@ -357,3 +358,180 @@ class RADDet(nn.Module):
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
         #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
         return yolo_raw
+    
+
+class DAROD(nn.Module):
+    def __init__(self, input_size, rpn, fastrcnn, n_class, use_dropout, dropout_rate, use_bn, layout, dilation_rate, feature_map_shape, range_res, doppler_res):
+        super(DAROD, self).__init__()
+        self.input_size = input_size
+        self.use_dropout = use_dropout
+        self.dropout_rate = dropout_rate
+        self.use_bn = use_bn
+        self.total_labels = n_class
+        self.fastrcnn_cfg = fastrcnn
+        self.rpn_cfg = rpn
+        self.feature_map_shape = feature_map_shape
+        self.layout = layout
+        self.dilation_rate = dilation_rate
+        self.range_res = range_res
+        self.doppler_res = doppler_res
+        self.anchors = self.anchors_generation()
+
+        if self.use_bn:
+            block_norm = "group_norm"  # By default for this model
+        else:
+            block_norm = None
+
+        # Backbone
+        self.block1 = DARODBlock2D(in_channels=1, filters=64, padding="same", kernel_size=(3, 3),
+                                   num_conv=2, dilation_rate=self.dilation_rate, activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 2),
+                                   pooling_strides=(2, 2), name="darod_block1")
+
+        self.block2 = DARODBlock2D(in_channels=64, filters=128, padding="same", kernel_size=(3, 3),
+                                   num_conv=2, dilation_rate=self.dilation_rate, activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 1),
+                                   pooling_strides=(2, 1), name="darod_block2")
+
+        self.block3 = DARODBlock2D(in_channels=128, filters=256, padding="same", kernel_size=(3, 3),
+                                   num_conv=3, dilation_rate=(1, 1), activation="leaky_relu",
+                                   block_norm=block_norm, pooling_size=(2, 1),
+                                   pooling_strides=(2, 1), name="darod_block3")
+        
+        # RPN
+        self.rpn_conv = nn.Conv2d(in_channels=256, 
+                          out_channels=self.rpn_cfg["rpn_channels"], 
+                          kernel_size=self.rpn_cfg["rpn_window"], 
+                          padding=(self.rpn_cfg["rpn_window"][0]//2, self.rpn_cfg["rpn_window"][1]//2))
+        self.rpn_cls_output = nn.Conv2d(in_channels=self.rpn_cfg["rpn_channels"], 
+                                out_channels=self.rpn_cfg["anchor_count"], 
+                                kernel_size=1)
+        self.rpn_reg_output = nn.Conv2d(in_channels=self.rpn_cfg["rpn_channels"], 
+                                out_channels=4 * self.rpn_cfg["anchor_count"], 
+                                kernel_size=1)
+
+        # Fast RCNN
+        self.roi_bbox = RoIBBox(self.anchors, self.fastrcnn_cfg["pre_nms_topn_train"], self.fastrcnn_cfg["pre_nms_topn_test"], 
+                                self.fastrcnn_cfg["post_nms_topn_train"], self.fastrcnn_cfg["post_nms_topn_test"], self.rpn_cfg["rpn_nms_iou"], self.rpn_cfg["variances"])
+        self.radar_features = RadarFeatures(self.input_size, self.range_res, self.doppler_res )
+        self.roi_pooled = RoIPooling(self.fastrcnn_cfg["pooling_size"])
+
+        self.flatten = nn.Flatten()
+
+        self.fc1 = nn.Linear(4098, self.fastrcnn_cfg["in_channels_1"]) 
+        self.fc2 = nn.Linear(self.fastrcnn_cfg["in_channels_1"], self.fastrcnn_cfg["in_channels_2"])
+        self.frcnn_cls = nn.Linear(self.fastrcnn_cfg["in_channels_2"], self.total_labels)
+        self.frcnn_reg = nn.Linear(self.fastrcnn_cfg["in_channels_2"], self.total_labels * 4)
+
+        self.decoder = Decoder(self.fastrcnn_cfg["variances_boxes"], self.total_labels, self.fastrcnn_cfg["frcnn_num_pred"], self.fastrcnn_cfg["box_nms_score"], self.fastrcnn_cfg["box_nms_iou"])
+
+        if self.use_dropout:
+            self.dropout = nn.Dropout(p=self.dropout_rate)
+        return 
+
+    def forward(self, input):
+        # print("---------------network------------------")
+        # print(f"input: {input.shape}")
+        x = self.block1(input)
+        #print(f"after block1: {x.shape}")
+        x = self.block2(x)
+        #print(f"after block2: {x.shape}")
+        x = self.block3(x)
+        #print(f"after block3: {x.shape}")
+
+        rpn_out = F.relu(self.rpn_conv(x))
+        rpn_cls_pred = self.rpn_cls_output(rpn_out)
+        rpn_delta_pred = self.rpn_reg_output(rpn_out)
+        #print(f"rpn_out: {rpn_out.shape}")
+        #print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        #print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+
+        # if step == "rpn":
+        #     return rpn_cls_pred, rpn_delta_pred
+
+        roi_bboxes_out, roi_bboxes_scores = self.roi_bbox(rpn_delta_pred, rpn_cls_pred)
+        #print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
+        #print(f"roi_bboxes_scores: {roi_bboxes_scores.shape}")
+        roi_pooled_out = self.roi_pooled(x, roi_bboxes_out)
+        #print(f"roi_pooled_out: {roi_pooled_out.shape}")
+
+        output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
+        features = self.radar_features(roi_bboxes_out, roi_bboxes_scores)
+        output = torch.cat([output, features], dim=-1)
+
+        # Reshape for applying layers:  (batch_size * time_steps, input_dim)         
+        output_reshaped = output.view(-1, output.shape[2]) 
+        output_reshaped = F.relu(self.fc1(output_reshaped))
+        if self.use_dropout:
+            output_reshaped = self.dropout(output_reshaped)
+        output_reshaped = F.relu(self.fc2(output_reshaped))
+        if self.use_dropout:
+            output_reshaped = self.dropout(output_reshaped)
+        frcnn_cls_pred_reshaped = self.frcnn_cls(output_reshaped)
+        frcnn_reg_pred_reshaped = self.frcnn_reg(output_reshaped)
+        # Reshape predictions back to original form: (batch_size, time_steps, output_dim)
+        frcnn_cls_pred = frcnn_cls_pred_reshaped.view(output.shape[0], output.shape[1], -1)
+        frcnn_reg_pred = frcnn_reg_pred_reshaped.view(output.shape[0], output.shape[1], -1)
+        decoder_output = self.decoder([roi_bboxes_out, frcnn_reg_pred, F.softmax(frcnn_cls_pred, dim=-1)])
+
+        rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
+        rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
+        # print(f"Network output:")
+        # print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        # print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        # print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
+        # print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
+        # print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
+        # print("---------------network------------------")
+        return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
+                "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
+
+    
+    def anchors_generation(self,):
+        """
+        Generating anchors boxes with different shapes centered on
+        each pixel.
+        :param config: config file with input data, anchor scales/ratios
+        :param train: anchors for training or inference
+        :return: base_anchors = (anchor_count * fm_h * fm_w, [y1, x1, y2, x2]
+        """
+        in_height, in_width = self.feature_map_shape
+        scales, ratios = self.rpn_cfg["anchor_scales"], self.rpn_cfg["anchor_ratios"]
+        num_scales, num_ratios = len(scales), len(ratios)
+        scale_tensor = torch.tensor(scales, dtype=torch.float32)
+        ratio_tensor = torch.tensor(ratios, dtype=torch.float32)
+        boxes_per_pixel = (num_scales + num_ratios - 1)
+        #
+        offset_h, offset_w = 0.5, 0.5
+        steps_h = 1.0 / in_height
+        steps_w = 1.0 / in_width
+
+        # Generate all center points for the anchor boxes
+        center_h = (torch.arange(in_height, dtype=torch.float32) + offset_h) * steps_h
+        center_w = (torch.arange(in_width, dtype=torch.float32) + offset_w) * steps_w
+        shift_y, shift_x = torch.meshgrid(center_h, center_w)
+        shift_y, shift_x = shift_y.reshape(-1), shift_x.reshape(-1)
+
+        # Generate "boxes_per_pixel" number of heights and widths that are later
+        # used to create anchor box corner coordinates xmin, xmax, ymin ymax
+        w = torch.cat((scale_tensor * torch.sqrt(ratio_tensor[0]), scales[0] * torch.sqrt(ratio_tensor[1:])),
+                    dim=-1) * in_height / in_width
+        h = torch.cat((scale_tensor / torch.sqrt(ratio_tensor[0]), scales[0] / torch.sqrt(ratio_tensor[1:])),
+                    dim=-1) * in_height / in_width
+
+        # Divide by 2 to get the half height and half width
+        #anchor_manipulation = torch.tile(torch.transpose(torch.stack([-w, -h, w, h]), 0), (in_height * in_width, 1)) / 2
+        anchor_manipulation = torch.stack([-w, -h, w, h]).t().repeat(in_height * in_width, 1) / 2
+
+        # Each center point will have `boxes_per_pixel` number of anchor boxes, so
+        # generate a grid of all anchor box centers with `boxes_per_pixel` repeats
+        out_grid = torch.repeat_interleave(torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1), boxes_per_pixel, dim=0)
+        output = out_grid + anchor_manipulation
+        # if train:
+        mask = ((output <= 0.0) | (output >= 1.0)).any(dim=-1, keepdim=True)
+        mask_expanded = mask.expand_as(output)
+        output[mask_expanded] = 0.0
+        # else:
+        #     output = torch.clamp(output, min=0.0, max=1.0)
+        return output
+

@@ -160,6 +160,11 @@ def find_default_configs(dataset, feature, model):
         #   model_cfg = data[model][dataset][feature]
       else:
         model_cfg = data[model]
+  elif model == "DAROD":
+    with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
+      config = json.load(file)
+    if dataset in config.keys():
+      model_cfg = config[dataset]
   else:
     with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
       data = json.load(file)
@@ -177,7 +182,7 @@ def find_default_configs(dataset, feature, model):
 
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD"]   # This will be changed when streamlit support selectbox with None as default option
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
