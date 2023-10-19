@@ -551,10 +551,17 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     valid_indices = torch.nonzero(valid_indices_cond).int()
     valid_max_indices = max_indices_each_column[valid_indices_cond]
     scatter_bbox_indices = torch.stack([valid_indices[..., 0], valid_max_indices], dim=1)
-    #print(pos_mask.shape, scatter_bbox_indices.shape, valid_indices.shape)
-    max_pos_mask = torch.zeros_like(pos_mask)
+
+    # work only on CPU
+    #max_pos_mask = torch.zeros_like(pos_mask)
+    #max_pos_mask[scatter_bbox_indices.t().numpy()] = torch.ones((len(valid_indices),), dtype=torch.bool) 
+    # work also on GPU 
+    max_pos_mask = torch.zeros_like(pos_mask).to('cpu')
+    scatter_bbox_indices = scatter_bbox_indices.to('cpu')
+    valid_indices = valid_indices.to('cpu')
     max_pos_mask[scatter_bbox_indices.t().numpy()] = torch.ones((len(valid_indices),), dtype=torch.bool)
-    #print(max_pos_mask.shape)
+    max_pos_mask = max_pos_mask.to(device)
+
     pos_mask = (pos_mask | max_pos_mask) & (torch.sum(anchors, dim=-1) != 0.0)
     pos_mask = randomly_select_xyz_mask(pos_mask, torch.tensor([total_pos_bboxes]), seed)  
     pos_count = torch.sum(pos_mask.long(), dim=-1)
@@ -568,8 +575,6 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     pos_labels = torch.where(pos_mask, torch.ones_like(pos_mask, dtype=torch.float32), torch.tensor(-1.0, dtype=torch.float32))
     neg_labels = neg_mask.float()
     bbox_labels = pos_labels + neg_labels
-    # print(f"max_indices_each_row: {max_indices_each_row.shape}")
-    # print(f"gt_boxes: {gt_boxes.shape}")
     gt_boxes_map = torch.gather(gt_boxes, 1, max_indices_each_row.unsqueeze(-1).expand(-1,-1,4))
     # Replace negative bboxes with zeros
     expanded_gt_boxes = torch.where(pos_mask.unsqueeze(-1), gt_boxes_map, torch.zeros_like(gt_boxes_map))
