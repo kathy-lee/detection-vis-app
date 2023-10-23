@@ -1553,7 +1553,7 @@ class CRUW(Dataset):
         # Load radar data
         try:
             data_id = index * self.stride
-            if self.model_type == 'RODNet':
+            if self.model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
                 if isinstance(chirp_id, int):
                     radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
                     for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
