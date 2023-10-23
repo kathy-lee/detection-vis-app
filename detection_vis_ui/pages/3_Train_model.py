@@ -144,34 +144,43 @@ def find_default_configs(dataset, feature, model):
   if model in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD"):
     with open(os.path.join('detection_vis_backend', 'networks', 'RECORD_model_config.json'), 'r') as file:
       data = json.load(file)
-      if model == "RECORD":
-        if len(feature) > 1:
-          st.error('RECORD network supports only single feature as input', icon="🚨")
-        if dataset in data[model].keys():
-          if feature[0] in data[model][dataset].keys():
-            model_cfg = data[model][dataset][feature[0]]
-          else:
-            model_cfg = data[model][dataset]
+    if model == "RECORD":
+      if len(feature) > 1:
+        st.error('RECORD network supports only single feature as input', icon="🚨")
+      if dataset in data[model].keys():
+        if feature[0] in data[model][dataset].keys():
+          model_cfg = data[model][dataset][feature[0]]
         else:
-          model_cfg = data[model]
-        # if dataset == "CRUW":
-        #   model_cfg = data[model][dataset]
-        # elif dataset == "CARRADA":
-        #   model_cfg = data[model][dataset][feature]
+          model_cfg = data[model][dataset]
       else:
         model_cfg = data[model]
+      # if dataset == "CRUW":
+      #   model_cfg = data[model][dataset]
+      # elif dataset == "CARRADA":
+      #   model_cfg = data[model][dataset][feature]
+    else:
+      model_cfg = data[model]
   elif model == "DAROD":
     with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
       config = json.load(file)
     if dataset in config.keys():
       model_cfg = config[dataset]
+  elif model in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+    with open(os.path.join('detection_vis_backend', 'networks', 'RODNet_model_config.json'), 'r') as file:
+      config = json.load(file)
+    model_cfg = config[model]
   else:
     with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
       data = json.load(file)
       model_cfg = data
-    
-  with open(os.path.join('detection_vis_backend', 'train', f'{model}_train_config.json'), 'r') as file:
-    data = json.load(file)
+  
+  if model in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+    with open(os.path.join('detection_vis_backend', 'train', 'RODNet_train_config.json'), 'r') as file:
+      data = json.load(file)
+    train_cfg = data
+  else:
+    with open(os.path.join('detection_vis_backend', 'train', f'{model}_train_config.json'), 'r') as file:
+      data = json.load(file)
     if 'default' in data.keys():
       train_cfg = data['default'].copy()  
       if dataset in data.keys():
@@ -182,7 +191,7 @@ def find_default_configs(dataset, feature, model):
 
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD"]   # This will be changed when streamlit support selectbox with None as default option
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
