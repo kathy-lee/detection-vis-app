@@ -191,7 +191,7 @@ def find_default_configs(dataset, feature, model):
 
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD"]   # This will be changed when streamlit support selectbox with None as default option
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
