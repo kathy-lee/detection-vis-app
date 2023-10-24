@@ -1,8 +1,70 @@
 {
-    "type": "CDCv2",
-    "in_channels": 4,
-    "n_class": 3,
-    "stacked_num": null,
-    "mnet_cfg": [4, 32],
-    "dcn": true
+    "RODNet_CDC":
+    {
+        "in_channels": 2,
+        "n_class": 3
+    },
+
+    "RODNet_HG":
+    {
+        "in_channels": 2,
+        "n_class": 3,
+        "stacked_num": 1
+    },
+
+    "RODNet_HGwI":
+    {
+        "in_channels": 2,
+        "n_class": 3,
+        "stacked_num": 1
+    },
+
+    "RODNet_CDCv2":
+    {
+        "in_channels": 4,
+        "n_class": 3,
+        "mnet_cfg": [4, 32],
+        "dcn": true
+    },
+
+    "RODNet_HGv2":
+    {
+        "in_channels": 4,
+        "n_class": 3,
+        "stacked_num": 1,
+        "mnet_cfg": [4, 32],
+        "dcn": false
+    }, 
+    
+    "RODNet_HGwIv2":
+    {
+        "in_channels": 4,
+        "n_class": 3,
+        "stacked_num": 1,
+        "mnet_cfg": [4, 32],
+        "dcn": false
+    }, 
+
+    "RadarFormer_hrformer2d":
+    {
+        "in_channels": 4,
+        "n_class": 3,
+        "stacked_num": 1,
+        "mnet_cfg": [4, 32],                        
+        "patch_size": 8, 
+        "hidden_size": 760, 
+        "channels_features": [1,2,3,4],
+        "receptive_field": [3,5,7,9],
+        "mlp_dim": 4800,
+        "num_layers": 12, 
+        "norm_layer": "batch",
+        "num_heads": 20,
+        "dcn": false
+    },
+
+    "RadarFormer_unetr_2d":
+    {}, 
+    
+    "RadarFormer_maxvit2":
+    {}
 }

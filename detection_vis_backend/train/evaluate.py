@@ -995,7 +995,7 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
         with torch.set_grad_enabled(False):
             confmap_pred = net(data)
 
-        if model_cfg['stacked_num'] is not None:
+        if 'stacked_num' in model_cfg:
             confmap_pred = confmap_pred[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
         else:
             confmap_pred = confmap_pred.cpu().detach().numpy()

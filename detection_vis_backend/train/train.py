@@ -30,18 +30,25 @@ from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
 
-collate_func = {
-    'FFTRadNet': FFTRadNet_collate,
-    'RODNet': default_collate,
-    'RECORD': default_collate,
-    'RECORDNoLstm': default_collate,
-    'RECORDNoLstmMulti': default_collate,
-    'MVRECORD': default_collate,
-    'RADDet': default_collate,
-    'DAROD': DAROD_collate
-}    
+  
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
+    collate_func = {
+        'FFTRadNet': FFTRadNet_collate,
+        'RODNet_CDC': default_collate,
+        'RODNet_CDCv2': default_collate,
+        'RODNet_HG': default_collate,
+        'RODNet_HGv2': default_collate,
+        'RODNet_HGwI': default_collate,
+        'RODNet_HGwIv2': default_collate,
+        'RadarFormer_hrformer2d': default_collate,
+        'RECORD': default_collate,
+        'RECORDNoLstm': default_collate,
+        'RECORDNoLstmMulti': default_collate,
+        'MVRECORD': default_collate,
+        'RADDet': default_collate,
+        'DAROD': DAROD_collate
+    }  
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
     if not use_original_split:
@@ -320,7 +327,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label_map = data[1].to(device).float()
                 if model_config['segmentation_head']:
                     seg_map_label = data[2].to(device).double()
-            elif model_type in ("RODNet", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
+            elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
                 if dataset_type == "CRUW":
                     inputs = data['radar_data'].to(device).float()
                     confmap_gt = data['anno']['confmaps'].to(device).float()
@@ -374,12 +381,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
                 writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
                 writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
-            elif model_type == "RODNet":
+            elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
                 criterion = nn.BCELoss()
-                if model_config['stacked_num'] is not None:
+                if 'stacked_num' in model_config:
+                    loss = 0.0
                     for i in range(model_config['stacked_num']):
                         loss_cur = criterion(outputs[i], confmap_gt)
-                        loss += loss_cur
+                        loss += loss_cur   
                 else:
                     loss = criterion(outputs, confmap_gt)
             elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
@@ -467,7 +475,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
             eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), losses_params=train_config['losses'], device=device)
-        elif model_type == "RODNet":
+        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
             eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
             eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
@@ -518,7 +526,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     print(f'=========== Evaluation of Test data ===========')
     if model_type == "FFTRadNet":
         eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
-    elif model_type == "RODNet":
+    elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
         eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
     elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
         eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
