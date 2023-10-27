@@ -27,7 +27,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, DisplayHMI, display_inference
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
 
   
@@ -343,7 +343,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
                 #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
             elif model_type == "RADDet":
-                inputs = data['radar_data'].to(device).float().permute(0, 3, 1, 2)
+                inputs = data['radar'].to(device).float()
                 label = data['label'].to(device).float()
                 boxes = data['boxes'].to(device).float()
                 #print(inputs.shape, label.shape, boxes.shape)
@@ -544,6 +544,80 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
     df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
+
+
+def infer(model, sample_id, checkpoint_id):
+    model_rootdir = os.getenv('MODEL_ROOTDIR')
+    parameter_path = os.path.join(model_rootdir, model, "train_info.txt")
+    with open(parameter_path, 'r') as f:
+        parameters = json.load(f)
+    if not parameters:
+        raise ValueError("Parameters are empty")
+
+    # Get input data (For now could only handle one datafile case)
+    dataset_factory = DatasetFactory()
+    dataset_inst = dataset_factory.get_instance(parameters["datafiles"][0]["parse"], parameters["datafiles"][0]["id"])
+    dataset_inst.parse(parameters["datafiles"][0]["id"], parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
+    dataset_type = parameters["datafiles"][0]["parse"]
+    data = dataset_inst[sample_id]
+
+    # Initialize the model
+    model_config = parameters["model_config"]
+    network_factory = NetworkFactory()
+    model_type = model_config['type']
+    model_config.pop('type', None)
+    net = network_factory.get_instance(model_type, model_config)
+
+    # set device
+    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
+
+    # Load the model checkpoint
+    model_rootdir = os.getenv('MODEL_ROOTDIR')
+    model_path = os.path.join(model_rootdir, model)
+    checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
+    dict = torch.load(os.path.join(model_path, checkpoint), map_location=device)
+    net.load_state_dict(dict['net_state_dict'])  
+
+    # Prediction
+    net.eval()
+    with torch.set_grad_enabled(False):
+        if model_type == "FFTRadNet":
+            # input_data: [radar_FFT, segmap,out_label,box_labels,image]
+            input = torch.tensor(data[0]).unsqueeze(0).to(device).float()
+            output = net(input)
+            pred_image = DisplayHMI(data[4], data[0], output, data[3])
+        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+            input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
+            output = net(input)
+            if 'stacked_num' in model_config:
+                confmap_pred = output[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
+            else:
+                confmap_pred = output.cpu().detach().numpy()
+            pred_image = display_inference(data['image_paths'][0], confmap_pred, data['anno']['obj_infos'])
+        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
+            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            output = net(input)
+            confmap_pred = output[0].cpu().detach().numpy()
+            pred_image = display_inference(data['image_paths'][0], confmap_pred, data['anno']['obj_infos'])
+        elif model_type == "RECORD" and dataset_type == "CARRADA":
+            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            output = net(input)
+            pred_image = display_inference(data['image_path'], output, data['label'], data['boxes'])
+        elif model_type == "MVRECORD":
+            input = (torch.tensor(data['rd_matrix']).unsqueeze(0).to(device).float(), 
+                     torch.tensor(data['ra_matrix']).unsqueeze(0).to(device).float(), 
+                     torch.tensor(data['ad_matrix']).unsqueeze(0).to(device).float())
+            output = net(input)
+            pred_image = display_inference(data['image_path'], output, data['label'], data['boxes'])
+        elif model_type == "RADDet" or model_type == "DAROD":
+            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            output = net(input)
+            pred_image = display_inference(data['image_path'], output, data['label'], data['boxes'])
+        else:
+            raise ValueError
+
+    return pred_image
 
 
 # class TrainModelFlow(FlowSpec):
