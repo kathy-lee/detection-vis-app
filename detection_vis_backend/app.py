@@ -25,9 +25,7 @@ from pathlib import Path
 from data import crud, schemas
 from data.database import SessionLocal
 from detection_vis_backend.datasets.dataset import DatasetFactory
-from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import DisplayHMI
-from detection_vis_backend.train.train import train
+from detection_vis_backend.train.train import train, infer
 
 
 
@@ -350,58 +348,12 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int =
         # run = Flow(flow_name)[run_id]
         # parameters = run.data
 
-        model_rootdir = os.getenv('MODEL_ROOTDIR')
-        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
-        with open(parameter_path, 'r') as f:
-            parameters = json.load(f)
-        if not parameters:
-            raise ValueError("Parameters are empty")
-
-        # Get input data (For now could only handle one datafile case)
-        dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(parameters["datafiles"][0]["parse"], parameters["datafiles"][0]["id"])
-        dataset_inst.parse(parameters["datafiles"][0]["id"], parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
-        input_data = dataset_inst[sample_id]
-
-        # Initialize the model
-        model_config = parameters["model_config"]
-        network_factory = NetworkFactory()
-        model_type = model_config['type']
-        model_config.pop('type', None)
-        net = network_factory.get_instance(model_type, model_config)
-
-        # Load the model checkpoint
-        model_rootdir = os.getenv('MODEL_ROOTDIR')
-        model_path = os.path.join(model_rootdir, model.name)
-        checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
-        dict = torch.load(os.path.join(model_path, checkpoint))
-        net.load_state_dict(dict['net_state_dict'])  
-
-        # Prediction
-        net.eval()
-        # input_data: [radar_FFT, segmap,out_label,box_labels,image]
-        input = torch.tensor(input_data[0]).permute(2,0,1).unsqueeze(0)
-        # torch.tensor(data[0]).permute(2,0,1).to('cuda').float().unsqueeze(0)
-
-        with torch.set_grad_enabled(False):
-            output = net(input)
-        
-        # Display and evaluate the output
-        obj_labels = input_data[3]
-        # Plan to replace DisplayHMI with a new method: 
-        # GetBoxes(output, obj_labels)
-        # output: 2 lists of boxes-- pred_boxes=[(u1,v1,u2,v2),...]; label_boxes is the same
-        print(f"network output shape: {output['Detection'].shape}, {output['Segmentation'].shape}")
-        print(f"input image and rd shape: {input_data[4].shape}, {input_data[0].shape}")
-        hmi = DisplayHMI(input_data[4], input_data[0], output, obj_labels)
-        # pred_obj = output['Detection']
-        # obj_pred = np.asarray(decode(pred_obj,0.05))  
-        # TP,FP,FN = GetDetMetrics(obj_pred,obj_labels,threshold=0.2,range_min=5,range_max=100)
+        pred_with_gt = infer(model.name, sample_id, checkpoint_id)        
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
-    return {"prediction": hmi.tolist()} #, "eval": [TP,FP,FN]
+    return {"prediction": pred_with_gt.tolist()} #, "eval": [TP,FP,FN]
 
 
 @app.get("/predict_newdata/{model_id}")
