@@ -677,6 +677,7 @@ class RADIal(Dataset):
         # image = np.asarray(Image.open(img_name))
         image = self.get_image(index)
 
+        radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
         return radar_FFT, segmap,out_label,box_labels,image
     
     def set_features(self, features):
@@ -1827,18 +1828,7 @@ class CARRADA(Dataset):
                     feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
             # Apply normalization
             feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-            # Get ground truth boxes and labels
-            gt_boxes = []
-            gt_labels = []
-            if self.annos[self.seq_name][init_frame_name]:
-                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                    #obj_anno['range_doppler']['dense']
-                    gt_boxes.append(obj_anno[featurestr]['box'])
-                    gt_labels.append(obj_anno[featurestr]['label'])
-            gt_boxes = np.array(gt_boxes)
-            gt_labels = np.array(gt_labels)
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask'], 'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes}
+            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
         elif len(self.features) > 1:
             rd_matrices = list()
             ra_matrices = list()
@@ -1926,6 +1916,19 @@ class CARRADA(Dataset):
             frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
                     'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
                     'ad_matrix': ad_frame['matrix']}
+            
+        # Get ground truth boxes and labels
+        gt_boxes = []
+        gt_labels = []
+        if self.annos[self.seq_name][init_frame_name]:
+            for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                #obj_anno['range_doppler']['dense']
+                gt_boxes.append(obj_anno[featurestr]['box'])
+                gt_labels.append(obj_anno[featurestr]['label'])
+        gt_boxes = np.array(gt_boxes)
+        gt_labels = np.array(gt_labels)
+        camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+        frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
         return frame
 
 
@@ -2139,7 +2142,10 @@ class RADDetDataset(Dataset):
             gt_boxes = np.array(gt_boxes)
             feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
             feature_data = np.expand_dims(feature_data, axis=0)  
-        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes}
+        
+        if self.model_type == "RADDet":
+            feature_data = np.transpose(feature_data, (0, 3, 1, 2))
+        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
     
     def encodeToLabels(self, gt_instances):
         """ Transfer ground truth instances into Detection Head format """
