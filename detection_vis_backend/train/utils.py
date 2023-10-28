@@ -8,6 +8,8 @@ import logging
 import cv2
 import polarTransform
 import re
+import json
+import math
 
 
 from shapely.geometry import Polygon
@@ -22,7 +24,7 @@ def FFTRadNet_collate(batch):
     encoded_label = []
 
     for radar_FFT, segmap,out_label,box_labels,image in batch:
-        FFTs.append(torch.tensor(radar_FFT).permute(2,0,1))
+        FFTs.append(torch.tensor(radar_FFT))
         segmaps.append(torch.tensor(segmap))
         encoded_label.append(torch.tensor(out_label))
         images.append(torch.tensor(image))
@@ -208,8 +210,6 @@ def pixor_loss(batch_predictions, batch_labels,param):
     return classification_loss,regression_loss
 
 
-
-
 def RA_to_cartesian_box(data):
     L = 4
     W = 1.8
@@ -302,58 +302,155 @@ def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_thr
     return final_point_cloud_predictions
 
 
-def DisplayHMI(image, input, model_outputs, obj_labels):
+def pol2cart_ramap(rho, phi):
+    """
+    Transform from polar to cart under RAMap coordinates
+    :param rho: distance to origin
+    :param phi: angle (rad) under RAMap coordinates
+    :return: x, y
+    """
+    x = rho * np.sin(phi)
+    y = rho * np.cos(phi)
+    return x, y
 
-    # Model outputs
-    pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
-    out_seg = torch.sigmoid(model_outputs['Segmentation']).detach().cpu().numpy().copy()[0,0]
-    print(f"pred_obj before decode: {pred_obj.shape}")
-    # Decode the output detection map
-    pred_obj = decode(pred_obj,0.05)
-    print(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
-    pred_obj = np.asarray(pred_obj)
-    print(f"pred_obj -> np.asarry: {pred_obj.shape}")
-    print(pred_obj[0,0:3])
 
-    # process prediction: polar to cartesian, NMS...
-    if(len(pred_obj)>0):
-        pred_obj = process_predictions_FFT(pred_obj,confidence_threshold=0.2)
+def get_ols_btw_objects(obj1, obj2):
+    classes = ["pedestrian", "cyclist", "car"] 
+    object_sizes = {
+        "pedestrian": 0.5,
+        "cyclist": 1.0,
+        "car": 3.0
+    }
 
-    ## FFT
-    FFT = np.abs(input[...,:16]+input[...,16:]*1j).mean(axis=2)
-    PowerSpectrum = np.log10(FFT)
-    # rescale
-    PowerSpectrum = (PowerSpectrum -PowerSpectrum.min())/(PowerSpectrum.max()-PowerSpectrum.min())*255
-    PowerSpectrum = cv2.cvtColor(PowerSpectrum.astype('uint8'),cv2.COLOR_GRAY2BGR)
-    ## Image
-    for box in pred_obj:
-        box = box[1:]
-        u1,v1 = worldToImage(-box[2],box[1],0)
-        u2,v2 = worldToImage(-box[0],box[1],1.6)
+    if obj1['class_id'] != obj2['class_id']:
+        print('Error: Computing OLS between different classes!')
+        raise TypeError("OLS can only be compute between objects with same class.  ")
+    if obj1['score'] < obj2['score']:
+        raise TypeError("Confidence score of obj1 should not be smaller than obj2. "
+                        "obj1['score'] = %s, obj2['score'] = %s" % (obj1['score'], obj2['score']))
 
-        u1 = int(u1/2)
-        v1 = int(v1/2)
-        u2 = int(u2/2)
-        v2 = int(v2/2)
+    classid = obj1['class_id']
+    class_str = get_class_name(classid, classes)
+    rng1 = obj1['range']
+    agl1 = obj1['angle']
+    rng2 = obj2['range']
+    agl2 = obj2['angle']
+    x1, y1 = pol2cart_ramap(rng1, agl1)
+    x2, y2 = pol2cart_ramap(rng2, agl2)
+    dx = x1 - x2
+    dy = y1 - y2
+    s_square = x1 ** 2 + y1 ** 2
+    kappa = object_sizes[class_str] / 100  # TODO: tune kappa
+    e = (dx ** 2 + dy ** 2) / 2 / (s_square * kappa)
+    ols = math.exp(-e)
+    return ols
 
-        image = cv2.rectangle(image, (u1,v1), (u2,v2), (0, 0, 255), 3)
-    
-    for box in obj_labels:
-        box = box[6:]
-        box = [int(x/2) for x in box]
-        image = cv2.rectangle(image, (box[0],box[1]), (box[2],box[3]), (255, 0, 0), 2)
 
-    RA_cartesian,_=polarTransform.convertToCartesianImage(np.moveaxis(out_seg,0,1),useMultiThreading=True,
-        initialAngle=0, finalAngle=np.pi,order=0,hasColor=False)
-    # Make a crop on the angle axis
-    RA_cartesian = RA_cartesian[:,256-100:256+100]
-    
-    RA_cartesian = np.asarray((RA_cartesian*255).astype('uint8'))
-    RA_cartesian = cv2.cvtColor(RA_cartesian, cv2.COLOR_GRAY2BGR)
-    RA_cartesian = cv2.resize(RA_cartesian,dsize=(400,512))
-    RA_cartesian=cv2.flip(RA_cartesian,flipCode=-1)
-    return np.hstack((PowerSpectrum,image[:512],RA_cartesian))
-    
+def get_class_name(class_id, classes):
+    n_class = len(classes)
+    if 0 <= class_id < n_class:
+        class_name = classes[class_id]
+    elif class_id == -1000:
+        class_name = '__background'
+    else:
+        raise ValueError("Class ID is not defined")
+    return class_name
+
+def lnms(obj_dicts_in_class, train_cfg):
+    """
+    Location-based NMS
+    :param obj_dicts_in_class:
+    :param config_dict:
+    :return:
+    """
+    detect_mat = - np.ones((train_cfg['max_dets'], 4))
+    cur_det_id = 0
+    # sort peaks by confidence score
+    inds = np.argsort([-d['score'] for d in obj_dicts_in_class], kind='mergesort')
+    dts = [obj_dicts_in_class[i] for i in inds]
+    while len(dts) != 0:
+        if cur_det_id >= train_cfg['max_dets']:
+            break
+        p_star = dts[0]
+        detect_mat[cur_det_id, 0] = p_star['class_id']
+        detect_mat[cur_det_id, 1] = p_star['range_id']
+        detect_mat[cur_det_id, 2] = p_star['angle_id']
+        detect_mat[cur_det_id, 3] = p_star['score']
+        cur_det_id += 1
+        del dts[0]
+        for pid, pi in enumerate(dts):
+            ols = get_ols_btw_objects(p_star, pi)
+            if ols > train_cfg['ols_thres']:
+                del dts[pid]
+
+    return detect_mat
+
+
+def detect_peaks(image, threshold=0.3):
+    peaks_row = []
+    peaks_col = []
+    height, width = image.shape
+    for h in range(1, height - 1):
+        for w in range(2, width - 2):
+            area = image[h - 1:h + 2, w - 2:w + 3]
+            center = image[h, w]
+            flag = np.where(area >= center)
+            if flag[0].shape[0] == 1 and center > threshold:
+                peaks_row.append(h)
+                peaks_col.append(w)
+
+    return peaks_row, peaks_col
+
+
+def post_process_single_frame(confmaps, train_cfg, n_class, rng_grid, agl_grid):
+    """
+    Post-processing for RODNet
+    :param confmaps: predicted confidence map [B, n_class, win_size, ramap_r, ramap_a]
+    :param search_size: search other detections within this window (resolution of our system)
+    :param peak_thres: peak threshold
+    :return: [B, win_size, max_dets, 4]
+    """
+    max_dets = train_cfg['max_dets']
+    peak_thres = train_cfg['peak_thres']
+
+    class_size, height, width = confmaps.shape
+
+    if class_size != n_class:
+        raise TypeError("Wrong class number setting. ")
+
+    res_final = - np.ones((max_dets, 4))
+
+    detect_mat = []
+    for c in range(class_size):
+        obj_dicts_in_class = []
+        confmap = confmaps[c, :, :]
+        rowids, colids = detect_peaks(confmap, threshold=peak_thres)
+
+        for ridx, aidx in zip(rowids, colids):
+            rng = rng_grid[ridx]
+            agl = agl_grid[aidx]
+            conf = confmap[ridx, aidx]
+            obj_dict = dict(
+                frame_id=None,
+                range=rng,
+                angle=agl,
+                range_id=ridx,
+                angle_id=aidx,
+                class_id=c,
+                score=conf,
+            )
+            obj_dicts_in_class.append(obj_dict)
+
+        detect_mat_in_class = lnms(obj_dicts_in_class, train_cfg)
+        detect_mat.append(detect_mat_in_class)
+
+    detect_mat = np.array(detect_mat)
+    detect_mat = np.reshape(detect_mat, (class_size * max_dets, 4))
+    detect_mat = detect_mat[detect_mat[:, 3].argsort(kind='mergesort')[::-1]]
+    res_final[:, :] = detect_mat[:max_dets]
+
+    return res_final
+
 
 def worldToImage(x,y,z):
     # Camera parameters
