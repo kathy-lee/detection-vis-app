@@ -39,9 +39,8 @@ st.subheader(f"Model: {model_chosen}")
 model_path = os.path.join(model_rootdir, model_chosen)
 
 # in default choose the last epoch checkpoint model
-files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f))]
-checkpoint_count = len(files) - 5
-# st.write(checkpoint_count) # for debug
+files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f)) and f.endswith('.pth')]
+checkpoint_count = len(files)
 checkpoint_id = st.selectbox("Choose a checkpoint(In default from the last epoch)", list(range(1,checkpoint_count+1)), index=checkpoint_count-1) - 1
 st.write(checkpoint_id)
 
