@@ -85,22 +85,22 @@ for idx,tab in enumerate(tabs):
       test_eval = pd.read_csv(os.path.join(model_path, "test_eval.csv"))
       st.table(test_eval)
 
-# Get sample split info of the chosen model
-with open(os.path.join(model_path, "samples_split.txt"), 'r') as f:
-  lines = f.readlines()
-sample_ids = {}
-for line in lines:
-  if "TRAIN_SAMPLE_IDS:" in line:
-    sample_ids["Train data"] = list(map(int, line.replace("TRAIN_SAMPLE_IDS: ", "").strip().split(',')))
-  elif "VAL_SAMPLE_IDS:" in line:
-    sample_ids["Val data"] = list(map(int, line.replace("VAL_SAMPLE_IDS: ", "").strip().split(',')))
-  elif "TEST_SAMPLE_IDS:" in line:
-    sample_ids["Test data"] = list(map(int, line.replace("TEST_SAMPLE_IDS: ", "").strip().split(',')))  
+# # Get sample split info of the chosen model
+# with open(os.path.join(model_path, "samples_split.txt"), 'r') as f:
+#   lines = f.readlines()
+# sample_ids = {}
+# for line in lines:
+#   if "TRAIN_SAMPLE_IDS:" in line:
+#     sample_ids["Train data"] = list(map(int, line.replace("TRAIN_SAMPLE_IDS: ", "").strip().split(',')))
+#   elif "VAL_SAMPLE_IDS:" in line:
+#     sample_ids["Val data"] = list(map(int, line.replace("VAL_SAMPLE_IDS: ", "").strip().split(',')))
+#   elif "TEST_SAMPLE_IDS:" in line:
+#     sample_ids["Test data"] = list(map(int, line.replace("TEST_SAMPLE_IDS: ", "").strip().split(',')))  
 
 
 @st.cache_data
-def predict(model_id, checkpoint_id, sample_id):
-  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id}
+def predict(model_id, checkpoint_id, sample_id, file_id):
+  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id}
   response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
   res = response.json()
   return res["prediction"]
@@ -119,13 +119,20 @@ if radio_select is radio_options[-1]:
     image = np.array(im)
     st.image(image)
 else:
+  radio_dict = {"Train data": "train", "Val data": "val", "Test data": "test"}
+  split_type = radio_dict[radio_select]
   frame_begin = 0
-  frame_end = len(sample_ids[radio_select])
+  file_path = os.path.join(model_path, f"{split_type}_samples_ids.csv")
+  samples_info = pd.read_csv(file_path, index_col=0).to_numpy()
+  frame_end = len(samples_info)
   frame_id = st.slider('Choose a data frame', frame_begin, frame_end, frame_begin)
-  st.write(f"No. {sample_ids[radio_select][frame_id]} sample of the whole dataset")
-  res = predict(model_id, checkpoint_id, sample_ids[radio_select][frame_id])
+  if samples_info.shape[1] == 2:
+    original_sample_id = samples_info[frame_id, 0]
+    st.write(f"Original from: No. {original_sample_id} sample of the whole dataset")
+    file_id = model_paras["datafiles"][0]["id"]
+  else:
+    file_name, file_id, original_sample_id = samples_info[frame_id,1], samples_info[frame_id,2], samples_info[frame_id,3]
+    st.write(f"Original from: No. {original_sample_id} sample of datafile {file_name}")
+  res = predict(model_id, checkpoint_id, original_sample_id, file_id)
   pred_image = np.array(res)
   st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
-
-
-
