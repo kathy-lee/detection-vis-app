@@ -29,7 +29,7 @@ if 'datafiles_chosen' not in st.session_state or 'features_chosen' not in st.ses
 st.write("You have chosen the following data file(s):")
 s = ''
 for i in st.session_state.datafiles_chosen:
-  s += "- " + i["name"] + "\n"
+  s += "- " + i["name"] + "\tfrom\t" + i["parse"] + "\n"
 st.markdown(s)
 
 edit_data_action = st.button("Edit data", key="edit_data_btn")
@@ -73,7 +73,8 @@ if st.session_state.split_mode == 'random':
   st.write(f"Split ratios:   Train: {split_value[0]:.2f}, Validation: {split_value[1]-split_value[0]:.2f}, Test: {1.0-split_value[1]:.2f}")
   st.session_state.split_ratios = [split_value[0], split_value[1]-split_value[0], 1.0-split_value[1]]
 elif st.session_state.split_mode == 'sequence':
-  if 'datafiles_split' not in st.session_state:
+  if 'datafiles_split' not in st.session_state or \
+    set([item['id'] for sublist in st.session_state.datafiles_split.values() for item in sublist]) != set([item['id'] for item in st.session_state.datafiles_chosen]):
     st.session_state.datafiles_split = {key: [] for key in ["train", "val", "test"]}
   splits = ["train", "val", "test"]
   for f in st.session_state.datafiles_chosen:
@@ -203,7 +204,7 @@ if train_mode == train_modes[0]:
     config_editor(model_configs, train_configs)
 
     st.session_state.model_configs["class"] = model
-
+    
     if st.session_state.split_mode == 'sequence':
       st.session_state.train_configs["dataloader"]["splitmode"] = "sequence"
       st.session_state.train_configs["dataloader"]["split_sequence"] = st.session_state.datafiles_split
