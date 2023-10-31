@@ -2097,7 +2097,8 @@ class RADDetDataset(Dataset):
             # decode ground truth boxes to YOLO format
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
-        else:
+            feature_data = np.transpose(feature_data, (0, 3, 1, 2))
+        elif self.model_type == "DAROD":
             if self.features == ["RD"]:
                 feature_data = self.get_RD(index)
             elif self.features == ["RA"]:
@@ -2109,7 +2110,6 @@ class RADDetDataset(Dataset):
             gt_boxes = []
             gt_labels = []
             for (box, class_) in zip(boxes, classes):
-
                 yc, xc, h, w = box[0], box[2], box[3], box[5]
                 y1, y2, x1, x2 = int(yc - h / 2), int(yc + h / 2), int(xc - w / 2), int(xc + w / 2)
                 if x1 < 0:
@@ -2142,9 +2142,8 @@ class RADDetDataset(Dataset):
             gt_boxes = np.array(gt_boxes)
             feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
             feature_data = np.expand_dims(feature_data, axis=0)  
-        
-        if self.model_type == "RADDet":
-            feature_data = np.transpose(feature_data, (0, 3, 1, 2))
+        else:
+            raise ValueError("Model type not supported")    
         return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
     
     def encodeToLabels(self, gt_instances):
