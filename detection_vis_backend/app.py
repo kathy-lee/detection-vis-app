@@ -336,7 +336,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get para infos
         model = crud.get_model(db, model_id)
@@ -348,7 +348,7 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, skip: int =
         # run = Flow(flow_name)[run_id]
         # parameters = run.data
 
-        pred_with_gt = infer(model.name, sample_id, checkpoint_id)        
+        pred_with_gt = infer(model.name, checkpoint_id, sample_id, file_id)        
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
