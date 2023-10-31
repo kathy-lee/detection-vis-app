@@ -252,12 +252,9 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 #     return query_items   
 
 @app.post("/train")
-async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, use_original_split: bool = False, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try: 
-        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, use_original_split)
-        # with open('exp_info.txt', 'r') as f:
-        #     exp_name = f.read()
-
+        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
         model_meta = schemas.MLModelCreate(name=exp_name,description="info")
         crud.add_model(db=db, mlmodel=model_meta)
     except Exception as e:

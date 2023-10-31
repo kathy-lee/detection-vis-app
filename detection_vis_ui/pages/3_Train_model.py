@@ -50,7 +50,7 @@ if edit_feature_action:
 dataset_name = st.session_state.datafiles_chosen[0]["parse"]
 if len(st.session_state.datafiles_chosen) > 1:
   if all(f["parse"] == dataset_name for f in st.session_state.datafiles_chosen):
-    if dataset_name in ("RADIal", "CARRADA", "RADDet_dataset"):
+    if dataset_name in ("RADIal", "CARRADA", "RADDetDataset"):
       split_mode = st.radio("Select the data split way:", ["sequence", "random", "original"], horizontal=True, key=f"radio_splitmode")
       st.write("Original mode is the default split which the dataset provides.")
     else:
@@ -59,7 +59,7 @@ if len(st.session_state.datafiles_chosen) > 1:
     st.info("Train with files from different datasets is not supported currently.")
     st.stop()
 else:
-  if dataset_name in ("RADIal", "CARRADA", "RADDet_dataset"):
+  if dataset_name in ("RADIal", "CARRADA", "RADDetDataset"):
     split_mode = st.radio("Select the data split way:", ["random", "original"], horizontal=True, key=f"radio_splitmode")
   else:
     split_mode = "random"
@@ -231,8 +231,7 @@ if train_mode == train_modes[0]:
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
                   "features_chosen": st.session_state.features_chosen, 
                   "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs,
-                  "use_original_split": st.session_state.split_mode == "original"}
+                  "train_configs": st.session_state.train_configs}
         response = requests.post(f"http://{backend_service}:8001/train", json=params)
       if response.status_code != 200:
         st.info("An error occurred in training.")
@@ -290,8 +289,7 @@ if train_mode == train_modes[1]:
         params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
                   "features_chosen": st.session_state.features_chosen, 
                   "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs,
-                  "use_original_split": st.session_state.split_mode == "original"}
+                  "train_configs": st.session_state.train_configs}
         response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
       if response.status_code != 200:
         st.info("An error occurred in training.")
