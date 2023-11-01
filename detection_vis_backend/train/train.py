@@ -116,22 +116,29 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             n_train, n_val = int(split[0] * n_samples), int(split[1] * n_samples)
             n_test = n_samples - n_train - n_val
             train_dataset, val_dataset, test_dataset = random_split(dataset, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(train_config['seed']))
+            train_ids = train_dataset.indices
+            val_ids = val_dataset.indices
+            test_ids = test_dataset.indices
+            
             if skip_empty_label:
                 print(f"Before filtering samples with empty annotations: train: {len(train_dataset)}, val: {len(val_dataset)}, test: {len(test_dataset)}")
-            train_ids = list(set(train_dataset.indices) & set(valid_ids))
-            val_ids = list(set(val_dataset.indices) & set(valid_ids))
-            test_ids = list(set(test_dataset.indices) & set(valid_ids))
-            # Extract dataset with valid(non-empty) labels
-            datasets['train'] = Subset(train_dataset, train_ids)
-            datasets['val'] = Subset(val_dataset, val_ids)
-            datasets['test'] = Subset(test_dataset, test_ids)
+                train_ids = [id for id in train_ids if id in valid_ids]
+                val_ids = [id for id in val_ids if id in valid_ids]
+                test_ids = [id for id in test_ids if id in valid_ids]
+                datasets['train'] = Subset(train_dataset, train_ids)
+                datasets['val'] = Subset(val_dataset, val_ids)
+                datasets['test'] = Subset(test_dataset, test_ids)
+                print(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}") 
+            else:
+                datasets['train'] = train_dataset
+                datasets['val'] = val_dataset
+                datasets['test'] = test_dataset
+
             split_samples_info['train'] = [samples_info[id] for id in train_ids]
             split_samples_info['val'] = [samples_info[id] for id in val_ids]
-            split_samples_info['test'] = [samples_info[id] for id in test_ids]
-            if skip_empty_label:
-                print(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}")    
+            split_samples_info['test'] = [samples_info[id] for id in test_ids]           
         else:
-            ValueError("Split type not supported. Please choose 'sequence' or 'random'.")        
+            ValueError("Split type not supported. Please choose following: 'sequence', 'random', 'original(some of the datasets has a built-in split).")        
     else:
         if dataset_type == "RADIal":
             # RADIal dataset is partly labeled
@@ -273,292 +280,292 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     with open(train_info_path, 'w') as f:
         json.dump({"datafiles": datafiles, "features": features, "model_config": model_config, "train_config": train_config}, f)
 
-    # # save the evaluation of val dataset and test dataset
-    # val_eval_path = os.path.join(output_dir, "val_eval.csv")
-    # test_eval_path = os.path.join(output_dir, "test_eval.csv")
-    # df_val_eval = pd.DataFrame(columns=['Epoch', 'loss', 'mAP', 'mAR', 'mIoU'])
+    # save the evaluation of val dataset and test dataset
+    val_eval_path = os.path.join(output_dir, "val_eval.csv")
+    test_eval_path = os.path.join(output_dir, "test_eval.csv")
+    df_val_eval = pd.DataFrame(columns=['Epoch', 'loss', 'mAP', 'mAR', 'mIoU'])
 
-    # # set device
-    # device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    # #device = torch.device('cpu')
+    # set device
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cpu')
     
-    # network_factory = NetworkFactory()
-    # model_type = model_config['class']
-    # model_config = model_config.copy()
-    # model_config.pop('class', None)
-    # print(model_type)
-    # print(model_config)
-    # net = network_factory.get_instance(model_type, model_config)
-    # print('network created')
-    # net.to(device)
+    network_factory = NetworkFactory()
+    model_type = model_config['class']
+    model_config = model_config.copy()
+    model_config.pop('class', None)
+    print(model_type)
+    print(model_config)
+    net = network_factory.get_instance(model_type, model_config)
+    print('network created')
+    net.to(device)
 
-    # # Optimizer
-    # lr = float(train_config['optimizer']['lr'])
-    # gamma = float(train_config['lr_scheduler']['gamma'])
-    # optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
-    # if train_config['lr_scheduler']['type'] == 'step':
-    #     step_size = int(train_config['lr_scheduler']['step_size'])
-    #     scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-    # elif train_config['lr_scheduler']['type'] == 'exp':
-    #     scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
-    # else:
-    #     raise ValueError
-    # num_epochs=int(train_config['num_epochs'])
+    # Optimizer
+    lr = float(train_config['optimizer']['lr'])
+    gamma = float(train_config['lr_scheduler']['gamma'])
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
+    if train_config['lr_scheduler']['type'] == 'step':
+        step_size = int(train_config['lr_scheduler']['step_size'])
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    elif train_config['lr_scheduler']['type'] == 'exp':
+        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    else:
+        raise ValueError
+    num_epochs=int(train_config['num_epochs'])
 
-    # print('===========  Optimizer  ==================:')
-    # print('      LR:', lr)
-    # print('      num_epochs:', num_epochs)
-    # print('')
+    print('===========  Optimizer  ==================:')
+    print('      LR:', lr)
+    print('      num_epochs:', num_epochs)
+    print('')
 
-    # # Train
-    # startEpoch = 0
-    # global_step = 0
-    # history = {'train_loss':[],'val_loss':[],'lr':[],'mAP':[],'mAR':[],'mIoU':[]}
-    # best_mAP = 0
+    # Train
+    startEpoch = 0
+    global_step = 0
+    history = {'train_loss':[],'val_loss':[],'lr':[],'mAP':[],'mAR':[],'mIoU':[]}
+    best_mAP = 0
 
-    # if pretrained:
-    #     print('===========  Resume training  ==================:')
-    #     dict = torch.load(pretrained)
-    #     net.load_state_dict(dict['net_state_dict'])
-    #     optimizer.load_state_dict(dict['optimizer'])
-    #     scheduler.load_state_dict(dict['scheduler'])
-    #     startEpoch = dict['epoch']+1
-    #     history = dict['history']
-    #     global_step = dict['global_step']
-    #     print('       ... Start at epoch:',startEpoch)
+    if pretrained:
+        print('===========  Resume training  ==================:')
+        dict = torch.load(pretrained)
+        net.load_state_dict(dict['net_state_dict'])
+        optimizer.load_state_dict(dict['optimizer'])
+        scheduler.load_state_dict(dict['scheduler'])
+        startEpoch = dict['epoch']+1
+        history = dict['history']
+        global_step = dict['global_step']
+        print('       ... Start at epoch:',startEpoch)
 
 
-    # for epoch in range(startEpoch,num_epochs):
-    #     kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
-    #     print(f'Epoch {epoch+1}/{num_epochs}')
-    #     ###################
-    #     ## Training loop ##
-    #     ###################
-    #     net.train()
-    #     running_loss = 0.0
+    for epoch in range(startEpoch,num_epochs):
+        kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
+        print(f'Epoch {epoch+1}/{num_epochs}')
+        ###################
+        ## Training loop ##
+        ###################
+        net.train()
+        running_loss = 0.0
 
-    #     for i, data in enumerate(train_loader):
-    #         if model_type == "FFTRadNet":
-    #             inputs = data[0].to(device).float()
-    #             label_map = data[1].to(device).float()
-    #             if model_config['segmentation_head']:
-    #                 seg_map_label = data[2].to(device).double()
-    #         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-    #             if dataset_type == "CRUW":
-    #                 inputs = data['radar_data'].to(device).float()
-    #                 confmap_gt = data['anno']['confmaps'].to(device).float()
-    #                 # print(f"###input:{inputs.shape}")
-    #                 # print(f"###confmap:{confmap_gt.shape}")
-    #             elif dataset_type == "CARRADA":
-    #                 inputs = data['radar'].to(device).float()
-    #                 label = data['mask'].to(device).float()
-    #                 #print(f"###input:{inputs.shape}")
-    #                 #print(f"###label:{label.shape}")
-    #         elif model_type == "MVRECORD":
-    #             inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
-    #             label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
-    #             #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
-    #         elif model_type == "RADDet":
-    #             inputs = data['radar'].to(device).float()
-    #             label = data['label'].to(device).float()
-    #             boxes = data['boxes'].to(device).float()
-    #             #print(inputs.shape, label.shape, boxes.shape)
-    #         elif model_type == "DAROD":
-    #             inputs = data['radar'].to(device).float()
-    #             label = data['label'].to(device).int()
-    #             boxes = data['boxes'].to(device).float()
-    #             # print(inputs.shape, label)
-    #         else:
-    #             raise ValueError
+        for i, data in enumerate(train_loader):
+            if model_type == "FFTRadNet":
+                inputs = data[0].to(device).float()
+                label_map = data[1].to(device).float()
+                if model_config['segmentation_head']:
+                    seg_map_label = data[2].to(device).double()
+            elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
+                if dataset_type == "CRUW":
+                    inputs = data['radar_data'].to(device).float()
+                    confmap_gt = data['anno']['confmaps'].to(device).float()
+                    # print(f"###input:{inputs.shape}")
+                    # print(f"###confmap:{confmap_gt.shape}")
+                elif dataset_type == "CARRADA":
+                    inputs = data['radar'].to(device).float()
+                    label = data['mask'].to(device).float()
+                    #print(f"###input:{inputs.shape}")
+                    #print(f"###label:{label.shape}")
+            elif model_type == "MVRECORD":
+                inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
+                label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
+                #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
+            elif model_type == "RADDet":
+                inputs = data['radar'].to(device).float()
+                label = data['label'].to(device).float()
+                boxes = data['boxes'].to(device).float()
+                #print(inputs.shape, label.shape, boxes.shape)
+            elif model_type == "DAROD":
+                inputs = data['radar'].to(device).float()
+                label = data['label'].to(device).int()
+                boxes = data['boxes'].to(device).float()
+                # print(inputs.shape, label)
+            else:
+                raise ValueError
             
-    #         # reset the gradient
-    #         optimizer.zero_grad()
+            # reset the gradient
+            optimizer.zero_grad()
 
-    #         # forward pass, enable to track our gradient
-    #         with torch.set_grad_enabled(True):
-    #             outputs = net(inputs)
-    #             #print(f"###out:{outputs.shape}")
+            # forward pass, enable to track our gradient
+            with torch.set_grad_enabled(True):
+                outputs = net(inputs)
+                #print(f"###out:{outputs.shape}")
 
-    #         # loss = get_loss(outputs, label, model_type, dataset_type, feature)
-    #         if model_type == "FFTRadNet":
-    #             criterion_det = pixor_loss if train_config['losses']['detection_loss'] == 'PixorLoss' else None
-    #             criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if train_config['losses']['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
-    #             classif_loss, reg_loss = criterion_det(outputs['Detection'], label_map, train_config['losses'])           
-    #             prediction = outputs['Segmentation'].contiguous().flatten()
-    #             label = seg_map_label.contiguous().flatten()   
-    #             loss_seg = criterion_seg(prediction, label)
-    #             loss_seg *= inputs.size(0)
-    #             classif_loss *= train_config['losses']['weight'][0]
-    #             reg_loss *= train_config['losses']['weight'][1]
-    #             loss_seg *= train_config['losses']['weight'][2]
-    #             loss = classif_loss + reg_loss + loss_seg
+            # loss = get_loss(outputs, label, model_type, dataset_type, feature)
+            if model_type == "FFTRadNet":
+                criterion_det = pixor_loss if train_config['losses']['detection_loss'] == 'PixorLoss' else None
+                criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if train_config['losses']['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
+                classif_loss, reg_loss = criterion_det(outputs['Detection'], label_map, train_config['losses'])           
+                prediction = outputs['Segmentation'].contiguous().flatten()
+                label = seg_map_label.contiguous().flatten()   
+                loss_seg = criterion_seg(prediction, label)
+                loss_seg *= inputs.size(0)
+                classif_loss *= train_config['losses']['weight'][0]
+                reg_loss *= train_config['losses']['weight'][1]
+                loss_seg *= train_config['losses']['weight'][2]
+                loss = classif_loss + reg_loss + loss_seg
 
-    #             writer.add_scalar('Loss/train', loss.item(), global_step)
-    #             writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
-    #             writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
-    #             writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
-    #         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-    #             criterion = nn.BCELoss()
-    #             if 'stacked_num' in model_config:
-    #                 loss = 0.0
-    #                 for i in range(model_config['stacked_num']):
-    #                     loss_cur = criterion(outputs[i], confmap_gt)
-    #                     loss += loss_cur   
-    #             else:
-    #                 loss = criterion(outputs, confmap_gt)
-    #         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-    #             loss_type = train_config['losses']
-    #             if loss_type == 'bce':
-    #                 criterion = nn.BCELoss()
-    #                 loss = criterion(outputs, confmap_gt)
-    #             elif loss_type == 'mse':
-    #                 criterion = nn.SmoothL1Loss()
-    #                 loss = criterion(outputs, confmap_gt)
-    #             elif loss_type == 'smooth_ce':
-    #                 alpha = train_config['alpha_loss']
-    #                 criterion = SmoothCELoss(alpha)
-    #                 loss = criterion(outputs, confmap_gt)
-    #             elif loss_type == 'wce_w10sdice':
-    #                 # weights order: background, pedestrian, cyclist, car
-    #                 weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
-    #                 weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
-    #                 weights = weights_rd if features == ['RD'] else weights_ra
-    #                 ce_loss = nn.CrossEntropyLoss(weight=weights)
-    #                 criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
-    #                 losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
-    #                 loss = torch.mean(torch.stack(losses))
-    #             else:
-    #                 loss = nn.CrossEntropyLoss()
-    #         elif model_type == "MVRECORD":
-    #             loss_type = train_config['losses']
-    #             if loss_type == 'wce_w10sdice': 
-    #                 # weights order: background, pedestrian, cyclist, car
-    #                 weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
-    #                 weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
-    #                 ce_loss = nn.CrossEntropyLoss(weight=weights_rd)
-    #                 rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
-    #                 rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
-    #                 rd_loss = torch.mean(torch.stack(rd_losses))
+                writer.add_scalar('Loss/train', loss.item(), global_step)
+                writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
+                writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
+                writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
+            elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+                criterion = nn.BCELoss()
+                if 'stacked_num' in model_config:
+                    loss = 0.0
+                    for i in range(model_config['stacked_num']):
+                        loss_cur = criterion(outputs[i], confmap_gt)
+                        loss += loss_cur   
+                else:
+                    loss = criterion(outputs, confmap_gt)
+            elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
+                loss_type = train_config['losses']
+                if loss_type == 'bce':
+                    criterion = nn.BCELoss()
+                    loss = criterion(outputs, confmap_gt)
+                elif loss_type == 'mse':
+                    criterion = nn.SmoothL1Loss()
+                    loss = criterion(outputs, confmap_gt)
+                elif loss_type == 'smooth_ce':
+                    alpha = train_config['alpha_loss']
+                    criterion = SmoothCELoss(alpha)
+                    loss = criterion(outputs, confmap_gt)
+                elif loss_type == 'wce_w10sdice':
+                    # weights order: background, pedestrian, cyclist, car
+                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
+                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
+                    weights = weights_rd if features == ['RD'] else weights_ra
+                    ce_loss = nn.CrossEntropyLoss(weight=weights)
+                    criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+                    losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
+                    loss = torch.mean(torch.stack(losses))
+                else:
+                    loss = nn.CrossEntropyLoss()
+            elif model_type == "MVRECORD":
+                loss_type = train_config['losses']
+                if loss_type == 'wce_w10sdice': 
+                    # weights order: background, pedestrian, cyclist, car
+                    weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
+                    weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
+                    ce_loss = nn.CrossEntropyLoss(weight=weights_rd)
+                    rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
+                    rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
+                    rd_loss = torch.mean(torch.stack(rd_losses))
 
-    #                 ce_loss = nn.CrossEntropyLoss(weight=weights_ra)
-    #                 ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
-    #                 ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
-    #                 ra_loss = torch.mean(torch.stack(ra_losses))
+                    ce_loss = nn.CrossEntropyLoss(weight=weights_ra)
+                    ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+                    ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
+                    ra_loss = torch.mean(torch.stack(ra_losses))
 
-    #                 loss = torch.mean(rd_loss + ra_loss)
-    #         elif model_type == "RADDet":
-    #             pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
-    #             box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
-    #             box_loss *= 1e-1
-    #             loss = box_loss + conf_loss + category_loss
-    #         elif model_type == "DAROD":
-    #             print("--------loss----------")
-    #             #print(f"pred_labels: {outputs['decoder_output'][2]}")
-    #             bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
-    #             print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
-    #             frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
-    #             #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
-    #             rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-    #             print("--------loss----------")
-    #             loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
-    #         else:
-    #             raise ValueError
+                    loss = torch.mean(rd_loss + ra_loss)
+            elif model_type == "RADDet":
+                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+                box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
+                box_loss *= 1e-1
+                loss = box_loss + conf_loss + category_loss
+            elif model_type == "DAROD":
+                print("--------loss----------")
+                #print(f"pred_labels: {outputs['decoder_output'][2]}")
+                bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
+                print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
+                frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
+                #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
+                rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
+                print("--------loss----------")
+                loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
+            else:
+                raise ValueError
 
-    #         # backprop
-    #         loss.backward()
-    #         optimizer.step()
+            # backprop
+            loss.backward()
+            optimizer.step()
 
-    #         # statistics
-    #         running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
+            # statistics
+            running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
         
-    #         # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
-    #         # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
-    #         kbar.update(i, values=[("loss", loss.item())])
-    #         print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
+            # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
+            # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
+            kbar.update(i, values=[("loss", loss.item())])
+            print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
 
-    #         global_step += 1
+            global_step += 1
 
 
-    #     scheduler.step()
+        scheduler.step()
 
-    #     history['train_loss'].append(running_loss / len(train_loader.dataset))
-    #     history['lr'].append(scheduler.get_last_lr()[0])
+        history['train_loss'].append(running_loss / len(train_loader.dataset))
+        history['lr'].append(scheduler.get_last_lr()[0])
 
         
-    #     ######################
-    #     ## validation phase ##
-    #     ######################
-    #     print(f'=========== Validation of Val data ===========')
-    #     if model_type == "FFTRadNet":
-    #         eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), losses_params=train_config['losses'], device=device)
-    #     elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-    #         eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
-    #     elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-    #         eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
-    #     elif model_type == "RECORD" and dataset_type == "CARRADA":
-    #         eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
-    #     elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-    #         eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
-    #     elif model_type == "RADDet":
-    #         eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
-    #     elif model_type == "DAROD":
-    #         eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
-    #     else:
-    #         raise ValueError
+        ######################
+        ## validation phase ##
+        ######################
+        print(f'=========== Validation of Val data ===========')
+        if model_type == "FFTRadNet":
+            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), losses_params=train_config['losses'], device=device)
+        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+            eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
+        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
+            eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
+        elif model_type == "RECORD" and dataset_type == "CARRADA":
+            eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+        elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+            eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
+        elif model_type == "RADDet":
+            eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
+        elif model_type == "DAROD":
+            eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
+        else:
+            raise ValueError
             
-    #     history['val_loss'].append(eval['loss'])
-    #     history['mAP'].append(eval['mAP'])
-    #     history['mAR'].append(eval['mAR'])
-    #     history['mIoU'].append(eval['mIoU'])
+        history['val_loss'].append(eval['loss'])
+        history['mAP'].append(eval['mAP'])
+        history['mAR'].append(eval['mAR'])
+        history['mIoU'].append(eval['mIoU'])
 
-    #     new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
-    #     df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
+        new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
+        df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
 
-    #     kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
+        kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
 
 
-    #     writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
-    #     writer.add_scalar('Loss/test', eval['loss'], global_step)
-    #     writer.add_scalar('Metrics/mAP', eval['mAP'], global_step)
-    #     writer.add_scalar('Metrics/mAR', eval['mAR'], global_step)
-    #     writer.add_scalar('Metrics/mIoU', eval['mIoU'], global_step)
+        writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
+        writer.add_scalar('Loss/test', eval['loss'], global_step)
+        writer.add_scalar('Metrics/mAP', eval['mAP'], global_step)
+        writer.add_scalar('Metrics/mAR', eval['mAR'], global_step)
+        writer.add_scalar('Metrics/mIoU', eval['mIoU'], global_step)
 
-    #     # Saving all checkpoint as the best checkpoint for multi-task is a balance between both --> up to the user to decide
-    #     name_output_file = model_type + '_epoch{:02d}_loss_{:.4f}_AP_{:.4f}_AR_{:.4f}_IOU_{:.4f}.pth'.format(epoch, eval['loss'],eval['mAP'],eval['mAR'],eval['mIoU'])
-    #     filename = output_dir / name_output_file
+        # Saving all checkpoint as the best checkpoint for multi-task is a balance between both --> up to the user to decide
+        name_output_file = model_type + '_epoch{:02d}_loss_{:.4f}_AP_{:.4f}_AR_{:.4f}_IOU_{:.4f}.pth'.format(epoch, eval['loss'],eval['mAP'],eval['mAR'],eval['mIoU'])
+        filename = output_dir / name_output_file
 
-    #     checkpoint={}
-    #     checkpoint['net_state_dict'] = net.state_dict()
-    #     checkpoint['optimizer'] = optimizer.state_dict()
-    #     checkpoint['scheduler'] = scheduler.state_dict()
-    #     checkpoint['epoch'] = epoch
-    #     checkpoint['history'] = history
-    #     checkpoint['global_step'] = global_step
+        checkpoint={}
+        checkpoint['net_state_dict'] = net.state_dict()
+        checkpoint['optimizer'] = optimizer.state_dict()
+        checkpoint['scheduler'] = scheduler.state_dict()
+        checkpoint['epoch'] = epoch
+        checkpoint['history'] = history
+        checkpoint['global_step'] = global_step
 
-    #     torch.save(checkpoint,filename)
+        torch.save(checkpoint,filename)
 
-    # df_val_eval.to_csv(val_eval_path, index=False)
+    df_val_eval.to_csv(val_eval_path, index=False)
 
-    # print(f'=========== Evaluation of Test data ===========')
-    # if model_type == "FFTRadNet":
-    #     eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
-    # elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-    #     eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
-    # elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-    #     eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
-    # elif model_type == "RECORD" and dataset_type == "CARRADA":
-    #     eval = RECORD_CARRADA_evaluation(net, test_loader, features, criterion, device)
-    # elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-    #     eval = MVRECORD_CARRADA_evaluation(net, test_loader, features, rd_criterion, ra_criterion, device)
-    # elif model_type == "RADDet":
-    #     eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
-    # elif model_type == "DAROD":
-    #     eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
-    # else:
-    #     raise ValueError
+    print(f'=========== Evaluation of Test data ===========')
+    if model_type == "FFTRadNet":
+        eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
+    elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+        eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
+    elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
+        eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
+    elif model_type == "RECORD" and dataset_type == "CARRADA":
+        eval = RECORD_CARRADA_evaluation(net, test_loader, features, criterion, device)
+    elif model_type == "MVRECORD" and dataset_type == "CARRADA":
+        eval = MVRECORD_CARRADA_evaluation(net, test_loader, features, rd_criterion, ra_criterion, device)
+    elif model_type == "RADDet":
+        eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
+    elif model_type == "DAROD":
+        eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
+    else:
+        raise ValueError
     
-    # df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
-    # df_test_val.to_csv(test_eval_path, index=False)       
+    df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
+    df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
 
 
