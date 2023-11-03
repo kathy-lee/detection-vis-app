@@ -1925,8 +1925,6 @@ class CARRADA(Dataset):
                 #obj_anno['range_doppler']['dense']
                 gt_boxes.append(obj_anno[featurestr]['box'])
                 gt_labels.append(obj_anno[featurestr]['label'])
-        gt_boxes = np.array(gt_boxes)
-        gt_labels = np.array(gt_labels)
         camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
         frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
         return frame
@@ -2097,7 +2095,7 @@ class RADDetDataset(Dataset):
             # decode ground truth boxes to YOLO format
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
-            feature_data = np.transpose(feature_data, (0, 3, 1, 2))
+            feature_data = np.transpose(feature_data, (2, 0, 1))
         elif self.model_type == "DAROD":
             if self.features == ["RD"]:
                 feature_data = self.get_RD(index)
