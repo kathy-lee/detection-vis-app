@@ -1037,13 +1037,9 @@ def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}")
-        if features == ['RD']:
-            input = data['rd_matrix'].to(device).float()
-            label = data['rd_mask'].to(device).float()
-        elif features == ['RA']:
-            input = data['ra_matrix'].to(device).float()
-            label = data['ra_mask'].to(device).float()
+        print(f"Sample {iter}") 
+        input = data['radar'].to(device).float()
+        label = data['mask'].to(device).float()
      
         with torch.set_grad_enabled(False):
             outputs = net(input)
