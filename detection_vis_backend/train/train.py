@@ -262,7 +262,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     # create experiment model name
     curr_date = datetime.now()
     exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
-    print(exp_name)
 
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
@@ -293,10 +292,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     model_type = model_config['class']
     model_config = model_config.copy()
     model_config.pop('class', None)
-    print(model_type)
-    print(model_config)
     net = network_factory.get_instance(model_type, model_config)
-    print('network created')
+    print(f'Network initialized: {exp_name}')
     net.to(device)
 
     # Optimizer
@@ -454,7 +451,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
                     loss = torch.mean(rd_loss + ra_loss)
             elif model_type == "RADDet":
-                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
                 box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss

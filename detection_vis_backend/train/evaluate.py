@@ -1273,7 +1273,7 @@ def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, d
     mean_ap_test = 0.0
     ap_all_class_test = []
     ap_all_class = []
-    for class_id in range(model_config['num_class']):
+    for class_id in range(model_config['n_class']):
         ap_all_class.append([])
     with torch.set_grad_enabled(False):
         for iter, data in enumerate(dataloader):
@@ -1281,7 +1281,7 @@ def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, d
             label = data['label'].to(device).float()
             raw_boxes = data['boxes'].to(device).float()
             outputs = net(inputs)
-            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
             box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, raw_boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
             box_loss *= 1e-1
             loss = box_loss + conf_loss + category_loss
