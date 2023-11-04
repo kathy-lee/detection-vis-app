@@ -36,6 +36,7 @@ def DAROD_collate(batch):
     # raw labels from RADDet dataset: 1,2,3,4,5,6
     radar = [torch.tensor(item['radar'].copy()) for item in batch]
     gt_labels = [torch.tensor(item['label']) for item in batch]
+    [ item.update({'boxes': np.array(item['boxes'])}) for item in batch ]
     gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
     
     radar = torch.stack(radar, 0)

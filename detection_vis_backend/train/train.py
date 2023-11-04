@@ -39,7 +39,7 @@ def get_db():
     finally:
         db.close()  
 
-def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, output_path: str, skip_empty_label: bool=False):
+def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, output_path: str):
     """
         Filter out data items with empty annotations when the network demands(for example when use CARRADA dataset 
         to train DAROD model).
@@ -63,6 +63,11 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
 
+    if model_config['class'] == "DAROD":
+        skip_empty_label = True
+    else:
+        skip_empty_label = False
+
     datasets = dict.fromkeys(["train", "val", "test"])
     split_samples_info = dict(train=[], val=[], test=[])
     if train_config["dataloader"]["splitmode"] != "original":
@@ -83,7 +88,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     for i in range(len(dataset_inst)):
                         samples_info.append([file['parse'], file['name'], file['id'], i])
                         counter += 1
-                        if skip_empty_label and dataset_inst[i]['label'].size == 0:
+                        if skip_empty_label and len(dataset_inst[i]['label']) == 0:
                             continue
                         valid_ids.append(counter-1)       
                 concat_dataset = ConcatDataset(dataset_inst_list)
@@ -107,7 +112,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     else:
                         samples_info.append([file['parse'], file['name'], file['id'], i])
                     counter += 1
-                    if skip_empty_label and dataset_inst[i]['label'].size == 0:
+                    if skip_empty_label and len(dataset_inst[i]['label']) == 0:
                         continue
                     valid_ids.append(counter-1) 
             dataset = ConcatDataset(dataset_inst_list)
@@ -122,12 +127,13 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             
             if skip_empty_label:
                 print(f"Before filtering samples with empty annotations: train: {len(train_dataset)}, val: {len(val_dataset)}, test: {len(test_dataset)}")
-                train_ids = [id for id in train_ids if id in valid_ids]
-                val_ids = [id for id in val_ids if id in valid_ids]
-                test_ids = [id for id in test_ids if id in valid_ids]
-                datasets['train'] = Subset(train_dataset, train_ids)
-                datasets['val'] = Subset(val_dataset, val_ids)
-                datasets['test'] = Subset(test_dataset, test_ids)
+                valid_ids_set = set(valid_ids)
+                train_ids = [id for id in train_ids if id in valid_ids_set]
+                val_ids = [id for id in val_ids if id in valid_ids_set]
+                test_ids = [id for id in test_ids if id in valid_ids_set]
+                datasets['train'] = Subset(dataset, train_ids)
+                datasets['val'] = Subset(dataset, val_ids)
+                datasets['test'] = Subset(dataset, test_ids)
                 print(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}") 
             else:
                 datasets['train'] = train_dataset
@@ -193,7 +199,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     for i in range(len(dataset_inst)):
                         samples_info.append(['CARRADA', file_name, datafile.id, i])
                         counter += 1
-                        if skip_empty_label and dataset_inst[i]['label'].size == 0:
+                        if skip_empty_label and len(dataset_inst[i]['label']) == 0:
                             continue
                         valid_ids.append(counter-1)       
                 concat_dataset = ConcatDataset(dataset_inst_list)
@@ -456,14 +462,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
             elif model_type == "DAROD":
-                print("--------loss----------")
+                #print("--------loss----------")
                 #print(f"pred_labels: {outputs['decoder_output'][2]}")
                 bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
-                print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
+                #print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
                 frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
                 #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
                 rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-                print("--------loss----------")
+                #print("--------loss----------")
                 loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
             else:
                 raise ValueError
