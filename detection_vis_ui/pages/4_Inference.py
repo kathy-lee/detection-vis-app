@@ -42,7 +42,6 @@ model_path = os.path.join(model_rootdir, model_chosen)
 files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f)) and f.endswith('.pth')]
 checkpoint_count = len(files)
 checkpoint_id = st.selectbox("Choose a checkpoint(In default from the last epoch)", list(range(1,checkpoint_count+1)), index=checkpoint_count-1) - 1
-st.write(checkpoint_id)
 
 # Get data&model&train info of the chosen model 
 response = requests.get(f"http://{backend_service}:8001/model/{model_id}")  
@@ -122,16 +121,16 @@ else:
   radio_dict = {"Train data": "train", "Val data": "val", "Test data": "test"}
   split_type = radio_dict[radio_select]
   frame_begin = 0
-  file_path = os.path.join(model_path, f"{split_type}_samples_ids.csv")
+  file_path = os.path.join(model_path, f"{split_type}_sample_ids.csv")
   samples_info = pd.read_csv(file_path, index_col=0).to_numpy()
   frame_end = len(samples_info)
   frame_id = st.slider('Choose a data frame', frame_begin, frame_end, frame_begin)
-  if samples_info.shape[1] == 2:
+  if samples_info.shape[1] == 1:
     original_sample_id = samples_info[frame_id, 0]
     st.write(f"Original from: No. {original_sample_id} sample of the whole dataset")
     file_id = model_paras["datafiles"][0]["id"]
   else:
-    file_name, file_id, original_sample_id = samples_info[frame_id,1], samples_info[frame_id,2], samples_info[frame_id,3]
+    file_name, file_id, original_sample_id = samples_info[frame_id, 0], samples_info[frame_id, 1], samples_info[frame_id, 2]
     st.write(f"Original from: No. {original_sample_id} sample of datafile {file_name}")
   res = predict(model_id, checkpoint_id, original_sample_id, file_id)
   pred_image = np.array(res)
