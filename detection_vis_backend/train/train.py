@@ -27,7 +27,6 @@ from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
-from detection_vis_backend.train.inference import display_inference_FFTRadNet, display_inference_CRUW, display_inference_CARRADA, display_inference_RADDetDataset
 from data import crud, schemas
 from data.database import SessionLocal
 
@@ -570,82 +569,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
     df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
-
-
-def infer(model, checkpoint_id, sample_id, file_id, split_type):
-    model_rootdir = os.getenv('MODEL_ROOTDIR')
-    parameter_path = os.path.join(model_rootdir, model, "train_info.txt")
-    with open(parameter_path, 'r') as f:
-        parameters = json.load(f)
-    if not parameters:
-        raise ValueError("Parameters are empty")
-
-    # Get input data and groundtruth label info
-    dataset_factory = DatasetFactory()
-    dataset_type = parameters["datafiles"][0]["parse"]
-    dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
-    #dataset_inst.parse(file_id, parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
-    dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
-    data = dataset_inst[sample_id]
-    gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
-
-    # Initialize the model
-    model_config = parameters["model_config"]
-    network_factory = NetworkFactory()
-    model_type = model_config['class']
-    model_config.pop('class', None)
-    net = network_factory.get_instance(model_type, model_config)
-
-    # set device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-    # Load the model checkpoint
-    model_rootdir = os.getenv('MODEL_ROOTDIR')
-    model_path = os.path.join(model_rootdir, model)
-    checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
-    dict = torch.load(os.path.join(model_path, checkpoint), map_location=device)
-    net.load_state_dict(dict['net_state_dict'])  
-    net.to(device)
-    
-    # Prediction
-    net.eval()
-    with torch.set_grad_enabled(False):
-        if model_type == "FFTRadNet":
-            # input_data: [radar_FFT, segmap,out_label,box_labels,image]
-            input = torch.tensor(data[0]).unsqueeze(0).to(device).float()
-            output = net(input)
-            pred_image = display_inference_FFTRadNet(data[4], data[0], output, data[3])
-        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-            input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
-            output = net(input)
-            if 'stacked_num' in model_config:
-                confmap_pred = output[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
-            else:
-                confmap_pred = output.cpu().detach().numpy()
-            pred_image = display_inference_CRUW(data['image_paths'][0], input, confmap_pred, gt_labels, parameters["train_config"])
-        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
-            output = net(input)
-            confmap_pred = output[0].cpu().detach().numpy()
-            pred_image = display_inference_CRUW(data['image_paths'][0], input, confmap_pred, gt_labels, parameters["train_config"])
-        elif model_type == "RECORD" and dataset_type == "CARRADA":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
-            output = net(input)
-            pred_image = display_inference_CARRADA(data['image_path'], input, output, gt_labels)
-        elif model_type == "MVRECORD":
-            input = (torch.tensor(data['rd_matrix']).unsqueeze(0).to(device).float(), 
-                     torch.tensor(data['ra_matrix']).unsqueeze(0).to(device).float(), 
-                     torch.tensor(data['ad_matrix']).unsqueeze(0).to(device).float())
-            output = net(input)
-            pred_image = display_inference_CARRADA(data['image_path'], input, output, gt_labels)
-        elif model_type == "RADDet" or model_type == "DAROD":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
-            output = net(input)
-            pred_image = display_inference_RADDetDataset(data['image_path'], input, output, gt_labels)
-        else:
-            raise ValueError
-
-    return pred_image
 
 
 # class TrainModelFlow(FlowSpec):
