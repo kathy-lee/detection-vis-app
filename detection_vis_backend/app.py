@@ -225,7 +225,10 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         feature = dataset_inst.get_feature(feature_name, id, for_visualize=True)
         gt_label = dataset_inst.get_label(feature_name, id)
-        serialized_feature = feature.tolist()
+        if feature_name not in ('image', 'depth_image'):
+            serialized_feature = feature.tolist()
+        else:
+            serialized_feature = feature
     except IndexError:
         raise HTTPException(status_code=404, detail=f"Feature ID {id} is out of range.")
 
@@ -340,18 +343,13 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
         model = crud.get_model(db, model_id)
         if not model:
             raise ValueError("Model not found")
-        
-        # flow_name = model.flow_name
-        # run_id = model.flow_run_id
-        # run = Flow(flow_name)[run_id]
-        # parameters = run.data
 
-        pred_objs = infer(model.name, checkpoint_id, sample_id, file_id, split_type)        
+        pred_objs, feature_show_pred = infer(model.name, checkpoint_id, sample_id, file_id, split_type)      
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
-    return {"prediction": pred_objs} #, "eval": [TP,FP,FN]
+    return {"prediction": pred_objs.tolist(), "feature_show_pred": feature_show_pred} #, "eval": [TP,FP,FN]
 
 
 @app.get("/predict_newdata/{model_id}")
