@@ -25,7 +25,8 @@ from pathlib import Path
 from data import crud, schemas
 from data.database import SessionLocal
 from detection_vis_backend.datasets.dataset import DatasetFactory
-from detection_vis_backend.train.train import train, infer
+from detection_vis_backend.train.train import train
+from detection_vis_backend.train.inference import infer
 
 
 
@@ -333,7 +334,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, split_type: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get para infos
         model = crud.get_model(db, model_id)
@@ -345,12 +346,12 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
         # run = Flow(flow_name)[run_id]
         # parameters = run.data
 
-        pred_with_gt = infer(model.name, checkpoint_id, sample_id, file_id)        
+        pred_objs = infer(model.name, checkpoint_id, sample_id, file_id, split_type)        
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
-    return {"prediction": pred_with_gt.tolist()} #, "eval": [TP,FP,FN]
+    return {"prediction": pred_objs} #, "eval": [TP,FP,FN]
 
 
 @app.get("/predict_newdata/{model_id}")
