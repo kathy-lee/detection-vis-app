@@ -20,6 +20,7 @@ from detection_vis_backend.train.utils import post_process_single_frame, get_cla
 
 
 def display_inference_CRUW(image_path, RAmap, model_output, gt_labels, train_config):
+    print("Inference with CRUW.")
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -28,37 +29,39 @@ def display_inference_CRUW(image_path, RAmap, model_output, gt_labels, train_con
     classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
-    res_final = post_process_single_frame(model_output, train_config, n_class, rng_grid, agl_grid) #[B, win_size, max_dets, 4]
-    
+
     img_data = np.asarray(Image.open(image_path))
     if img_data.shape[0] > 864:
         img_data = img_data[:img_data.shape[0] // 5 * 4, :, :]
 
-    confmap_pred = np.transpose(model_output, (1, 2, 0))
+    # Draw predictions on confmap_pred
+    confmap_pred = model_output[0,:,0,:,:]
+    res_final = post_process_single_frame(confmap_pred, train_config, n_class, rng_grid, agl_grid) #[B, win_size, max_dets, 4]
+    confmap_pred = np.transpose(confmap_pred, (1, 2, 0))
     confmap_pred[confmap_pred < 0] = 0
     confmap_pred[confmap_pred > 1] = 1
-
-    # Draw predictions on confmap_pred
+    confmap_pred = (confmap_pred * 255).astype(np.uint8)
+    confmap_pred = np.ascontiguousarray(confmap_pred)
     max_dets, _ = res_final.shape
     for d in range(max_dets):
         cla_id = int(res_final[d, 0])
         if cla_id == -1:
             continue
-        row_id = res_final[d, 1]
-        col_id = res_final[d, 2]
+        row_id = int(res_final[d, 1])
+        col_id = int(res_final[d, 2])
         conf = res_final[d, 3]
         conf = 1.0 if conf > 1 else conf
         cla_str = get_class_name(cla_id, classes)
-        cv2.circle(confmap_pred, (col_id, row_id)) #plt.scatter(col_id, row_id, s=10, c='white')
+        cv2.circle(confmap_pred, (col_id, row_id), 3, (0, 0, 255)) #plt.scatter(col_id, row_id, s=10, c='white')
         text = cla_str + '\n%.2f' % conf
-        cv2.putText(confmap_pred, text, (col_id + 5, row_id)) #plt.text(col_id + 5, row_id, text, color='white', fontsize=10)
-    
-    confmap_gt = np.transpose(confmap_gt, (1, 2, 0))
+        cv2.putText(confmap_pred, text, (col_id + 5, row_id), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2) #plt.text(col_id + 5, row_id, text, color='white', fontsize=10)
+
     # Draw gt_labels
     for obj in gt_labels:
-        cv2.circle(confmap_gt, (obj[1],obj[0]))
-        cv2.putText(confmap_gt, obj[2], (obj[1] + 2, obj[0] + 2))
-    return np.hstack(img_data, RAmap, confmap_gt, confmap_pred)
+        cv2.circle(RAmap, (obj[1],obj[0]), 3, (0, 0, 255))
+        cv2.putText(RAmap, obj[2], (obj[1] + 2, obj[0] + 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    print(img_data.shape, RAmap.shape, confmap_pred.shape)
+    return np.hstack(img_data, RAmap, confmap_pred)
 
 
 def display_inference_FFTRadNet(image, input, model_outputs, obj_labels, train_config=None):
