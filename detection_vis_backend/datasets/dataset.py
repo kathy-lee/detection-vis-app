@@ -469,18 +469,18 @@ class RaDICaL(Dataset):
             index = self.sync_indices[idx]['image']
         else:
             index = idx
-        image_file = os.path.join(self.feature_path,'image',f"image_{index}.npy")
-        image = np.load(image_file)
-        return image
+        image_path = os.path.join(self.feature_path,'image',f"image_{index}.npy")
+        #image = np.load(image_path)
+        return image_path
     
     def get_depthimage(self, idx=None, for_visualize=False):
         if self.sync_mode:
             index = self.sync_indices[idx]['depth_image']
         else:
             index = idx
-        image_file = os.path.join(self.feature_path,'depth_image',f"depth_image_{index}.npy")
-        image = np.load(image_file)
-        return image
+        image_path = os.path.join(self.feature_path,'depth_image',f"depth_image_{index}.npy")
+        #image = np.load(image_path)
+        return image_path
 
     def __len__(self):
         return self.frame_sync
@@ -579,8 +579,8 @@ class RADIal(Dataset):
         return np.load(self.lidarpointcloud_filenames[idx], allow_pickle=True)[:,:3]
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
@@ -1296,9 +1296,9 @@ class RADIalRaw(Dataset):
         return pc
 
     def get_image(self, idx=None, for_visualize=False): 
-        file = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
-        image = np.asarray(Image.open(file))
-        return image
+        image_path = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
+        #image = np.asarray(Image.open(image_path))
+        return image_path
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
@@ -1431,8 +1431,8 @@ class CRUW(Dataset):
         return 
     
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RA(self, idx=None, for_visualize=False):
         chirp_path = os.path.join(self.root_path, 'TRAIN_RAD_H', self.seq_name, 'RADAR_RA_H', '%06d_0000.npy' % idx) # 000000_0192.npy
@@ -1689,8 +1689,8 @@ class CARRADA(Dataset):
             self.annos = json.load(fp)
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RA(self, idx=None, for_visualize=False):
         ra = np.load(self.RA_filenames[idx])
@@ -1970,8 +1970,8 @@ class RADDetDataset(Dataset):
         self.anno_filenames = get_sorted_filenames(os.path.join(self.root_path, 'gt'))
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RAD(self, idx=None, for_visualize=False):
         rad = np.load(self.RAD_filenames[idx])
@@ -2235,8 +2235,8 @@ class Astyx(Dataset):
 
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RAD(self, idx=None, for_visualize=False):
         return None
