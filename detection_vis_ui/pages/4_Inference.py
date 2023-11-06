@@ -98,8 +98,8 @@ for idx,tab in enumerate(tabs):
 
 
 @st.cache_data
-def predict(model_id, checkpoint_id, sample_id, file_id):
-  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id}
+def predict(model_id, checkpoint_id, sample_id, file_id, split_type):
+  params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id, "split_type": split_type}
   response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
   res = response.json()
   return res["prediction"]
@@ -130,8 +130,18 @@ else:
     st.write(f"Original from: No. {original_sample_id} sample of the whole dataset")
     file_id = model_paras["datafiles"][0]["id"]
   else:
-    file_name, file_id, original_sample_id = samples_info[frame_id, 0], samples_info[frame_id, 1], samples_info[frame_id, 2]
+    file_name, file_id, original_sample_id = samples_info[frame_id, 1], samples_info[frame_id, 2], samples_info[frame_id, 3]
     st.write(f"Original from: No. {original_sample_id} sample of datafile {file_name}")
-  res = predict(model_id, checkpoint_id, original_sample_id, file_id)
+  # Check the parsing state of the data file where the chosen sample is
+  original_datafile_parsed = f"parse_{file_id}"
+  if original_datafile_parsed not in st.session_state:
+    st.session_state[original_datafile_parsed] = False
+    response = requests.get(f"http://{backend_service}:8001/parse/{file_id}")
+    if response.status_code != 204:
+      st.info(f"An error occurred in parsing data file {file_name}.")
+      st.stop()
+    else:
+      st.session_state[original_datafile_parsed] = True 
+  res = predict(model_id, checkpoint_id, original_sample_id, file_id, split_type)
   pred_image = np.array(res)
   st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
