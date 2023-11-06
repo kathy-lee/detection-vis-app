@@ -572,7 +572,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     return exp_name
 
 
-def infer(model, checkpoint_id, sample_id, file_id):
+def infer(model, checkpoint_id, sample_id, file_id, split_type):
     model_rootdir = os.getenv('MODEL_ROOTDIR')
     parameter_path = os.path.join(model_rootdir, model, "train_info.txt")
     with open(parameter_path, 'r') as f:
@@ -584,20 +584,20 @@ def infer(model, checkpoint_id, sample_id, file_id):
     dataset_factory = DatasetFactory()
     dataset_type = parameters["datafiles"][0]["parse"]
     dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
-    dataset_inst.parse(file_id, parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
+    #dataset_inst.parse(file_id, parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
+    dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
     data = dataset_inst[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
 
     # Initialize the model
     model_config = parameters["model_config"]
     network_factory = NetworkFactory()
-    model_type = model_config['type']
-    model_config.pop('type', None)
+    model_type = model_config['class']
+    model_config.pop('class', None)
     net = network_factory.get_instance(model_type, model_config)
 
     # set device
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    device = torch.device('cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     # Load the model checkpoint
     model_rootdir = os.getenv('MODEL_ROOTDIR')
@@ -605,7 +605,8 @@ def infer(model, checkpoint_id, sample_id, file_id):
     checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
     dict = torch.load(os.path.join(model_path, checkpoint), map_location=device)
     net.load_state_dict(dict['net_state_dict'])  
-
+    net.to(device)
+    
     # Prediction
     net.eval()
     with torch.set_grad_enabled(False):
