@@ -228,9 +228,9 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred)
         cls_id = int(obj[2])
         plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
     st.pyplot(plt)
-  elif feature == 'image':
+  elif feature in ('image', 'depth_image'):
     plt.figure(figsize=(8,6))
-    feature_image = mpimg.imread(feature_data)
+    feature_image = mpimg.imread(serialized_feature)
     plt.imshow(feature_image) #, aspect='auto'
     plt.title(f"index: {frame_id}, shape: {feature_image.shape}", y=1.0)
     img_height, img_width, _ = feature_image.shape
