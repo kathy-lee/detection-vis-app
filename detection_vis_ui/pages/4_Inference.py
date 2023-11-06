@@ -6,6 +6,7 @@ import json
 import numpy as np 
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import random
 
 from matplotlib.patches import Rectangle
@@ -105,7 +106,7 @@ def predict(model_id, checkpoint_id, sample_id, file_id, split_type):
   params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id, "split_type": split_type}
   response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
   res = response.json()
-  return res["prediction"]
+  return res["prediction"], res["feature_show_pred"]
 
 
 @st.cache_data
@@ -117,12 +118,13 @@ def get_feature(file_id, feature, idx):
   return feature_data
 
 @st.cache_data
-def show_pred_with_gt(file_id, features, frame_id, pred_objs):
+def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred):
   feature = features[0]
   feature_data = get_feature(file_id, feature, frame_id)
   serialized_feature = feature_data["serialized_feature"]
-  feature_image = np.array(serialized_feature)
+  
   if feature == "lidarPC" or feature == "radarPC":
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(8, 6))
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
@@ -158,6 +160,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
     plt.ylabel('Y(m)')
     st.pyplot(plt)
   elif feature == "RD":
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(2, 3))
     ## Rotates RD image 90 degrees clockwise
     # feature_image = np.rot90(feature_image, k=-1) 
@@ -198,6 +201,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
           # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
     st.pyplot(plt, use_container_width=False)
   elif feature == "RA":
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image)
     plt.xlabel('Azimuth')
@@ -208,17 +212,25 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
       if len(objs[0]) == 3:
         # Case: CRUW Dataset
         for obj in objs:
-          plt.plot(obj[1],obj[0],'ro')
-          plt.text(obj[1] + 2, obj[0] + 2, '%s' % obj[2])
+          plt.plot(obj[1],obj[0],'ro', alpha=0.5)
+          plt.text(obj[1] + 2, obj[0] + 2, f'gt:{obj[2]}', color='red')
       elif len(objs[0]) == 5:
         # Case: CARRADA Dataset
         for obj in objs:
           rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
           plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
+    
+    if feature_show_pred == "RA":
+      classes = ["pedestrian", "cyclist", "car"]
+      for obj in pred_objs:
+        plt.plot(obj[1],obj[0],'yo', alpha=0.5)
+        cls_id = int(obj[2])
+        plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
     st.pyplot(plt)
   elif feature == 'image':
     plt.figure(figsize=(8,6))
+    feature_image = mpimg.imread(feature_data)
     plt.imshow(feature_image) #, aspect='auto'
     plt.title(f"index: {frame_id}, shape: {feature_image.shape}", y=1.0)
     img_height, img_width, _ = feature_image.shape
@@ -253,6 +265,19 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
     feature_image = feature_image - np.min(feature_image)
     feature_image = feature_image / np.max(feature_image)
     st.image(feature_image, caption=f"index: {frame_id}, shape: {feature_image.shape}")
+  
+  if feature != "image" and feature_show_pred != "image":
+    feature_data = get_feature(file_id, "image", frame_id)
+    image_path = feature_data["serialized_feature"]
+    image = mpimg.imread(image_path)
+    img_height, img_width, _ = image.shape
+    plt.figure(figsize=(8,6))
+    plt.imshow(image) #, aspect='auto'
+    plt.title(f"index: {frame_id}, shape: {feature_image.shape}", y=1.0)
+    plt.xlim(0, img_width - 1)
+    plt.ylim(img_height - 1, 0)
+    st.pyplot(plt)
+
   return
 
 radio_options = ["Train data", "Val data", "Test data", "I want to upload my own data file to do inference"]
@@ -292,12 +317,12 @@ else:
       st.stop()
     else:
       st.session_state[original_datafile_parsed] = True 
-  pred_objs = predict(model_id, checkpoint_id, original_sample_id, file_id, split_type)
+  pred_objs, feature_show_pred = predict(model_id, checkpoint_id, original_sample_id, file_id, split_type)
   # Get gt label info and show together with prediction
   # feature_data = get_feature(file_id, feature, original_sample_id)
   # serialized_feature = feature_data["serialized_feature"]
   # feature_image = np.array(serialized_feature)
   # st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
-  show_pred_with_gt(file_id, model_paras["features"], original_sample_id, pred_objs)
+  show_pred_with_gt(file_id, model_paras["features"], original_sample_id, pred_objs, feature_show_pred)
   # pred_image = np.array(res)
   # st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
