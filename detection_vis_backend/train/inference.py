@@ -15,6 +15,8 @@ from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 from PIL import Image
 
+from detection_vis_backend.datasets.dataset import DatasetFactory
+from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.datasets.utils import confmap2ra
 from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT
 
@@ -62,6 +64,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             input = torch.tensor(data[0]).unsqueeze(0).to(device).float()
             output = net(input)
             pred_image = display_inference_FFTRadNet(data[4], data[0], output, data[3])
+            feature_show_pred = "image"
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
             input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
             output = net(input)
@@ -69,8 +72,16 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 confmap_pred = output[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
             else:
                 confmap_pred = output.cpu().detach().numpy()
-            #pred_image = display_inference_CRUW(data['image_paths'][0], input, confmap_pred, gt_labels, parameters["train_config"])
             pred_objs = post_process_single_frame(confmap_pred[0,:,0,:,:], parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            # filter invalid predictions
+            mask = pred_objs[:, 0] != -1 
+            pred_objs = pred_objs[mask]
+            # limit conf value
+            mask = pred_objs[:, -1] > 1  
+            pred_objs[mask, -1] = 1
+            # reorganize the items: [row_id, col_id, cls_id, conf_value]
+            pred_objs = pred_objs[:, [1, 2, 0, 3]]
+            feature_show_pred = "RA"
         # elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
         #     input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
         #     output = net(input)
@@ -93,7 +104,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
         else:
             raise ValueError("Inference of the chosen model type is not supported")
 
-    return pred_objs
+    return pred_objs, feature_show_pred
 
 
 def display_inference_FFTRadNet(image, input, model_outputs, obj_labels, train_config=None):
