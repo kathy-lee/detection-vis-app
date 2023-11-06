@@ -26,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -1524,6 +1524,8 @@ class CRUW(Dataset):
         self.datasamples_length = n_data_in_seq
 
         self.model_type = model_cfg['class']
+        self.rng_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='range')
+        self.agl_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='angle')
         return
     
     def __len__(self):
