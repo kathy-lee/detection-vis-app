@@ -50,7 +50,10 @@
     "losses": "wce_w10sdice",
     "win_size": 5,
     "transformations": ["hflip", "vflip"],
-    "norm_type": "tvt"
+    "norm_type": "tvt",
+    "max_dets": 20,
+    "peak_thres": 0.3,
+    "ols_thres": 0.3
   }
 
 }
