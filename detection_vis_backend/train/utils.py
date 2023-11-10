@@ -806,3 +806,51 @@ def lossYolo(pred_raw, pred, label, raw_boxes, input_size, focal_loss_iou_thresh
     category_total_loss = torch.mean(torch.sum(category_loss, dim=[1, 2, 3, 4]))
     return giou_total_loss, conf_total_loss, category_total_loss
 
+
+def yoloheadToPredictions(yolohead_output, conf_threshold=0.5):
+    """ Transfer YOLO HEAD output to [:, 8], where 8 means
+    [x, y, z, w, h, d, score, class_index]"""
+    prediction = yolohead_output.reshape(-1, yolohead_output.shape[-1])
+    prediction_class = np.argmax(prediction[:, 7:], axis=-1)
+    predictions = np.concatenate([prediction[:, :7], \
+                    np.expand_dims(prediction_class, axis=-1)], axis=-1)
+    conf_mask = (predictions[:, 6] >= conf_threshold)
+    predictions = predictions[conf_mask]
+    return predictions
+
+
+def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
+    """ Bboxes format [x, y, z, w, h, d, score, class_index] """
+    """ Implemented the same way as YOLOv4 """ 
+    assert method in ['nms', 'soft-nms']
+    if len(bboxes) == 0:
+        best_bboxes = np.zeros([0, 8])
+    else:
+        all_pred_classes = list(set(bboxes[:, 7]))
+        unique_classes = list(np.unique(all_pred_classes))
+        best_bboxes = []
+        for cls in unique_classes:
+            cls_mask = (bboxes[:, 7] == cls)
+            cls_bboxes = bboxes[cls_mask]
+            ### NOTE: start looping over boxes to find the best one ###
+            while len(cls_bboxes) > 0:
+                max_ind = np.argmax(cls_bboxes[:, 6])
+                best_bbox = cls_bboxes[max_ind]
+                best_bboxes.append(best_bbox)
+                cls_bboxes = np.concatenate([cls_bboxes[: max_ind], cls_bboxes[max_ind + 1:]])
+                iou = iou3d(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
+                            input_size)
+                weight = np.ones((len(iou),), dtype=np.float32)
+                if method == 'nms':
+                    iou_mask = iou > iou_threshold
+                    weight[iou_mask] = 0.0
+                if method == 'soft-nms':
+                    weight = np.exp(-(1.0 * iou ** 2 / sigma))
+                cls_bboxes[:, 6] = cls_bboxes[:, 6] * weight
+                score_mask = cls_bboxes[:, 6] > 0.
+                cls_bboxes = cls_bboxes[score_mask]
+        if len(best_bboxes) != 0:
+            best_bboxes = np.array(best_bboxes)
+        else:
+            best_bboxes = np.zeros([0, 8])
+    return best_bboxes

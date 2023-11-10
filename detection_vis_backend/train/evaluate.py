@@ -15,7 +15,7 @@ from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 from PIL import Image
 
-from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects 
+from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms 
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -1102,18 +1102,6 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_crit
             'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
 
 
-def yoloheadToPredictions(yolohead_output, conf_threshold=0.5):
-    """ Transfer YOLO HEAD output to [:, 8], where 8 means
-    [x, y, z, w, h, d, score, class_index]"""
-    prediction = yolohead_output.reshape(-1, yolohead_output.shape[-1])
-    prediction_class = np.argmax(prediction[:, 7:], axis=-1)
-    predictions = np.concatenate([prediction[:, :7], \
-                    np.expand_dims(prediction_class, axis=-1)], axis=-1)
-    conf_mask = (predictions[:, 6] >= conf_threshold)
-    predictions = predictions[conf_mask]
-    return predictions
-
-
 def iou2d(box_xywh_1, box_xywh_2):
     """ Numpy version of 3D bounding box IOU calculation 
     Args:
@@ -1140,43 +1128,6 @@ def iou2d(box_xywh_1, box_xywh_2):
     ### get iou
     iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
     return iou
-
-
-def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
-    """ Bboxes format [x, y, z, w, h, d, score, class_index] """
-    """ Implemented the same way as YOLOv4 """ 
-    assert method in ['nms', 'soft-nms']
-    if len(bboxes) == 0:
-        best_bboxes = np.zeros([0, 8])
-    else:
-        all_pred_classes = list(set(bboxes[:, 7]))
-        unique_classes = list(np.unique(all_pred_classes))
-        best_bboxes = []
-        for cls in unique_classes:
-            cls_mask = (bboxes[:, 7] == cls)
-            cls_bboxes = bboxes[cls_mask]
-            ### NOTE: start looping over boxes to find the best one ###
-            while len(cls_bboxes) > 0:
-                max_ind = np.argmax(cls_bboxes[:, 6])
-                best_bbox = cls_bboxes[max_ind]
-                best_bboxes.append(best_bbox)
-                cls_bboxes = np.concatenate([cls_bboxes[: max_ind], cls_bboxes[max_ind + 1:]])
-                iou = iou3d(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
-                            input_size)
-                weight = np.ones((len(iou),), dtype=np.float32)
-                if method == 'nms':
-                    iou_mask = iou > iou_threshold
-                    weight[iou_mask] = 0.0
-                if method == 'soft-nms':
-                    weight = np.exp(-(1.0 * iou ** 2 / sigma))
-                cls_bboxes[:, 6] = cls_bboxes[:, 6] * weight
-                score_mask = cls_bboxes[:, 6] > 0.
-                cls_bboxes = cls_bboxes[score_mask]
-        if len(best_bboxes) != 0:
-            best_bboxes = np.array(best_bboxes)
-        else:
-            best_bboxes = np.zeros([0, 8])
-    return best_bboxes
 
 
 def getTruePositive(pred, gt, input_size, iou_threshold=0.5, mode="3D"):
