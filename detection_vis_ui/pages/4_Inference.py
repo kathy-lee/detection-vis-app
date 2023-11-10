@@ -58,7 +58,7 @@ for idx,tab in enumerate(tabs):
       st.write("Train data file(s):")
       s = ''
       for i in model_paras["datafiles"]:
-        s += "- " + i["name"] + "\n"
+        s += "- " + i["name"] + "\tfrom\t" + i["parse"] + "\n"
       st.markdown(s)
       # Show features
       features_chosen = st.write("Train feature(s):")
