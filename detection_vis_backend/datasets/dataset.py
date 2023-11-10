@@ -1738,7 +1738,7 @@ class CARRADA(Dataset):
         frame = "{:06d}".format(idx)
         objs = self.annos[self.seq_name][frame]
         gt = []
-        categories = {1: 'pedestrian', 2: 'cyclist', 3: 'car'}
+        categories = {0: 'background', 1: 'pedestrian', 2: 'cyclist', 3: 'car'}
         if objs:
             for obj in objs.values():
                 category = categories[obj['range_angle']['label']]
@@ -1788,6 +1788,16 @@ class CARRADA(Dataset):
 
         self.features = features
         self.norm_type = train_cfg['norm_type']
+        self.n_class = 4
+
+        radar_range_max, radar_range_resolution = 50, 0.2
+        radar_vel_max, radar_vel_resolution = 13.43, 0.42
+        radar_angle_max, radar_angle_resolution = 180, 0.7
+        num_chirps_in_frame, num_samples_in_chirp, num_angles = 64, 256, 256
+        self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
+        self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
+        self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
+        return
 
     def __len__(self):
         return self.frame_sync - self.win_frames + 1
