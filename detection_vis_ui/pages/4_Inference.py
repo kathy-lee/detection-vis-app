@@ -106,7 +106,7 @@ def predict(model_id, checkpoint_id, sample_id, file_id, split_type):
   params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id, "split_type": split_type}
   response = requests.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
   res = response.json()
-  return res["prediction"], res["feature_show_pred"]
+  return res
 
 
 @st.cache_data
@@ -118,7 +118,7 @@ def get_feature(file_id, feature, idx):
   return feature_data
 
 @st.cache_data
-def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred):
+def show_pred_with_gt(file_id, features, frame_id, pred_objs):
   feature = features[0]
   feature_data = get_feature(file_id, feature, frame_id)
   serialized_feature = feature_data["serialized_feature"]
@@ -199,6 +199,13 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred)
           # rect = Rectangle((new_x, new_y), new_width, new_height, linewidth=1, edgecolor='r', facecolor='none')
           # plt.gca().add_patch(rect)
           # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
+
+    if "RD" in pred_objs.keys():
+      if len(pred_objs["RD"][0]) == 5:
+        for obj in pred_objs["RD"]:
+          rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
+          plt.gca().add_patch(rect)
+          plt.text(obj[0], obj[1] - 2, '%s' % obj[4], c='y', fontsize=6)
     st.pyplot(plt, use_container_width=False)
   elif feature == "RA":
     feature_image = np.array(serialized_feature)
@@ -221,12 +228,17 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred)
           plt.gca().add_patch(rect)
           plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
     
-    if feature_show_pred == "RA":
-      classes = ["pedestrian", "cyclist", "car"]
-      for obj in pred_objs:
-        plt.plot(obj[1],obj[0],'yo', alpha=0.5)
-        cls_id = int(obj[2])
-        plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
+    if "RA" in pred_objs.keys():
+      if len(pred_objs["RA"][0]) == 4:
+        classes = ["pedestrian", "cyclist", "car"]
+        for obj in pred_objs["RA"]:
+          plt.plot(obj[1],obj[0],'yo', alpha=0.5)
+          cls_id = int(obj[2])
+          plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
+      elif len(pred_objs["RA"][0]) == 5:
+          rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
+          plt.gca().add_patch(rect)
+          plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')    
     st.pyplot(plt)
   elif feature in ('image', 'depth_image'):
     plt.figure(figsize=(8,6))
@@ -258,6 +270,11 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred)
           # Case: RADIal Dataset
           rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
           plt.gca().add_patch(rect)
+    
+    if "image" in pred_objs.keys():
+      for obj in pred_objs["image"]:
+        rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
+        plt.gca().add_patch(rect)
     plt.xlim(0, img_width - 1)
     plt.ylim(img_height - 1, 0)
     st.pyplot(plt)
@@ -266,7 +283,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs, feature_show_pred)
     feature_image = feature_image / np.max(feature_image)
     st.image(feature_image, caption=f"index: {frame_id}, shape: {feature_image.shape}")
   
-  if feature != "image" and feature_show_pred != "image":
+  if "image" not in pred_objs.keys():
     feature_data = get_feature(file_id, "image", frame_id)
     image_path = feature_data["serialized_feature"]
     image = mpimg.imread(image_path)
@@ -317,12 +334,13 @@ else:
       st.stop()
     else:
       st.session_state[original_datafile_parsed] = True 
-  pred_objs, feature_show_pred = predict(model_id, checkpoint_id, original_sample_id, file_id, split_type)
+  pred_objs = predict(model_id, checkpoint_id, original_sample_id, file_id, split_type)
   # Get gt label info and show together with prediction
   # feature_data = get_feature(file_id, feature, original_sample_id)
   # serialized_feature = feature_data["serialized_feature"]
   # feature_image = np.array(serialized_feature)
   # st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
-  show_pred_with_gt(file_id, model_paras["features"], original_sample_id, pred_objs, feature_show_pred)
+  st.info(pred_objs)
+  show_pred_with_gt(file_id, model_paras["features"], original_sample_id, pred_objs)
   # pred_image = np.array(res)
   # st.image(pred_image, caption="Prediction 🟦 Ground Truth 🟥")
