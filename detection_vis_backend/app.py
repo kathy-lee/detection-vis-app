@@ -344,12 +344,12 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
         if not model:
             raise ValueError("Model not found")
 
-        pred_objs, feature_show_pred = infer(model.name, checkpoint_id, sample_id, file_id, split_type)      
+        pred_objs = infer(model.name, checkpoint_id, sample_id, file_id, split_type)     
     except Exception as e:
         logging.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
-    return {"prediction": pred_objs.tolist(), "feature_show_pred": feature_show_pred} #, "eval": [TP,FP,FN]
+    return pred_objs
 
 
 @app.get("/predict_newdata/{model_id}")
