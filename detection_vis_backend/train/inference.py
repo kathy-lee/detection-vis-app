@@ -79,7 +79,8 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 u2 = int(u2/2)
                 v2 = int(v2/2)
                 pred_objs.append([u1, v1, u2, v2])
-            feature_show_pred = "image"
+            #feature_show_pred = "image"
+            pred_objs = {"image": pred_objs}
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
             input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
             output = net(input)
@@ -96,7 +97,8 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs[mask, -1] = 1
             # reorganize the items: [row_id, col_id, cls_id, conf_value]
             pred_objs = pred_objs[:, [1, 2, 0, 3]]
-            feature_show_pred = "RA"
+            #feature_show_pred = "RA"
+            pred_objs = {"RA": pred_objs.tolist()}
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
             input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
             output = net(input)
@@ -110,14 +112,16 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs[mask, -1] = 1
             # reorganize the items: [row_id, col_id, cls_id, conf_value]
             pred_objs = pred_objs[:, [1, 2, 0, 3]]
-            feature_show_pred = "RA"
+            #feature_show_pred = "RA"
+            pred_objs = {"RA": pred_objs.tolist()}
         elif model_type == "RECORD" and dataset_type == "CARRADA":
             input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
             output = net(input)
             confmap_pred = output[0].detach().cpu().numpy()
-            if parameters["features"][0] == "RA":
+            feature = parameters["features"][0]
+            if feature == "RA":
                 pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
-            elif parameters["features"][0] == "RD":
+            elif feature == "RD":
                 pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
             else:
                 raise ValueError("Feature type not supported in inference.")
@@ -129,7 +133,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs[mask, -1] = 1
             # reorganize the items: [row_id, col_id, cls_id, conf_value]
             pred_objs = pred_objs[:, [1, 2, 0, 3]]
-            feature_show_pred = parameters["features"][0]
+            pred_objs = {feature: pred_objs.tolist()}
         elif model_type == "MVRECORD":
             input = (torch.tensor(data['rd_matrix']).unsqueeze(0).to(device).float(), 
                      torch.tensor(data['ra_matrix']).unsqueeze(0).to(device).float(), 
@@ -156,28 +160,37 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs["RD"][mask, -1] = 1
             # reorganize the items: [row_id, col_id, cls_id, conf_value]
             pred_objs["RD"] = pred_objs["RD"][:, [1, 2, 0, 3]]
-            feature_show_pred = ["RD", "RA"]
+            pred_objs = {"RA": pred_objs_ra.tolist(), "RD": pred_objs_rd.tolist()}
         elif model_type == "RADDet":
             input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
             output = net(input)
             train_config = parameters["train_config"]
-            _, pred = boxDecoder(output, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+            _, pred = boxDecoder(output, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
+            pred = pred.detach().cpu()
             predicitons = yoloheadToPredictions(pred[0], conf_threshold=train_config["confidence_threshold"])
             pred_objs = nms(predicitons, train_config["nms_iou3d_threshold"], train_config["input_size"], sigma=0.3, method="nms")
-            feature_show_pred = ["RD", "RA"]
+            rd_objs = []
+            ra_objs = []
+            for i in range(len(pred_objs)):
+                bbox3d = pred_objs[i, :6]
+                cls = int(pred_objs[i, 7])
+                rd_objs.append([bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5], cls])
+                ra_objs.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
+            pred_objs = {"RD": rd_objs, "RA": ra_objs}
         elif model_type == "DAROD":
             input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
             output = net(input)
             pred_boxes, pred_labels, pred_scores = output["decoder_output"]
-            pred_boxes = pred_boxes.detach().cpu().numpy()
-            pred_labels = pred_labels.detach().cpu().numpy()
-            pred_scores = pred_scores.detach().cpu().numpy()
+            pred_boxes = pred_boxes.detach().cpu().numpy()[0].astype(float)
+            pred_labels = pred_labels.detach().cpu().numpy()[0].astype(float)
+            pred_scores = pred_scores.detach().cpu().numpy()[0].astype(float)
             pred_labels = pred_labels - 1
-            feature_show_pred = "RD"
+            pred_objs = [list(pred_boxes[i]) + [pred_labels[i], pred_scores[i]] for i in range(len(pred_boxes))]
+            pred_objs = {"RD": pred_objs}
         else:
             raise ValueError("Inference of the chosen model type is not supported")
 
-    return pred_objs, feature_show_pred
+    return pred_objs
 
 
 def display_inference_FFTRadNet(image, input, model_outputs, obj_labels, train_config=None):
