@@ -669,14 +669,13 @@ def get_metrics(metrics):
 
 
 def boxDecoder(yolohead_output, input_size, anchors_layer, num_class, scale=1., device='cuda:0'):
-    """ Decoder output from yolo head to boxes """    
+    """ Decoder output from yolo head to boxes """ 
+
     grid_size = yolohead_output.shape[1:4]
     num_anchors_layer = len(anchors_layer)
     grid_strides = torch.tensor(input_size, dtype=torch.float32).to(device) / torch.tensor(grid_size, dtype=torch.float32).to(device)
-    
-    reshape_size = [yolohead_output.size(0)] + list(grid_size) + [num_anchors_layer, 7+num_class]
-    pred_raw = yolohead_output.view(reshape_size)
-    
+    reshape_size = [yolohead_output.shape[0]] + list(grid_size) + [num_anchors_layer, 7+num_class]
+    pred_raw = yolohead_output.view(reshape_size)  
     raw_xyz, raw_whd, raw_conf, raw_prob = torch.split(pred_raw, (3,3,1,num_class), dim=-1)
 
     xyz_grid = torch.meshgrid(torch.arange(grid_size[0]).to(device), 
@@ -753,6 +752,40 @@ def iou3d(box_xyzwhd_1, box_xyzwhd_2, input_size):
     
     ### get iou
     iou = intersection_area / (union_area + 1e-10)
+    return iou
+
+
+def iou3d_np(box_xyzwhd_1, box_xyzwhd_2, input_size):
+    """ Numpy version of 3D bounding box IOU calculation 
+    Args:
+        box_xyzwhd_1        ->      box1 [x, y, z, w, h, d]
+        box_xyzwhd_2        ->      box2 [x, y, z, w, h, d]"""
+    assert box_xyzwhd_1.shape[-1] == 6
+    assert box_xyzwhd_2.shape[-1] == 6
+    fft_shift_implement = np.array([0, 0, input_size[2]/2])
+    ### areas of both boxes
+    box1_area = box_xyzwhd_1[..., 3] * box_xyzwhd_1[..., 4] * box_xyzwhd_1[..., 5]
+    box2_area = box_xyzwhd_2[..., 3] * box_xyzwhd_2[..., 4] * box_xyzwhd_2[..., 5]
+    ### find the intersection box
+    box1_min = box_xyzwhd_1[..., :3] + fft_shift_implement - box_xyzwhd_1[..., 3:] * 0.5
+    box1_max = box_xyzwhd_1[..., :3] + fft_shift_implement + box_xyzwhd_1[..., 3:] * 0.5
+    box2_min = box_xyzwhd_2[..., :3] + fft_shift_implement - box_xyzwhd_2[..., 3:] * 0.5
+    box2_max = box_xyzwhd_2[..., :3] + fft_shift_implement + box_xyzwhd_2[..., 3:] * 0.5
+
+    # box1_min = box_xyzwhd_1[..., :3] - box_xyzwhd_1[..., 3:] * 0.5
+    # box1_max = box_xyzwhd_1[..., :3] + box_xyzwhd_1[..., 3:] * 0.5
+    # box2_min = box_xyzwhd_2[..., :3] - box_xyzwhd_2[..., 3:] * 0.5
+    # box2_max = box_xyzwhd_2[..., :3] + box_xyzwhd_2[..., 3:] * 0.5
+
+    left_top = np.maximum(box1_min, box2_min)
+    bottom_right = np.minimum(box1_max, box2_max)
+    ### get intersection area
+    intersection = np.maximum(bottom_right - left_top, 0.0)
+    intersection_area = intersection[..., 0] * intersection[..., 1] * intersection[..., 2]
+    ### get union area
+    union_area = box1_area + box2_area - intersection_area
+    ### get iou
+    iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
     return iou
 
 
@@ -838,7 +871,7 @@ def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
                 best_bbox = cls_bboxes[max_ind]
                 best_bboxes.append(best_bbox)
                 cls_bboxes = np.concatenate([cls_bboxes[: max_ind], cls_bboxes[max_ind + 1:]])
-                iou = iou3d(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
+                iou = iou3d_np(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
                             input_size)
                 weight = np.ones((len(iou),), dtype=np.float32)
                 if method == 'nms':
