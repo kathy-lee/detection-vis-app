@@ -23,13 +23,12 @@ def FFTRadNet_collate(batch):
     labels = []
     encoded_label = []
 
-    for radar_FFT, segmap,out_label,box_labels,image in batch:
+    for radar_FFT, segmap, out_label, box_labels in batch:
         FFTs.append(torch.tensor(radar_FFT))
         segmaps.append(torch.tensor(segmap))
         encoded_label.append(torch.tensor(out_label))
-        images.append(torch.tensor(image))
         labels.append(torch.from_numpy(box_labels))    
-    return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels,torch.stack(images)
+    return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels
 
 def DAROD_collate(batch):
     # raw labels from CARRADA dataset: 1,2,3

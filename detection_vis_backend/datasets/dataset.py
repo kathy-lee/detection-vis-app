@@ -672,13 +672,8 @@ class RADIal(Dataset):
         # and we resize to half of its size
         segmap = np.asarray(self.resize(segmap))==255
 
-        # Read the camera image
-        # img_name = os.path.join(self.root_dir,'camera',"image_{:06d}.jpg".format(sample_id))
-        # image = np.asarray(Image.open(img_name))
-        image = self.get_image(index)
-
         radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
-        return radar_FFT, segmap,out_label,box_labels,image
+        return radar_FFT, segmap, out_label, box_labels
     
     def set_features(self, features):
         self.features = features
