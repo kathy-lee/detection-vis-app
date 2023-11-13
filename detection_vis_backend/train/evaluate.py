@@ -78,7 +78,6 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
     
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
 
-    print('Generating Predictions...')
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
     for i, data in enumerate(loader):
 

@@ -244,8 +244,10 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')    
       st.pyplot(plt)
     elif feature in ('image', 'depth_image'):
-      plt.figure(figsize=(8,6))
+      feature_data = get_feature(file_id, feature, frame_id)
+      serialized_feature = feature_data["serialized_feature"]
       feature_image = mpimg.imread(serialized_feature)
+      plt.figure(figsize=(8,6))
       plt.imshow(feature_image) #, aspect='auto'
       plt.title(f"index: {frame_id}, shape: {feature_image.shape}", y=1.0)
       img_height, img_width, _ = feature_image.shape
