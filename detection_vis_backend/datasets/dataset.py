@@ -26,7 +26,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -469,18 +469,18 @@ class RaDICaL(Dataset):
             index = self.sync_indices[idx]['image']
         else:
             index = idx
-        image_file = os.path.join(self.feature_path,'image',f"image_{index}.npy")
-        image = np.load(image_file)
-        return image
+        image_path = os.path.join(self.feature_path,'image',f"image_{index}.npy")
+        #image = np.load(image_path)
+        return image_path
     
     def get_depthimage(self, idx=None, for_visualize=False):
         if self.sync_mode:
             index = self.sync_indices[idx]['depth_image']
         else:
             index = idx
-        image_file = os.path.join(self.feature_path,'depth_image',f"depth_image_{index}.npy")
-        image = np.load(image_file)
-        return image
+        image_path = os.path.join(self.feature_path,'depth_image',f"depth_image_{index}.npy")
+        #image = np.load(image_path)
+        return image_path
 
     def __len__(self):
         return self.frame_sync
@@ -579,8 +579,8 @@ class RADIal(Dataset):
         return np.load(self.lidarpointcloud_filenames[idx], allow_pickle=True)[:,:3]
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
@@ -672,12 +672,8 @@ class RADIal(Dataset):
         # and we resize to half of its size
         segmap = np.asarray(self.resize(segmap))==255
 
-        # Read the camera image
-        # img_name = os.path.join(self.root_dir,'camera',"image_{:06d}.jpg".format(sample_id))
-        # image = np.asarray(Image.open(img_name))
-        image = self.get_image(index)
-
-        return radar_FFT, segmap,out_label,box_labels,image
+        radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
+        return radar_FFT, segmap, out_label, box_labels
     
     def set_features(self, features):
         self.features = features
@@ -1295,9 +1291,9 @@ class RADIalRaw(Dataset):
         return pc
 
     def get_image(self, idx=None, for_visualize=False): 
-        file = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
-        image = np.asarray(Image.open(file))
-        return image
+        image_path = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
+        #image = np.asarray(Image.open(image_path))
+        return image_path
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
@@ -1430,8 +1426,8 @@ class CRUW(Dataset):
         return 
     
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RA(self, idx=None, for_visualize=False):
         chirp_path = os.path.join(self.root_path, 'TRAIN_RAD_H', self.seq_name, 'RADAR_RA_H', '%06d_0000.npy' % idx) # 000000_0192.npy
@@ -1523,6 +1519,8 @@ class CRUW(Dataset):
         self.datasamples_length = n_data_in_seq
 
         self.model_type = model_cfg['class']
+        self.rng_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='range')
+        self.agl_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='angle')
         return
     
     def __len__(self):
@@ -1686,8 +1684,8 @@ class CARRADA(Dataset):
             self.annos = json.load(fp)
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RA(self, idx=None, for_visualize=False):
         ra = np.load(self.RA_filenames[idx])
@@ -1735,7 +1733,7 @@ class CARRADA(Dataset):
         frame = "{:06d}".format(idx)
         objs = self.annos[self.seq_name][frame]
         gt = []
-        categories = {1: 'pedestrian', 2: 'cyclist', 3: 'car'}
+        categories = {0: 'background', 1: 'pedestrian', 2: 'cyclist', 3: 'car'}
         if objs:
             for obj in objs.values():
                 category = categories[obj['range_angle']['label']]
@@ -1785,6 +1783,16 @@ class CARRADA(Dataset):
 
         self.features = features
         self.norm_type = train_cfg['norm_type']
+        self.n_class = 4
+
+        radar_range_max, radar_range_resolution = 50, 0.2
+        radar_vel_max, radar_vel_resolution = 13.43, 0.42
+        radar_angle_max, radar_angle_resolution = 180, 0.7
+        num_chirps_in_frame, num_samples_in_chirp, num_angles = 64, 256, 256
+        self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
+        self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
+        self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
+        return
 
     def __len__(self):
         return self.frame_sync - self.win_frames + 1
@@ -1827,18 +1835,7 @@ class CARRADA(Dataset):
                     feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
             # Apply normalization
             feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-            # Get ground truth boxes and labels
-            gt_boxes = []
-            gt_labels = []
-            if self.annos[self.seq_name][init_frame_name]:
-                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                    #obj_anno['range_doppler']['dense']
-                    gt_boxes.append(obj_anno[featurestr]['box'])
-                    gt_labels.append(obj_anno[featurestr]['label'])
-            gt_boxes = np.array(gt_boxes)
-            gt_labels = np.array(gt_labels)
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask'], 'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes}
+            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
         elif len(self.features) > 1:
             rd_matrices = list()
             ra_matrices = list()
@@ -1926,6 +1923,17 @@ class CARRADA(Dataset):
             frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
                     'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
                     'ad_matrix': ad_frame['matrix']}
+            
+        # Get ground truth boxes and labels
+        gt_boxes = []
+        gt_labels = []
+        if self.annos[self.seq_name][init_frame_name]:
+            for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                #obj_anno['range_doppler']['dense']
+                gt_boxes.append(obj_anno[featurestr]['box'])
+                gt_labels.append(obj_anno[featurestr]['label'])
+        camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+        frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
         return frame
 
 
@@ -1967,8 +1975,8 @@ class RADDetDataset(Dataset):
         self.anno_filenames = get_sorted_filenames(os.path.join(self.root_path, 'gt'))
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RAD(self, idx=None, for_visualize=False):
         rad = np.load(self.RAD_filenames[idx])
@@ -2094,7 +2102,8 @@ class RADDetDataset(Dataset):
             # decode ground truth boxes to YOLO format
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
-        else:
+            feature_data = np.transpose(feature_data, (2, 0, 1))
+        elif self.model_type == "DAROD":
             if self.features == ["RD"]:
                 feature_data = self.get_RD(index)
             elif self.features == ["RA"]:
@@ -2106,7 +2115,6 @@ class RADDetDataset(Dataset):
             gt_boxes = []
             gt_labels = []
             for (box, class_) in zip(boxes, classes):
-
                 yc, xc, h, w = box[0], box[2], box[3], box[5]
                 y1, y2, x1, x2 = int(yc - h / 2), int(yc + h / 2), int(xc - w / 2), int(xc + w / 2)
                 if x1 < 0:
@@ -2139,7 +2147,9 @@ class RADDetDataset(Dataset):
             gt_boxes = np.array(gt_boxes)
             feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
             feature_data = np.expand_dims(feature_data, axis=0)  
-        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes}
+        else:
+            raise ValueError("Model type not supported")    
+        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
     
     def encodeToLabels(self, gt_instances):
         """ Transfer ground truth instances into Detection Head format """
@@ -2230,8 +2240,8 @@ class Astyx(Dataset):
 
 
     def get_image(self, idx=None, for_visualize=False): 
-        image = np.asarray(Image.open(self.image_filenames[idx]))
-        return image
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
     
     def get_RAD(self, idx=None, for_visualize=False):
         return None

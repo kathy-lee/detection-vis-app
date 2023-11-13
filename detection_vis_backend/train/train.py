@@ -9,17 +9,15 @@ import os
 import logging
 import json
 import pandas as pd
-import pickle
-import time
 
 
-from metaflow import FlowSpec, Parameter, step, current
 from pathlib import Path
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import lr_scheduler
 from torch.utils.data import ConcatDataset, DataLoader, random_split, Subset
 from tqdm import tqdm
+from contextlib import contextmanager
 
 import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -28,11 +26,23 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, validate, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
+from data import crud, schemas
+from data.database import SessionLocal
 
-  
+@contextmanager
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()  
 
-def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, split_info_path: str):
+def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, output_path: str):
+    """
+        Filter out data items with empty annotations when the network demands(for example when use CARRADA dataset 
+        to train DAROD model).
+    """
     collate_func = {
         'FFTRadNet': FFTRadNet_collate,
         'RODNet_CDC': default_collate,
@@ -51,74 +61,92 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     }  
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
-    if not use_original_split:
+
+    if model_config['class'] == "DAROD":
+        skip_empty_label = True
+    else:
+        skip_empty_label = False
+
+    datasets = dict.fromkeys(["train", "val", "test"])
+    split_samples_info = dict(train=[], val=[], test=[])
+    if train_config["dataloader"]["splitmode"] != "original":
         if train_config['dataloader']['splitmode'] == 'sequence':
             assert len(datafiles) > 1
-            dataset_inst_list = []
-            for file in train_config['dataloader']['split_sequence']['train']:
-                dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='train')
-                dataset_inst_list.append(dataset_inst)
-            train_dataset = ConcatDataset(dataset_inst_list)
-            dataset_inst_list = []
-            for file in train_config['dataloader']['split_sequence']['val']:
-                dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='val')
-                dataset_inst_list.append(dataset_inst)
-            val_dataset = ConcatDataset(dataset_inst_list)
-            dataset_inst_list = []
-            for file in train_config['dataloader']['split_sequence']['test']:
-                dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='test')
-                dataset_inst_list.append(dataset_inst)
-            test_dataset = ConcatDataset(dataset_inst_list)
-            with open(split_info_path, 'w') as f:
-                f.write(f"TRAIN_SEQUENCES: {train_config['dataloader']['split_sequence']['train']}\n")
-                f.write(f"VAL_SEQUENCES: {train_config['dataloader']['split_sequence']['val']}\n")
-                f.write(f"TEST_SEQUENCES: {train_config['dataloader']['split_sequence']['test']}\n")
-        else:
+            assert 'train' in train_config['dataloader']['split_sequence']
+            assert 'val' in train_config['dataloader']['split_sequence']
+
+            for split_type in train_config['dataloader']['split_sequence'].keys():
+                samples_info = []
+                valid_ids = []
+                counter = 0
+                dataset_inst_list = []
+                for file in train_config['dataloader']['split_sequence'][split_type]:
+                    dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+                    dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    dataset_inst_list.append(dataset_inst)
+                    for i in range(len(dataset_inst)):
+                        samples_info.append([file['parse'], file['name'], file['id'], i])
+                        counter += 1
+                        if skip_empty_label and len(dataset_inst[i]['label']) == 0:
+                            continue
+                        valid_ids.append(counter-1)       
+                concat_dataset = ConcatDataset(dataset_inst_list)
+                # Extract dataset with valid(non-empty) labels
+                datasets[split_type] = Subset(concat_dataset, valid_ids)
+                split_samples_info[split_type] = [samples_info[id] for id in valid_ids]
+                if skip_empty_label:
+                    print(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}")  
+        elif train_config['dataloader']['splitmode'] == 'random':
+            samples_info = []
+            valid_ids = []
+            counter = 0
             dataset_inst_list = []
             for file in datafiles:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
                 dataset_inst.prepare_for_train(features, train_config, model_config)
                 dataset_inst_list.append(dataset_inst)
+                for i in range(len(dataset_inst)):
+                    if len(datafiles) == 1:
+                        samples_info.append(i)
+                    else:
+                        samples_info.append([file['parse'], file['name'], file['id'], i])
+                    counter += 1
+                    if skip_empty_label and len(dataset_inst[i]['label']) == 0:
+                        continue
+                    valid_ids.append(counter-1) 
             dataset = ConcatDataset(dataset_inst_list)
             split = np.array(train_config['dataloader']['split_random'])
             n_samples = len(dataset)
-            n_train = int(split[0] * n_samples)
-            n_val = int(split[1] * n_samples)
+            n_train, n_val = int(split[0] * n_samples), int(split[1] * n_samples)
             n_test = n_samples - n_train - n_val
-            train_dataset, val_dataset, test_dataset = random_split(dataset, [n_train, n_val,n_test], generator=torch.Generator().manual_seed(train_config['seed']))
+            train_dataset, val_dataset, test_dataset = random_split(dataset, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(train_config['seed']))
             train_ids = train_dataset.indices
             val_ids = val_dataset.indices
             test_ids = test_dataset.indices
-            with open(split_info_path, 'w') as f:
-                f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
-                f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
-                f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+            
+            if skip_empty_label:
+                print(f"Before filtering samples with empty annotations: train: {len(train_dataset)}, val: {len(val_dataset)}, test: {len(test_dataset)}")
+                valid_ids_set = set(valid_ids)
+                train_ids = [id for id in train_ids if id in valid_ids_set]
+                val_ids = [id for id in val_ids if id in valid_ids_set]
+                test_ids = [id for id in test_ids if id in valid_ids_set]
+                datasets['train'] = Subset(dataset, train_ids)
+                datasets['val'] = Subset(dataset, val_ids)
+                datasets['test'] = Subset(dataset, test_ids)
+                print(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}") 
+            else:
+                datasets['train'] = train_dataset
+                datasets['val'] = val_dataset
+                datasets['test'] = test_dataset
 
-        # Filter out data items with empty annotations when the network demands
-        if dataset_type == "CARRADA" and model_config['class'] == "DAROD":
-            print(f"Before filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
-            valid_indices = []
-            for i in range(len(train_dataset)):
-                if train_dataset[i]['label'].size > 0:  
-                    valid_indices.append(i)
-            train_dataset = Subset(train_dataset, valid_indices)
-            valid_indices = []
-            for i in range(len(val_dataset)):
-                if val_dataset[i]['label'].size > 0:  
-                    valid_indices.append(i)
-            val_dataset = Subset(val_dataset, valid_indices)
-            valid_indices = []
-            for i in range(len(test_dataset)):
-                if test_dataset[i]['label'].size > 0:  
-                    valid_indices.append(i)
-            test_dataset = Subset(test_dataset, valid_indices)
-            print(f"After filtering samples with empty annotations: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
-
+            split_samples_info['train'] = [samples_info[id] for id in train_ids]
+            split_samples_info['val'] = [samples_info[id] for id in val_ids]
+            split_samples_info['test'] = [samples_info[id] for id in test_ids]           
+        else:
+            ValueError("Split type not supported. Please choose following: 'sequence', 'random', 'original(some of the datasets has a built-in split).")        
     else:
         if dataset_type == "RADIal":
+            # RADIal dataset is partly labeled
             Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
                                        'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
                         'test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
@@ -127,7 +155,6 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             dataset.prepare_for_train(features, train_config, model_config)
             labels = dataset.labels
             dict_index_to_keys = {s:i for i,s in enumerate(dataset.sample_keys)}
-
             Val_indexes = []
             for seq in Sequences['val']:
                 idx = np.where(labels[:,14]==seq)[0]
@@ -140,16 +167,12 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 Test_indexes.append(labels[idx,0])
             Test_indexes = np.unique(np.concatenate(Test_indexes))
 
-            val_ids = [dict_index_to_keys[k] for k in Val_indexes]
-            test_ids = [dict_index_to_keys[k] for k in Test_indexes]
-            train_ids = np.setdiff1d(np.arange(len(dataset)),np.concatenate([val_ids,test_ids]))  
-            train_dataset = Subset(dataset,train_ids)
-            val_dataset = Subset(dataset,val_ids)
-            test_dataset = Subset(dataset,test_ids)
-            with open(split_info_path, 'w') as f:
-                f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
-                f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
-                f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+            split_samples_info['val'] = [dict_index_to_keys[k] for k in Val_indexes]
+            split_samples_info['test'] = [dict_index_to_keys[k] for k in Test_indexes]
+            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
+            datasets["train"] = Subset(dataset, split_samples_info['train'])
+            datasets["val"] = Subset(dataset, split_samples_info['val'])
+            datasets["test"] = Subset(dataset, split_samples_info['test'])
         elif dataset_type == "CARRADA":
             Sequences = {'train': ['2019-09-16-12-52-12', '2019-09-16-12-55-51', '2019-09-16-12-58-42', '2019-09-16-13-03-38', 
                                    '2019-09-16-13-11-12', '2019-09-16-13-14-29', '2019-09-16-13-20-20', '2019-09-16-13-25-35', 
@@ -160,75 +183,81 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                                '2020-02-28-13-07-38', '2020-02-28-13-11-45'],
                         'test': ['2019-09-16-13-13-01', '2019-09-16-13-18-33', '2020-02-28-12-13-54', '2020-02-28-12-23-30', 
                                  '2020-02-28-13-08-51', '2020-02-28-13-14-35']}
-            file_ids = {'train': [], 'val': [], 'test': []}
-            dataset_inst_list = []
-            for id in file_ids['train']:
-                dataset_inst = dataset_factory.get_instance(dataset_type, id)
-                dataset_inst.prepare_for_train(features, train_config, model_config)
-                dataset_inst_list.append(dataset_inst)
-            train_dataset = ConcatDataset(dataset_inst_list)
-            dataset_inst_list = []
-            for file in file_ids['val']:
-                dataset_inst = dataset_factory.get_instance(dataset_type, file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
-                dataset_inst_list.append(dataset_inst)
-            val_dataset = ConcatDataset(dataset_inst_list)
-            dataset_inst_list = []
-            for file in file_ids['test']:
-                dataset_inst = dataset_factory.get_instance(dataset_type, file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
-                dataset_inst_list.append(dataset_inst)
-            test_dataset = ConcatDataset(dataset_inst_list)
-            with open(split_info_path, 'w') as f:
-                f.write(f"TRAIN_SEQUENCES: {Sequences['train']}\n")
-                f.write(f"VAL_SEQUENCES: {Sequences['val']}\n")
-                f.write(f"TEST_SEQUENCES: {Sequences['test']}\n")
+            for split_type in Sequences.keys():
+                samples_info = []
+                valid_ids = []
+                counter = 0
+                dataset_inst_list = []
+                for file_name in Sequences[split_type]:
+                    with get_db() as db:
+                        datafile = crud.get_datafile_by_name(db, file_name)
+                    dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
+                    dataset_inst.parse(datafile.id, datafile.path, file_name, datafile.config)
+                    dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    dataset_inst_list.append(dataset_inst)
+                    for i in range(len(dataset_inst)):
+                        samples_info.append(['CARRADA', file_name, datafile.id, i])
+                        counter += 1
+                        if skip_empty_label and len(dataset_inst[i]['label']) == 0:
+                            continue
+                        valid_ids.append(counter-1)       
+                concat_dataset = ConcatDataset(dataset_inst_list)
+                # Extract dataset with valid(non-empty) labels
+                datasets[split_type] = Subset(concat_dataset, valid_ids)
+                split_samples_info[split_type] = [samples_info[id] for id in valid_ids]
+                if skip_empty_label:
+                    print(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}") 
         elif dataset_type == "RADDetDataset":
             dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
             dataset.prepare_for_train(features, train_config, model_config)
             sample_ids = [os.path.splitext(os.path.basename(f))[0] for f in dataset.anno_filenames]
             with open(os.path.join(dataset.root_path, "original_split_info.json"), "r") as f:
                 dataset.original_split = json.load(f)
-            val_ids = [sample_ids.index(i) for i in dataset.original_split['val'] if i in sample_ids]
-            test_ids = [sample_ids.index(i) for i in dataset.original_split['test'] if i in sample_ids]
-            train_ids = np.setdiff1d(np.arange(len(dataset)), np.concatenate([val_ids,test_ids]))  
-            train_dataset = Subset(dataset,train_ids)
-            val_dataset = Subset(dataset,val_ids)
-            test_dataset = Subset(dataset,test_ids)
-            with open(split_info_path, 'w') as f:
-                f.write(f"TRAIN_SAMPLE_IDS: {','.join(map(str, train_ids))}\n")
-                f.write(f"VAL_SAMPLE_IDS: {','.join(map(str, val_ids))}\n")
-                f.write(f"TEST_SAMPLE_IDS: {','.join(map(str, test_ids))}\n")
+            split_samples_info['val'] = [sample_ids.index(i) for i in dataset.original_split['val'] if i in sample_ids]
+            split_samples_info['test'] = [sample_ids.index(i) for i in dataset.original_split['test'] if i in sample_ids]
+            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
+            datasets['train'] = Subset(dataset, split_samples_info['train'])
+            datasets['val'] = Subset(dataset, split_samples_info['val'])
+            datasets['test'] = Subset(dataset, split_samples_info['test'])   
         else:
-            raise ValueError(f"{datafiles[0]['parse']} Dataset doesn't have default data split.")
+            raise ValueError(f"{dataset_type} Dataset doesn't provide default data split.")
     
-    train_loader = DataLoader(train_dataset, 
+    train_loader = DataLoader(datasets['train'], 
                         batch_size=train_config['dataloader']['train']['batch_size'], 
                         shuffle=True,
                         num_workers=train_config['dataloader']['train']['num_workers'],
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
-    val_loader =  DataLoader(val_dataset, 
+    val_loader =  DataLoader(datasets['val'], 
                         batch_size=train_config['dataloader']['val']['batch_size'], 
                         shuffle=False,
                         num_workers=train_config['dataloader']['val']['num_workers'],
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
-    test_loader =  DataLoader(test_dataset, 
+    test_loader =  DataLoader(datasets['test'], 
                         batch_size=train_config['dataloader']['test']['batch_size'], 
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
+    
+    if isinstance(split_samples_info['train'][0], (int, np.integer)):
+        header = ['original sample id in the file']
+    else:
+        header = ['dataset_name', 'file_name', 'file_id', 'original sample id in the file']
+    for split_type in split_samples_info.keys():
+        df = pd.DataFrame(split_samples_info[split_type], columns=header)
+        df.to_csv(os.path.join(output_path, f'{split_type}_sample_ids.csv'), index_label='sample id')
+
     print('===========  Dataset  ==================:')
     print('      Split Mode:', train_config['dataloader']['splitmode'])
-    print('      Training:', len(train_dataset))
-    print('      Validation:', len(val_dataset))
-    print('      Test:', len(test_dataset))
+    print('      Training:', len(datasets['train']))
+    print('      Validation:', len(datasets['val']))
+    print('      Test:', len(datasets['test']))
     return train_loader, val_loader, test_loader
 
 
-def train(datafiles: list, features: list, model_config: dict, train_config: dict, use_original_split: bool, pretrained: str=None):    
+def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):    
     # Setup random seed
     torch.manual_seed(train_config['seed'])
     np.random.seed(train_config['seed'])
@@ -238,7 +267,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     # create experiment model name
     curr_date = datetime.now()
     exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
-    print(exp_name)
 
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
@@ -249,8 +277,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     output_dir = output_root / exp_name
     writer = SummaryWriter(output_dir)
 
-    split_info_path = os.path.join(output_dir, 'samples_split.txt')
-    train_loader, val_loader, test_loader = CreateDataLoaders(datafiles, features, model_config, train_config, use_original_split, split_info_path)
+    train_loader, val_loader, test_loader = CreateDataLoaders(datafiles, features, model_config, train_config, output_dir)
 
     # save model lineage info
     train_info_path = os.path.join(output_dir, 'train_info.txt')
@@ -270,10 +297,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     model_type = model_config['class']
     model_config = model_config.copy()
     model_config.pop('class', None)
-    print(model_type)
-    print(model_config)
     net = network_factory.get_instance(model_type, model_config)
-    print('network created')
+    print(f'Network initialized: {exp_name}')
     net.to(device)
 
     # Optimizer
@@ -343,7 +368,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
                 #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
             elif model_type == "RADDet":
-                inputs = data['radar_data'].to(device).float().permute(0, 3, 1, 2)
+                inputs = data['radar'].to(device).float()
                 label = data['label'].to(device).float()
                 boxes = data['boxes'].to(device).float()
                 #print(inputs.shape, label.shape, boxes.shape)
@@ -431,19 +456,19 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
                     loss = torch.mean(rd_loss + ra_loss)
             elif model_type == "RADDet":
-                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+                pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
                 box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
                 box_loss *= 1e-1
                 loss = box_loss + conf_loss + category_loss
             elif model_type == "DAROD":
-                print("--------loss----------")
+                #print("--------loss----------")
                 #print(f"pred_labels: {outputs['decoder_output'][2]}")
                 bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
-                print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
+                #print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
                 frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
                 #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
                 rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-                print("--------loss----------")
+                #print("--------loss----------")
                 loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
             else:
                 raise ValueError

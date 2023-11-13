@@ -4,6 +4,7 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import random
 
 from matplotlib.patches import Rectangle
@@ -204,8 +205,9 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
 
   feature_data = get_feature(file_id, feature, st.session_state[counter])
   serialized_feature = feature_data["serialized_feature"]
-  feature_image = np.array(serialized_feature)
-  if feature == "lidarPC" or feature == "radarPC":
+  # feature_image = np.array(serialized_feature)
+  if feature in ("lidarPC", "radarPC"):
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(8, 6))
     plt.grid()
     #plt.gca().set_aspect('equal', adjustable='box')
@@ -241,6 +243,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.ylabel('Y(m)')
     st.pyplot(plt)
   elif feature == "RD":
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(2, 3))
     ## Rotates RD image 90 degrees clockwise
     # feature_image = np.rot90(feature_image, k=-1) 
@@ -281,6 +284,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
           # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
     st.pyplot(plt, use_container_width=False)
   elif feature == "RA":
+    feature_image = np.array(serialized_feature)
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image)
     plt.xlabel('Azimuth')
@@ -300,7 +304,8 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
           plt.gca().add_patch(rect)
           plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
     st.pyplot(plt)
-  elif feature == 'image':
+  elif feature in ('image', 'depth_image'):
+    feature_image = mpimg.imread(serialized_feature)
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image) #, aspect='auto'
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
@@ -333,6 +338,7 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     plt.ylim(img_height - 1, 0)
     st.pyplot(plt)
   else:
+    feature_image = np.array(serialized_feature)
     feature_image = feature_image - np.min(feature_image)
     feature_image = feature_image / np.max(feature_image)
     st.image(feature_image, caption=f"index: {st.session_state[counter]}, shape: {feature_image.shape}")

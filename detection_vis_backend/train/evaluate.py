@@ -6,14 +6,16 @@ import time
 import os
 import math
 import json
+import cv2
 import torch.nn as nn
 
 
 from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
+from PIL import Image
 
-from detection_vis_backend.train.utils import pixor_loss, decode, get_metrics, boxDecoder, lossYolo
+from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms 
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -76,7 +78,6 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
     
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
 
-    print('Generating Predictions...')
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
     for i, data in enumerate(loader):
 
@@ -343,94 +344,6 @@ class Metrics():
         return self.precision,self.recall,self.mIoU 
 
 
-def RA_to_cartesian_box(data):
-    L = 4
-    W = 1.8
-    
-    boxes = []
-    for i in range(len(data)):
-        
-        x = np.sin(np.radians(data[i][1])) * data[i][0]
-        y = np.cos(np.radians(data[i][1])) * data[i][0]
-
-        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L])
-              
-    return boxes
-
-def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
-
-    # sort the detections such that the entry with the maximum confidence score is at the top
-    sorted_indices = np.argsort(valid_class_predictions)[::-1]
-    sorted_box_predictions = valid_box_predictions[sorted_indices]
-    sorted_class_predictions = valid_class_predictions[sorted_indices]
-
-    for i in range(sorted_box_predictions.shape[0]):
-        # get the IOUs of all boxes with the currently most certain bounding box
-        try:
-            ious = np.zeros((sorted_box_predictions.shape[0]))
-            ious[i + 1:] = bbox_iou(sorted_box_predictions[i, :], sorted_box_predictions[i + 1:, :])
-        except ValueError:
-            break
-        except IndexError:
-            break
-
-        # eliminate all detections which have IoU > threshold
-        overlap_mask = np.where(ious < nms_threshold, True, False)
-        sorted_box_predictions = sorted_box_predictions[overlap_mask]
-        sorted_class_predictions = sorted_class_predictions[overlap_mask]
-
-    return sorted_class_predictions, sorted_box_predictions
-
-
-def bbox_iou(box1, boxes):
-
-    # currently inspected box
-    box1 = box1.reshape((4,2))
-    rect_1 = Polygon([(box1[0, 0], box1[0, 1]), (box1[1, 0], box1[1, 1]), (box1[2, 0], box1[2, 1]),
-                      (box1[3, 0], box1[3, 1])])
-    area_1 = rect_1.area
-
-    # IoU of box1 with each of the boxes in "boxes"
-    ious = np.zeros(boxes.shape[0])
-    for box_id in range(boxes.shape[0]):
-        box2 = boxes[box_id]
-        box2 = box2.reshape((4,2))
-        rect_2 = Polygon([(box2[0, 0], box2[0, 1]), (box2[1, 0], box2[1, 1]), (box2[2, 0], box2[2, 1]),
-                          (box2[3, 0], box2[3, 1])])
-        area_2 = rect_2.area
-
-        # get intersection of both bounding boxes
-        inter_area = rect_1.intersection(rect_2).area
-
-        # compute IoU of the two bounding boxes
-        iou = inter_area / (area_1 + area_2 - inter_area)
-
-        ious[box_id] = iou
-
-    return ious
-
-def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_threshold=0.05):
-
-    # process targets and perform NMS for each prediction in batch
-    final_batch_predictions = None  # store final bounding box predictions
-    
-    point_cloud_reg_predictions = RA_to_cartesian_box(batch_predictions)
-    point_cloud_reg_predictions = np.asarray(point_cloud_reg_predictions)
-    point_cloud_class_predictions = batch_predictions[:,-1]
-
-    # get valid detections
-    validity_mask = np.where(point_cloud_class_predictions > confidence_threshold, True, False)
-    
-    valid_box_predictions = point_cloud_reg_predictions[validity_mask]
-    valid_class_predictions = point_cloud_class_predictions[validity_mask]
-
-    # perform Non-Maximum Suppression
-    final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold)
-
-    # concatenate point_cloud_id, confidence score and bounding box prediction | shape: [N_FINAL, 1+1+8]
-    final_Object_predictions = np.hstack((final_class_predictions[:, np.newaxis], final_box_predictions))
-    return final_Object_predictions
-
 
 class ConfmapStack:
     def __init__(self, confmap_shape):
@@ -445,157 +358,6 @@ class ConfmapStack:
 
     def setNext(self, _genconfmap):
         self.next = _genconfmap
-
-
-def get_class_name(class_id, classes):
-    n_class = len(classes)
-    if 0 <= class_id < n_class:
-        class_name = classes[class_id]
-    elif class_id == -1000:
-        class_name = '__background'
-    else:
-        raise ValueError("Class ID is not defined")
-    return class_name
-
-
-def pol2cart_ramap(rho, phi):
-    """
-    Transform from polar to cart under RAMap coordinates
-    :param rho: distance to origin
-    :param phi: angle (rad) under RAMap coordinates
-    :return: x, y
-    """
-    x = rho * np.sin(phi)
-    y = rho * np.cos(phi)
-    return x, y
-
-
-def get_ols_btw_objects(obj1, obj2):
-    classes = ["pedestrian", "cyclist", "car"] 
-    object_sizes = {
-        "pedestrian": 0.5,
-        "cyclist": 1.0,
-        "car": 3.0
-    }
-
-    if obj1['class_id'] != obj2['class_id']:
-        print('Error: Computing OLS between different classes!')
-        raise TypeError("OLS can only be compute between objects with same class.  ")
-    if obj1['score'] < obj2['score']:
-        raise TypeError("Confidence score of obj1 should not be smaller than obj2. "
-                        "obj1['score'] = %s, obj2['score'] = %s" % (obj1['score'], obj2['score']))
-
-    classid = obj1['class_id']
-    class_str = get_class_name(classid, classes)
-    rng1 = obj1['range']
-    agl1 = obj1['angle']
-    rng2 = obj2['range']
-    agl2 = obj2['angle']
-    x1, y1 = pol2cart_ramap(rng1, agl1)
-    x2, y2 = pol2cart_ramap(rng2, agl2)
-    dx = x1 - x2
-    dy = y1 - y2
-    s_square = x1 ** 2 + y1 ** 2
-    kappa = object_sizes[class_str] / 100  # TODO: tune kappa
-    e = (dx ** 2 + dy ** 2) / 2 / (s_square * kappa)
-    ols = math.exp(-e)
-    return ols
-
-
-def lnms(obj_dicts_in_class, train_cfg):
-    """
-    Location-based NMS
-    :param obj_dicts_in_class:
-    :param config_dict:
-    :return:
-    """
-    detect_mat = - np.ones((train_cfg['max_dets'], 4))
-    cur_det_id = 0
-    # sort peaks by confidence score
-    inds = np.argsort([-d['score'] for d in obj_dicts_in_class], kind='mergesort')
-    dts = [obj_dicts_in_class[i] for i in inds]
-    while len(dts) != 0:
-        if cur_det_id >= train_cfg['max_dets']:
-            break
-        p_star = dts[0]
-        detect_mat[cur_det_id, 0] = p_star['class_id']
-        detect_mat[cur_det_id, 1] = p_star['range_id']
-        detect_mat[cur_det_id, 2] = p_star['angle_id']
-        detect_mat[cur_det_id, 3] = p_star['score']
-        cur_det_id += 1
-        del dts[0]
-        for pid, pi in enumerate(dts):
-            ols = get_ols_btw_objects(p_star, pi)
-            if ols > train_cfg['ols_thres']:
-                del dts[pid]
-
-    return detect_mat
-
-
-def detect_peaks(image, threshold=0.3):
-    peaks_row = []
-    peaks_col = []
-    height, width = image.shape
-    for h in range(1, height - 1):
-        for w in range(2, width - 2):
-            area = image[h - 1:h + 2, w - 2:w + 3]
-            center = image[h, w]
-            flag = np.where(area >= center)
-            if flag[0].shape[0] == 1 and center > threshold:
-                peaks_row.append(h)
-                peaks_col.append(w)
-
-    return peaks_row, peaks_col
-
-
-def post_process_single_frame(confmaps, train_cfg, n_class, rng_grid, agl_grid):
-    """
-    Post-processing for RODNet
-    :param confmaps: predicted confidence map [B, n_class, win_size, ramap_r, ramap_a]
-    :param search_size: search other detections within this window (resolution of our system)
-    :param peak_thres: peak threshold
-    :return: [B, win_size, max_dets, 4]
-    """
-    max_dets = train_cfg['max_dets']
-    peak_thres = train_cfg['peak_thres']
-
-    class_size, height, width = confmaps.shape
-
-    if class_size != n_class:
-        raise TypeError("Wrong class number setting. ")
-
-    res_final = - np.ones((max_dets, 4))
-
-    detect_mat = []
-    for c in range(class_size):
-        obj_dicts_in_class = []
-        confmap = confmaps[c, :, :]
-        rowids, colids = detect_peaks(confmap, threshold=peak_thres)
-
-        for ridx, aidx in zip(rowids, colids):
-            rng = rng_grid[ridx]
-            agl = agl_grid[aidx]
-            conf = confmap[ridx, aidx]
-            obj_dict = dict(
-                frame_id=None,
-                range=rng,
-                angle=agl,
-                range_id=ridx,
-                angle_id=aidx,
-                class_id=c,
-                score=conf,
-            )
-            obj_dicts_in_class.append(obj_dict)
-
-        detect_mat_in_class = lnms(obj_dicts_in_class, train_cfg)
-        detect_mat.append(detect_mat_in_class)
-
-    detect_mat = np.array(detect_mat)
-    detect_mat = np.reshape(detect_mat, (class_size * max_dets, 4))
-    detect_mat = detect_mat[detect_mat[:, 3].argsort(kind='mergesort')[::-1]]
-    res_final[:, :] = detect_mat[:max_dets]
-
-    return res_final
 
 
 def write_dets_results_single_frame(res, data_id, save_path, classes):
@@ -1274,13 +1036,9 @@ def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}")
-        if features == ['RD']:
-            input = data['rd_matrix'].to(device).float()
-            label = data['rd_mask'].to(device).float()
-        elif features == ['RA']:
-            input = data['ra_matrix'].to(device).float()
-            label = data['ra_mask'].to(device).float()
+        print(f"Sample {iter}") 
+        input = data['radar'].to(device).float()
+        label = data['mask'].to(device).float()
      
         with torch.set_grad_enabled(False):
             outputs = net(input)
@@ -1343,18 +1101,6 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_crit
             'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
 
 
-def yoloheadToPredictions(yolohead_output, conf_threshold=0.5):
-    """ Transfer YOLO HEAD output to [:, 8], where 8 means
-    [x, y, z, w, h, d, score, class_index]"""
-    prediction = yolohead_output.reshape(-1, yolohead_output.shape[-1])
-    prediction_class = np.argmax(prediction[:, 7:], axis=-1)
-    predictions = np.concatenate([prediction[:, :7], \
-                    np.expand_dims(prediction_class, axis=-1)], axis=-1)
-    conf_mask = (predictions[:, 6] >= conf_threshold)
-    predictions = predictions[conf_mask]
-    return predictions
-
-
 def iou2d(box_xywh_1, box_xywh_2):
     """ Numpy version of 3D bounding box IOU calculation 
     Args:
@@ -1381,43 +1127,6 @@ def iou2d(box_xywh_1, box_xywh_2):
     ### get iou
     iou = np.nan_to_num(intersection_area / (union_area + 1e-10))
     return iou
-
-
-def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
-    """ Bboxes format [x, y, z, w, h, d, score, class_index] """
-    """ Implemented the same way as YOLOv4 """ 
-    assert method in ['nms', 'soft-nms']
-    if len(bboxes) == 0:
-        best_bboxes = np.zeros([0, 8])
-    else:
-        all_pred_classes = list(set(bboxes[:, 7]))
-        unique_classes = list(np.unique(all_pred_classes))
-        best_bboxes = []
-        for cls in unique_classes:
-            cls_mask = (bboxes[:, 7] == cls)
-            cls_bboxes = bboxes[cls_mask]
-            ### NOTE: start looping over boxes to find the best one ###
-            while len(cls_bboxes) > 0:
-                max_ind = np.argmax(cls_bboxes[:, 6])
-                best_bbox = cls_bboxes[max_ind]
-                best_bboxes.append(best_bbox)
-                cls_bboxes = np.concatenate([cls_bboxes[: max_ind], cls_bboxes[max_ind + 1:]])
-                iou = iou3d(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], \
-                            input_size)
-                weight = np.ones((len(iou),), dtype=np.float32)
-                if method == 'nms':
-                    iou_mask = iou > iou_threshold
-                    weight[iou_mask] = 0.0
-                if method == 'soft-nms':
-                    weight = np.exp(-(1.0 * iou ** 2 / sigma))
-                cls_bboxes[:, 6] = cls_bboxes[:, 6] * weight
-                score_mask = cls_bboxes[:, 6] > 0.
-                cls_bboxes = cls_bboxes[score_mask]
-        if len(best_bboxes) != 0:
-            best_bboxes = np.array(best_bboxes)
-        else:
-            best_bboxes = np.zeros([0, 8])
-    return best_bboxes
 
 
 def getTruePositive(pred, gt, input_size, iou_threshold=0.5, mode="3D"):
@@ -1514,15 +1223,15 @@ def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, d
     mean_ap_test = 0.0
     ap_all_class_test = []
     ap_all_class = []
-    for class_id in range(model_config['num_class']):
+    for class_id in range(model_config['n_class']):
         ap_all_class.append([])
     with torch.set_grad_enabled(False):
         for iter, data in enumerate(dataloader):
-            inputs = data['radar_data'].to(device).float().permute(0, 3, 1, 2)
+            inputs = data['radar'].to(device).float()
             label = data['label'].to(device).float()
             raw_boxes = data['boxes'].to(device).float()
             outputs = net(inputs)
-            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['num_class'], train_config['yolohead_xyz_scales'][0], device)
+            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
             box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, raw_boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
             box_loss *= 1e-1
             loss = box_loss + conf_loss + category_loss
