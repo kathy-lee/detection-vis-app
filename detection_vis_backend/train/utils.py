@@ -220,7 +220,7 @@ def RA_to_cartesian_box(data):
         x = np.sin(np.radians(data[i][1])) * data[i][0]
         y = np.cos(np.radians(data[i][1])) * data[i][0]
 
-        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L,data[i][0],data[i][1]])
+        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L])
               
     return boxes
 
