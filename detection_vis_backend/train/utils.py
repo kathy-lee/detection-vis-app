@@ -291,9 +291,7 @@ def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_thr
     valid_class_predictions = point_cloud_class_predictions[validity_mask]
 
     # perform Non-Maximum Suppression
-    print(f"shape before perform nms: {valid_class_predictions.shape}, {valid_box_predictions.shape}")
     final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions,nms_threshold)
-    print(f"shape should be: {final_class_predictions.shape}, {final_box_predictions.shape}")
 
     # concatenate point_cloud_id, confidence score and bounding box prediction | shape: [N_FINAL, 1+1+8]
     final_point_cloud_predictions = np.hstack((final_class_predictions[:, np.newaxis],
