@@ -225,3 +225,46 @@ class RODDecode_VA(nn.Module):
         # x = self.upsample(x)
         # x = self.sigmoid(x)
         return x
+    
+
+class Fuse_fea_new_rep(nn.Module):
+    def __init__(self, n_class, n_angle):
+        super(Fuse_fea_new_rep, self).__init__()
+        self.n_angle = n_angle
+        self.convt1 = nn.Conv3d(in_channels=32, out_channels=16,
+                                kernel_size=(3, 5, 5), stride=(1, 1, 1), padding=(0, 2, 2))
+        self.convt2 = nn.Conv3d(in_channels=32, out_channels=16,
+                                kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1))
+        self.convt3 = nn.Conv3d(in_channels=32, out_channels=16,
+                                kernel_size=(3, 1, 21), stride=(1, 1, 1), padding=(0, 0, 0),
+                                dilation=(1, 1, 6)) # padding 60
+        self.convt4 = nn.Conv3d(in_channels=48, out_channels=n_class,
+                                kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1))
+        self.prelu = nn.PReLU()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, feas_ra, feas_rv, feas_va):
+        feas_rv = torch.sum(feas_rv, 4, keepdim=True) # condense the the velocity dimension (B, 32, W/2, 128, 128) -> (B, 32, W/2, 128, 1)
+        feas_ra1 = feas_rv.expand(-1, -1, -1, -1, self.n_angle)
+        feas_va = torch.sum(feas_va, 4, keepdim=True)  # condense the the velocity dimension (B, 32, W/2, 128, 128) -> (B, 32, W/2, 128, 1)
+        feas_va = torch.transpose(feas_va, 3, 4)    # (B, 32, W/2, 128, 1) -> (B, 32, W/2, 1, 128)
+        feas_ra2 = feas_va.expand(-1, -1, -1, self.n_range, -1)  # (B, 32, W/2, 1, 128) -> (B, 32, W/2, 128, 128)
+
+        fea_shap = feas_ra.shape # (B, 32, W/2, 128, 128)
+        feas_ra = feas_ra.permute(0, 2, 1, 3, 4)    # (B, 32, W/2, 128, 128) -> (B, W/2, 32, 128, 128)
+        feas_ra = torch.unsqueeze(torch.reshape(feas_ra, (-1, fea_shap[1], fea_shap[3], fea_shap[4])), 2) # (B, W/2, 32, 128, 128) -> (B*W/2, 32, 128, 128) -> (B*W/2, 32, 1, 128, 128)
+        feas_ra1 = feas_ra1.permute(0, 2, 1, 3, 4)    # (B, 32, W/2, 128, 128) -> (B, W/2, 32, 128, 128)
+        feas_ra1 = torch.unsqueeze(torch.reshape(feas_ra1, (-1, fea_shap[1], fea_shap[3], fea_shap[4])), 2) # (B, W/2, 32, 128, 128) -> (B*W/2, 32, 128, 128) -> (B*W/2, 32, 1, 128, 128)
+        feas_ra2 = feas_ra2.permute(0, 2, 1, 3, 4)    # (B, 32, W/2, 128, 128) -> (B, W/2, 32, 128, 128)
+        feas_ra2 = torch.unsqueeze(torch.reshape(feas_ra2, (-1, fea_shap[1], fea_shap[3], fea_shap[4])), 2) # (B, W/2, 32, 128, 128) -> (B*W/2, 32, 128, 128) -> (B*W/2, 32, 1, 128, 128)
+        feas_ra = torch.cat((feas_ra, feas_ra1, feas_ra2), 2) # 3*(B*W/2, 32, 1, 128, 128) -> (B*W/2, 32, 3, 128, 128)
+
+        x1 = torch.squeeze(self.prelu(self.convt1(feas_ra)))  # (B*W/2, 32, 3, 128, 128) -> (B*W/2, 16, 1, 128, 128) -> (B*W/2, 16, 128, 128)
+        x2 = torch.squeeze(self.prelu(self.convt2(feas_ra)))  # (B*W/2, 32, 3, 128, 128) -> (B*W/2, 16, 1, 128, 128) -> (B*W/2, 16, 128, 128)
+        feas_ra = F.pad(feas_ra, (60, 60, 0, 0, 0, 0), "circular")
+        x3 = torch.squeeze(self.prelu(self.convt3(feas_ra)))  # (B*W/2, 32, 3, 128, 128) -> (B*W/2, 16, 1, 128, 128) -> (B*W/2, 16, 128, 128)
+        x1 = torch.cat((x1, x2, x3), 1) # (B*W/2, 16, 128, 128) -> (B*W/2, 48, 128, 128)
+
+        x = torch.transpose(torch.reshape(x1, (fea_shap[0], fea_shap[2], 48, fea_shap[3], fea_shap[4])), 1, 2) # (B*W/2, 48, 128, 128) -> (B, W/2, 48, 128, 128) -> (B, 48, W/2, 128, 128)
+        x = self.sigmoid(self.convt4(x))  # (B, 48, W/2, 128, 128) -> (B, 3, W/2, 128, 128)
+        return x

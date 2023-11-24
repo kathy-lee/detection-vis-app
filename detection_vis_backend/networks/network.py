@@ -694,7 +694,7 @@ class RAMP_CNN(nn.Module):
         self.c3d_decode_rv = RODDecode_RV(win_size, ramap_rsize, ramap_asize)
         self.c3d_encode_va = RODEncode_VA()
         self.c3d_decode_va = RODDecode_VA(win_size, ramap_rsize, ramap_asize)
-        self.fuse_fea = Fuse_fea_new_rep()
+        self.fuse_fea = Fuse_fea_new_rep(n_class, ramap_asize)
 
     def forward(self, x_ra, x_rv, x_va):
         x_ra = self.c3d_encode_ra(x_ra)
