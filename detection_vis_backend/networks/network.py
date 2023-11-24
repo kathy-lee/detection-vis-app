@@ -15,6 +15,7 @@ from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHour
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
 from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
+from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep 
 
 
 class NetworkFactory:
@@ -683,3 +684,25 @@ class DAROD(nn.Module):
         #     output = torch.clamp(output, min=0.0, max=1.0)
         return output
 
+
+class RAMP_CNN(nn.Module):
+    def __init__(self, n_class, win_size, ramap_rsize, ramap_asize):
+        super(RAMP_CNN, self).__init__()
+        self.c3d_encode_ra = RODEncode_RA()
+        self.c3d_decode_ra = RODDecode_RA(win_size, ramap_rsize, ramap_asize)
+        self.c3d_encode_rv = RODEncode_RV()
+        self.c3d_decode_rv = RODDecode_RV(win_size, ramap_rsize, ramap_asize)
+        self.c3d_encode_va = RODEncode_VA()
+        self.c3d_decode_va = RODDecode_VA(win_size, ramap_rsize, ramap_asize)
+        self.fuse_fea = Fuse_fea_new_rep()
+
+    def forward(self, x_ra, x_rv, x_va):
+        x_ra = self.c3d_encode_ra(x_ra)
+        feas_ra = self.c3d_decode_ra(x_ra)  # (B, 32, W/2, 128, 128)
+        x_rv = self.c3d_encode_rv(x_rv)
+        feas_rv = self.c3d_decode_rv(x_rv)  # (B, 32, W/2, 128, 128)
+        x_va = self.c3d_encode_va(x_va)
+        feas_va = self.c3d_decode_va(x_va)  # (B, 32, W/2, 128, 128)
+        dets = self.fuse_fea(feas_ra, feas_rv, feas_va) # (B, 3, W/2, 128, 128)
+        dets2 = self.fuse_fea(torch.zeros_like(feas_ra), feas_rv, feas_va) # (B, 3, W/2, 128, 128)
+        return dets, dets2
