@@ -544,7 +544,6 @@ def normalize_confmap(confmap):
 
 def add_noise_channel(confmap, radar_configs):
     n_class = 3 # dataset.object_cfg.n_class
-
     confmap_new = np.zeros((n_class + 1, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
     confmap_new[:n_class, :, :] = confmap
     conf_max = np.max(confmap, axis=0)

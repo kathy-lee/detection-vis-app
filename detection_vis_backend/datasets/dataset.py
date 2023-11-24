@@ -13,6 +13,7 @@ import json
 import random
 import time
 import numpy as np
+import scipy.io as spio
 import torchvision.transforms as transform
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -26,7 +27,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -2370,3 +2371,312 @@ class Astyx(Dataset):
     def __getitem__(self, index):
         
        return None
+
+
+class UWCR(Dataset):
+    name = "UWCR dataset instance"
+
+    def __init__(self, features=None):
+        self.feature_path = ""
+        self.config = ""
+
+        self.frame_sync = 0
+        self.features = ['image', 'adc']
+        
+    def parse(self, file_id, file_path, file_name, config):
+        self.config = config
+        self.root_path = file_path
+        self.seq_name = file_name
+        
+        def get_sorted_filenames(directory):
+            # Get a sorted list of all file names in the given directory
+            return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
+        
+        self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'images_0'))
+        self.label_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'text_labels'))
+        self.radar_filenames = get_sorted_filenames(os.path.join(self.root_path, file_name, 'radar_raw_frame'))
+        
+        # find the overlapped indices in the sequence
+        image_filename = os.path.basename(self.image_filenames[0]) 
+        image_filename_id = int(image_filename.split('.')[0]) 
+        radar_filename = os.path.basename(self.radar_filenames[0])
+        radar_filename_id = int(radar_filename.split('.')[0])
+        label_filename = os.path.basename(self.label_filenames[0])
+        label_filename_id = int(label_filename.split('.')[0])
+        if image_filename_id != radar_filename_id or radar_filename_id != label_filename_id or image_filename_id != label_filename_id:
+            id_max = max(image_filename_id, radar_filename_id, label_filename_id)
+            if image_filename_id != id_max:
+                self.image_filenames = self.image_filenames[id_max - image_filename_id:]
+            if radar_filename_id != id_max:
+                self.radar_filenames = self.radar_filenames[id_max - radar_filename_id:]
+            if label_filename_id != id_max:
+                self.label_filenames = self.label_filenames[id_max - label_filename_id:]
+        image_filename = os.path.basename(self.image_filenames[-1]) 
+        image_filename_id = int(image_filename.split('.')[0]) 
+        radar_filename = os.path.basename(self.radar_filenames[-1])
+        radar_filename_id = int(radar_filename.split('.')[0])
+        label_filename = os.path.basename(self.label_filenames[-1])
+        label_filename_id = int(label_filename.split('.')[0])
+        if image_filename_id != radar_filename_id or radar_filename_id != label_filename_id or image_filename_id != label_filename_id:
+            id_min = min(image_filename_id, radar_filename_id, label_filename_id)
+            if image_filename_id != id_min:
+                self.image_filenames = self.image_filenames[:id_min - id_max + 1]
+            if radar_filename_id != id_min:
+                self.radar_filenames = self.radar_filenames[:id_min - id_max + 1]
+            if label_filename_id != id_min:
+                self.label_filenames = self.label_filenames[:id_min - id_max + 1]
+
+        self.frame_sync = len(self.image_filenames) 
+        print(self.frame_sync, self.image_filenames[0], self.image_filenames[-1])
+        self.n_angle = 128
+        self.n_vel = 128
+        self.n_range = 128
+        self.n_chirp = 255
+        self.n_rx = 8
+        self.n_sample = 128
+        self.label_map = {0: 'person',
+                        2: 'car',
+                        3: 'motorbike',
+                        5: 'bus',
+                        7: 'truck',
+                        80: 'cyclist'}
+        return 
+
+    def get_image(self, idx=None, for_visualize=False): 
+        #image = np.asarray(Image.open(self.image_filenames[idx]))
+        return self.image_filenames[idx]
+    
+    def get_RAD(self, idx=None, for_visualize=False):
+        return None
+    
+    def get_ADC(self, idx=None, for_visualize=False):
+        mat = spio.loadmat(self.radar_filenames[idx], squeeze_me=True)
+        adc = np.asarray(mat["adc_data"])
+        return adc
+    
+    def get_RD(self, idx=None, for_visualize=False):
+        data = self.get_ADC(idx)
+        # range fft
+        hanning_win = np.hamming(self.n_sample)
+        win_data = np.zeros([data.shape[0], data.shape[1], data.shape[2]], dtype=np.complex128)
+        for i in range(data.shape[1]):
+            for j in range(data.shape[2]):
+                win_data[:, i, j] = np.multiply(data[:, i, j], hanning_win)
+        rd = np.fft.fft(win_data, self.n_range, axis=0)
+        return rd
+
+    def get_RV_VA_slice(self, idx=None, for_visualize=False):
+        data = self.get_RD(idx)
+        # RV slice
+        hanning_win = np.hamming(self.n_vel)
+        win_data1 = np.zeros([data.shape[0], data.shape[1], self.n_vel], dtype=np.complex128)
+        win_data2 = np.zeros([data.shape[0], data.shape[1], self.n_vel], dtype=np.complex128)
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                win_data1[i, j, :] = np.multiply(data[i, j, 0:self.n_vel], hanning_win)
+                win_data2[i, j, :] = np.multiply(data[i, j, self.n_vel - 1:], hanning_win)
+
+        fft_data_raw1 = np.fft.fft(win_data1, self.n_vel, axis=2)
+        fft_data_raw1 = np.fft.fftshift(fft_data_raw1, axes=2)
+        fft3d_data1 = np.sum(np.abs(fft_data_raw1), axis=1) / self.n_rx
+        fft3d_data1 = np.expand_dims(fft3d_data1, axis=2)
+
+        fft_data_raw2 = np.fft.fft(win_data2, self.n_vel, axis=2)
+        fft_data_raw2 = np.fft.fftshift(fft_data_raw2, axes=2)
+        fft3d_data2 = np.sum(np.abs(fft_data_raw2), axis=1) / self.n_rx
+        fft3d_data2 = np.expand_dims(fft3d_data2, axis=2)
+
+        # output format [range, velocity, 2chirps] : (128, 128, 2)
+        rv = np.float32(np.concatenate((fft3d_data1, fft3d_data2), axis=2))
+
+        # VA slice
+        rv_raw1 = fft_data_raw1
+        rv_raw2 = fft_data_raw2
+        hanning_win = np.hamming(self.n_rx)
+        win_data1 = np.zeros([rv_raw1.shape[0], rv_raw1.shape[1], rv_raw1.shape[2]], dtype=np.complex128)
+        win_data2 = np.zeros([rv_raw2.shape[0], rv_raw2.shape[1], rv_raw2.shape[2]], dtype=np.complex128)
+        for i in range(rv_raw1.shape[0]):
+            for j in range(rv_raw1.shape[2]):
+                win_data1[i, :, j] = np.multiply(rv_raw1[i, :, j], hanning_win)
+                win_data2[i, :, j] = np.multiply(rv_raw2[i, :, j], hanning_win)
+
+        fft_data_raw1 = np.fft.fft(win_data1, self.n_angle, axis=1)
+        fft3d_data1 = np.sum(np.abs(np.fft.fftshift(fft_data_raw1, axes=1)), axis=0) / rv_raw1.shape[0]
+        fft3d_data1 = np.expand_dims(fft3d_data1, axis=2)
+
+        fft_data_raw2 = np.fft.fft(win_data2, self.n_angle, axis=1)
+        fft3d_data2 = np.sum(np.abs(np.fft.fftshift(fft_data_raw2, axes=1)), axis=0) / rv_raw2.shape[0]
+        fft3d_data2 = np.expand_dims(fft3d_data2, axis=2)
+
+        # output format [angle, velocity, 2chirps] : (128, 128, 2)
+        va = np.float32(np.concatenate((fft3d_data1, fft3d_data2), axis=2))
+        return rv, va
+    
+    def get_RA(self, idx=None, for_visualize=False):
+        data = self.get_ADC(idx)
+        hanning_win = np.hamming(self.n_rx)
+        win_data = np.zeros([data.shape[0], data.shape[1], data.shape[2]], dtype=np.complex128)
+        for i in range(data.shape[0]):
+            for j in range(data.shape[2]):
+                win_data[i, :, j] = np.multiply(data[i, :, j], hanning_win)
+
+        fft_data_raw = np.fft.fft(win_data, self.n_angle, axis=1)
+        fft3d_data_cmplx = np.fft.fftshift(fft_data_raw, axes=1)
+        filter_static =  False
+        keep_complex = False
+        if keep_complex is True:
+            fft3d_data = fft3d_data_cmplx
+        else:
+            fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
+            fft_data_imag = np.expand_dims(fft3d_data_cmplx.imag, axis=3)
+            # output format [range, angle, chirps, real/imag] : (128, 128, 255, 2)
+            fft3d_data = np.float32(np.concatenate((fft_data_real, fft_data_imag), axis=3))
+        if filter_static:
+            fft3d_data = fft3d_data - np.mean(fft3d_data, axis=2, keepdims=True)
+        return fft3d_data
+
+    def get_radarpointcloud(self, idx=None, for_visualize=False):
+        return None
+
+    def get_lidarpointcloud(self, idx=None, for_visualize=False):
+        return None
+
+    def get_depthimage(self, idx=None, for_visualize=False):
+        return None
+      
+    def get_spectrogram(self, idx=None, for_visualize=False):
+        return None
+    
+    def get_feature(self, feature_name, idx=None, for_visualize=False):
+        function_dict = {
+            'RAD': self.get_RAD,
+            'RD': self.get_RD,
+            'RA': self.get_RA,
+            'spectrogram': self.get_spectrogram,
+            'radarPC': self.get_radarpointcloud,
+            'lidarPC': self.get_lidarpointcloud,
+            'image': self.get_image,
+            'depth_image': self.get_depthimage,
+        }
+        feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
+        return feature_data
+    
+    def get_label(self, feature_name, idx=None):
+        labels = pd.read_csv(self.label_filenames[idx]).values.tolist() 
+        gt = []
+        if labels:
+            for obj in labels:
+                category = self.label_map[obj[1]]
+                center_x, center_y, width, length = obj[2:]
+                if feature_name == "RA": 
+                    gt.append([center_x - width/2, center_y - length/2, center_x + width/2, center_y + length/2, category])
+        return gt
+    
+    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        self.n_class = 6
+        self.win_size = train_cfg['win_size'] 
+        self.step = train_cfg['step']
+        self.stride = train_cfg['stride']
+        n_frame = self.frame_sync
+        n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
+            1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
+        self.datasamples_length = n_data_in_seq
+        self.radar_cfg = {
+            'ramap_rsize': 128,             # RAMap range size
+            'ramap_asize': 128,             # RAMap angle size
+            'ramap_vsize': 128,             # RAMap angle size
+            'frame_rate': 30,
+            'crop_num': 3,                  # crop some indices in range domain
+            'n_chirps': 255,                # number of chirps in one frame
+            'sample_freq': 4e6,
+            'sweep_slope': 21.0017e12,
+            'ramap_rsize_label': 122,       
+            'ramap_asize_label': 121,       
+            'ra_min_label': -60,            # min radar angle
+            'ra_max_label': 60,             # max radar angle
+            'rr_min': 1.0,                  # min radar range (fixed)
+            'rr_max': 25.0,                 # max radar range (fixed)
+            'ra_min': -90,                  # min radar angle (fixed)
+            'ra_max': 90,                   # max radar angle (fixed)
+            'ramap_folder': 'WIN_HEATMAP',
+        }
+        
+        self.rng_grid = confmap2ra(self.radar_cfg, name='range')
+        self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
+        self.noise_channel = False
+        return 
+
+    def __len__(self):
+        return self.datasamples_length
+
+    def __getitem__(self, index):
+        data_id = index * self.stride
+        radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
+        radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
+        radar_npy_win_va = np.zeros((self.win_size * 2, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
+        confmap_gt = np.zeros((self.win_size, self.n_class, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize']), dtype=np.float32)
+        obj_info = []
+        for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
+            # load ra slice
+            # format of radar_npy_win_ra [chirp, range, angle, real/imag]
+            ra = self.get_RA(idx)
+            radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, :, 0]
+            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, :, 1]
+            # load rv slice
+            # format of radar_npy_win_rv [chirp, range, velocity, real]
+            rv, va = self.get_RV_VA_slice(idx)
+            radar_npy_win_rv[idx * 2, :, :, 0] = rv[:, :, 0]
+            radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv[:, :, 1]
+            # load va slice
+            # format of radar_npy_win_rv [chirp, angle, velocity, real]
+            radar_npy_win_va[idx * 2, :, :, 0] = va[:, :, 0]
+            radar_npy_win_va[idx * 2 + 1, :, :, 0] = va[:, :, 1]
+            # label file: [uid, class, px, py, wid, len]
+            labels = pd.read_csv(self.label_filenames[frameid]).tolist() 
+            n_obj = len(labels)
+            obj_in_frame = []
+            for obj in labels:
+                category = self.label_map[int(obj[1])]
+                x = int(float(obj[2]))
+                y = int(float(obj[3]))
+                distance = math.sqrt(x ** 2 + y ** 2)
+                angle = math.degrees(math.atan(x / y))  # in degree
+                if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
+                    continue
+                if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
+                    continue
+                rng_idx, _ = find_nearest(self.rng_grid, distance)
+                agl_idx, _ = find_nearest(self.agl_grid, angle)
+                obj_in_frame.append([rng_idx, agl_idx, category])
+            # generate confmap
+            if n_obj == 0:
+                confmap_gt_in_frame = np.zeros(
+                    (self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize']), dtype=float)
+                confmap_gt_in_frame[-1, :, :] = 1.0  # initialize noise channal
+            else:
+                confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
+                confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
+                confmap_gt_in_frame = add_noise_channel(confmap_gt_in_frame, self.radar_cfg)
+            assert confmap_gt.shape == (
+                self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
+            
+            obj_info.append(obj_in_frame)
+            confmap_gt[idx, :, :, :] = confmap_gt_in_frame
+        
+        radar_npy_win_ra = np.transpose(radar_npy_win_ra, (3, 0, 1, 2))
+        radar_npy_win_rv = np.transpose(radar_npy_win_rv, (3, 0, 1, 2))
+        radar_npy_win_va = np.transpose(radar_npy_win_va, (3, 0, 1, 2))
+        assert radar_npy_win_ra.shape == (2, self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
+        assert radar_npy_win_rv.shape == (1, self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'])
+        assert radar_npy_win_va.shape == (1, self.win_size * 2, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize'])
+
+        confmap_gt = np.transpose(confmap_gt, (1, 0, 2, 3))
+        if self.noise_channel:
+            assert confmap_gt.shape == \
+                    (self.n_class + 1, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
+        else:
+            confmap_gt = confmap_gt[:self.n_class]
+            assert confmap_gt.shape == \
+                    (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
+            assert np.shape(obj_info)[0] == self.win_size
+        return radar_npy_win_ra, radar_npy_win_rv, radar_npy_win_va, confmap_gt, obj_info, index
