@@ -2451,7 +2451,7 @@ class UWCR(Dataset):
     
     def get_ADC(self, idx=None, for_visualize=False):
         mat = spio.loadmat(self.radar_filenames[idx], squeeze_me=True)
-        adc = np.asarray(mat["adc_data"])
+        adc = np.asarray(mat["adcData"])
         return adc
     
     def get_RD(self, idx=None, for_visualize=False):
@@ -2513,7 +2513,7 @@ class UWCR(Dataset):
         return rv, va
     
     def get_RA(self, idx=None, for_visualize=False):
-        data = self.get_ADC(idx)
+        data = self.get_RD(idx)
         hanning_win = np.hamming(self.n_rx)
         win_data = np.zeros([data.shape[0], data.shape[1], data.shape[2]], dtype=np.complex128)
         for i in range(data.shape[0]):
@@ -2575,8 +2575,13 @@ class UWCR(Dataset):
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         self.n_class = 6
         self.win_size = train_cfg['win_size'] 
-        self.step = train_cfg['step']
-        self.stride = train_cfg['stride']
+        if splittype in ('train', 'val') or splittype is None:
+            self.step = train_cfg['train_step']
+            self.stride = train_cfg['train_stride']
+        else:
+            self.step = train_cfg['test_step']
+            self.stride = train_cfg['test_stride']
+
         n_frame = self.frame_sync
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
@@ -2679,4 +2684,4 @@ class UWCR(Dataset):
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             assert np.shape(obj_info)[0] == self.win_size
-        return radar_npy_win_ra, radar_npy_win_rv, radar_npy_win_va, confmap_gt, obj_info, index
+        return radar_npy_win_ra, radar_npy_win_rv, radar_npy_win_va, confmap_gt
