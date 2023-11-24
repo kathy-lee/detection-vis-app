@@ -22,6 +22,8 @@ INSERT INTO directories (name, description, parent_id) VALUES ('Astyx', 'Astyx d
 
 INSERT INTO directories (name, description, parent_id) VALUES ('K-Radar', 'description', NULL);
 
+INSERT INTO directories (name, description, parent_id) VALUES ('UWCR', 'A dataset for the 2TX-4RX MMWave Radar with the raw ADC data. 6 type objects(pedestrian, cyclist, car, motorbike, bus, truck) were collected to fit the automotive object detection scenario.', NULL);
+
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) VALUES ('1.bag', 'description', '2.5GB', './1.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) VALUES ('2.bag', 'description', '2.5GB', './2.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
@@ -121,3 +123,51 @@ VALUES ('Astyx', 'description', '622MB', '/home/kangle/dataset/Astyx',12, '', 'A
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
 VALUES ('RADDet_Dataset', 'description', '320GB', '/home/kangle/Downloads/wd_disk_radar_data/RADDet_reform_dataset',10, '', 'RADDetDataset', FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_bms1000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_cms1000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_css1000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_pms1000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_pms2000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_09_pms3000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_cm1s000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_mlms000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_mlms001', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_pbms002', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_pbss000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_04_30_pcms001', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_09_bm1s007', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_09_cm1s003', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_09_mlms003', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_09_pbms004', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_09_pcms002', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_29_bcms000', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_29_cm1s014', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_29_mlms006', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_29_pbms007', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('2019_05_29_pcms005', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
+              
+            
+            
