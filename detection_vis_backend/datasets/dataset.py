@@ -2451,7 +2451,9 @@ class UWCR(Dataset):
     
     def get_ADC(self, idx=None, for_visualize=False):
         mat = spio.loadmat(self.radar_filenames[idx], squeeze_me=True)
-        adc = np.asarray(mat["adcData"])
+        adc = np.asarray(mat["adcData"]) #  (128, 255, 4, 2)
+        adc = np.concatenate((adc[:, :, :, 0], adc[:, :, :, 1]), axis=2) 
+        adc = np.swapaxes(adc, 1, 2) # (128, 8, 255): samples, antennas, chirps
         return adc
     
     def get_RD(self, idx=None, for_visualize=False):
@@ -2573,7 +2575,7 @@ class UWCR(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
-        self.n_class = 6
+        self.n_class = 3
         self.win_size = train_cfg['win_size'] 
         if splittype in ('train', 'val') or splittype is None:
             self.step = train_cfg['train_step']
@@ -2619,14 +2621,14 @@ class UWCR(Dataset):
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
         radar_npy_win_va = np.zeros((self.win_size * 2, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
-        confmap_gt = np.zeros((self.win_size, self.n_class, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize']), dtype=np.float32)
+        confmap_gt = np.zeros((self.win_size, self.n_class + 1, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize']), dtype=np.float32)
         obj_info = []
         for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
             # load ra slice
             # format of radar_npy_win_ra [chirp, range, angle, real/imag]
             ra = self.get_RA(idx)
-            radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, :, 0]
-            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, :, 1]
+            radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, 0, :]
+            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, 128, :]
             # load rv slice
             # format of radar_npy_win_rv [chirp, range, velocity, real]
             rv, va = self.get_RV_VA_slice(idx)
@@ -2637,7 +2639,7 @@ class UWCR(Dataset):
             radar_npy_win_va[idx * 2, :, :, 0] = va[:, :, 0]
             radar_npy_win_va[idx * 2 + 1, :, :, 0] = va[:, :, 1]
             # label file: [uid, class, px, py, wid, len]
-            labels = pd.read_csv(self.label_filenames[frameid]).tolist() 
+            labels = pd.read_csv(self.label_filenames[frameid], header=None).values.tolist()
             n_obj = len(labels)
             obj_in_frame = []
             for obj in labels:
@@ -2662,7 +2664,7 @@ class UWCR(Dataset):
                 confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
                 confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
                 confmap_gt_in_frame = add_noise_channel(confmap_gt_in_frame, self.radar_cfg)
-            assert confmap_gt.shape == (
+            assert confmap_gt_in_frame.shape == (
                 self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             
             obj_info.append(obj_in_frame)
@@ -2684,4 +2686,5 @@ class UWCR(Dataset):
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             assert np.shape(obj_info)[0] == self.win_size
+        print(f'fetch no.{index} item: {radar_npy_win_ra.shape}, {radar_npy_win_rv.shape}, {radar_npy_win_va.shape}, {confmap_gt.shape}')
         return radar_npy_win_ra, radar_npy_win_rv, radar_npy_win_va, confmap_gt
