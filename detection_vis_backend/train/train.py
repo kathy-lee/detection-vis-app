@@ -25,7 +25,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, Cont_Loss, FocalLoss_Neg
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
 from data import crud, schemas
 from data.database import SessionLocal
@@ -57,7 +57,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'RECORDNoLstmMulti': default_collate,
         'MVRECORD': default_collate,
         'RADDet': default_collate,
-        'DAROD': DAROD_collate
+        'DAROD': DAROD_collate,
+        'RAMP_CNN': default_collate,
     }  
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
@@ -377,6 +378,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 label = data['label'].to(device).int()
                 boxes = data['boxes'].to(device).float()
                 # print(inputs.shape, label)
+            elif model_type == "RAMP_CNN":
+                inputs = (data['ra_matrix'].to(device).float(), data['rv_matrix'].to(device).float(), data['va_matrix'].to(device).float())
+                confmap_gt = data['confmap_gt'].to(device).float()         
             else:
                 raise ValueError
             
@@ -386,7 +390,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # forward pass, enable to track our gradient
             with torch.set_grad_enabled(True):
                 outputs = net(inputs)
-                #print(f"###out:{outputs.shape}")
 
             # loss = get_loss(outputs, label, model_type, dataset_type, feature)
             if model_type == "FFTRadNet":
@@ -470,6 +473,13 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
                 #print("--------loss----------")
                 loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
+            elif model_type == "RAMP_CNN":
+                criterion = FocalLoss_Neg()
+                loss_cur = criterion(outputs['confmap_pred'], confmap_gt)
+                loss_cur2 = criterion(outputs['confmap_pred2'], confmap_gt)
+                criterion3 = Cont_Loss(train_config['win_size'])
+                loss_cont = criterion3(outputs['confmap_pred'], confmap_gt)
+                loss = loss_cur + loss_cont + loss_cur2 * 0.5
             else:
                 raise ValueError
 
