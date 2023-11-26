@@ -1,0 +1,44 @@
+{
+    "seed":3,
+    "losses": {
+    },
+    "lr_scheduler": {
+        "type": "step",
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs":1,
+    "dataloader": {
+        "splitmode":"",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random":[],
+        "train": {
+            "batch_size": 4,
+            "num_workers": 1
+    	},
+        "val": {
+            "batch_size": 1,
+            "num_workers": 1
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    },
+
+    "win_size": 16,
+    "train_step": 1,
+    "train_stride": 8,
+    "test_step": 1,
+    "test_stride": 8,
+    "max_dets": 20,
+    "peak_thres": 0.2,
+    "ols_thres": 0.2
+}

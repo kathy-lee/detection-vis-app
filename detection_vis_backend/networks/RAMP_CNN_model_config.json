@@ -1,0 +1,6 @@
+{
+    "n_class": 3,
+    "win_size": 16,
+    "ramap_rsize": 128,
+    "ramap_asize": 128
+}
