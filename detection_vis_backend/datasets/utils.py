@@ -515,7 +515,6 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
             class_name = obj_info['categories'][objid]
         elif isinstance(obj_info, list):
             rng_idx, agl_idx, class_name = obj_info[objid]
-            print(class_name)
         else:
             raise TypeError
         if class_name not in classes:

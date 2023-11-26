@@ -2526,7 +2526,7 @@ class UWCR(Dataset):
         fft3d_data_cmplx = np.fft.fftshift(fft_data_raw, axes=1)
         filter_static =  False
         keep_complex = False
-        if keep_complex is True:
+        if keep_complex:
             fft3d_data = fft3d_data_cmplx
         else:
             fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
@@ -2686,5 +2686,5 @@ class UWCR(Dataset):
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             assert np.shape(obj_info)[0] == self.win_size
-        print(f'fetch no.{index} item: {radar_npy_win_ra.shape}, {radar_npy_win_rv.shape}, {radar_npy_win_va.shape}, {confmap_gt.shape}')
-        return radar_npy_win_ra, radar_npy_win_rv, radar_npy_win_va, confmap_gt
+        data_dict = {'ra_matrix': radar_npy_win_ra, 'rv_matrix': radar_npy_win_rv, 'va_matrix': radar_npy_win_va, 'confmap_gt': confmap_gt}
+        return data_dict
