@@ -694,9 +694,10 @@ class RAMP_CNN(nn.Module):
         self.c3d_decode_rv = RODDecode_RV(win_size, ramap_rsize, ramap_asize)
         self.c3d_encode_va = RODEncode_VA()
         self.c3d_decode_va = RODDecode_VA(win_size, ramap_rsize, ramap_asize)
-        self.fuse_fea = Fuse_fea_new_rep(n_class, ramap_asize)
+        self.fuse_fea = Fuse_fea_new_rep(n_class, ramap_rsize, ramap_asize)
 
-    def forward(self, x_ra, x_rv, x_va):
+    def forward(self, x):
+        x_ra, x_rv, x_va = x
         x_ra = self.c3d_encode_ra(x_ra)
         feas_ra = self.c3d_decode_ra(x_ra)  # (B, 32, W/2, 128, 128)
         x_rv = self.c3d_encode_rv(x_rv)
@@ -705,4 +706,5 @@ class RAMP_CNN(nn.Module):
         feas_va = self.c3d_decode_va(x_va)  # (B, 32, W/2, 128, 128)
         dets = self.fuse_fea(feas_ra, feas_rv, feas_va) # (B, 3, W/2, 128, 128)
         dets2 = self.fuse_fea(torch.zeros_like(feas_ra), feas_rv, feas_va) # (B, 3, W/2, 128, 128)
-        return dets, dets2
+        output = {'confmap_pred': dets, 'confmap_pred2': dets2}
+        return output

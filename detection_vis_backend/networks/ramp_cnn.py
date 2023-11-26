@@ -228,8 +228,9 @@ class RODDecode_VA(nn.Module):
     
 
 class Fuse_fea_new_rep(nn.Module):
-    def __init__(self, n_class, n_angle):
+    def __init__(self, n_class, n_range, n_angle):
         super(Fuse_fea_new_rep, self).__init__()
+        self.n_range = n_range
         self.n_angle = n_angle
         self.convt1 = nn.Conv3d(in_channels=32, out_channels=16,
                                 kernel_size=(3, 5, 5), stride=(1, 1, 1), padding=(0, 2, 2))
