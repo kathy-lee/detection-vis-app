@@ -737,7 +737,7 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
         except:
             print('warning: fail to load RGB images, will not visualize results')
             image_paths = None
-        seq_name = data_dict['seq_names'][0]
+        seq_name = data_dict['seq_name']
         if seq_name not in sequences:
             sequences.append(seq_name)
 
@@ -874,7 +874,7 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, devi
         ra_maps = data_dict['radar_data'].to(device).float()
         confmap_gts = data_dict['anno']['confmaps'].float()
         image_paths = data_dict['image_paths']
-        seq_name = data_dict['seq_names'][0]
+        seq_name = data_dict['seq_name']
         if seq_name not in sequences:
             sequences.append(seq_name)
         save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
@@ -1536,3 +1536,144 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
     mAR = np.mean(ap_dict["mean"]["recall"])
     print("****************** Eval ended **********************")
     return {'loss': running_loss.cpu(), 'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+
+
+def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs):
+    olss_all = {(imgId, catId): compute_ols_dts_gts(gt_objs, res_objs, imgId, catId) \
+                for imgId in range(n_frame)
+                for catId in range(3)}
+
+    evalImgs = [evaluate_img(gt_objs, res_objs, imgId, catId, olss_all, olsThrs, recThrs, classes)
+                for imgId in range(n_frame)
+                for catId in range(3)]
+    return evalImgs
+
+
+def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
+
+    net.eval()
+
+    # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
+    n_class = model_cfg['n_class']
+    classes = ["pedestrian", "cyclist", "car"] 
+    confmap_shape = (model_cfg['n_class'], model_cfg['ramap_rsize'], model_cfg['ramap_asize'])
+    with open('/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'r') as file:
+        radar_cfg = json.load(file)
+    rng_grid = confmap2ra(radar_cfg, name='range')
+    agl_grid = confmap2ra(radar_cfg, name='angle')
+    
+    init_genConfmap = ConfmapStack(confmap_shape)
+    iter_ = init_genConfmap
+    for i in range(train_cfg['win_size'] - 1):
+        while iter_.next is not None:
+            iter_ = iter_.next
+        iter_.next = ConfmapStack(confmap_shape)
+    
+    total_time = 0
+    total_count = 0
+    load_tic = time.time()
+    n_frame = len(dataloader)
+    # sequences = []
+    res_objs = {(i, j): [] for i in range(n_frame) for j in range(n_class)}
+    gt_objs = {(i, j): [] for i in range(n_frame) for j in range(n_class)}
+    id_gt = 1
+    id_res = 1
+    for iter, data_dict in enumerate(dataloader):
+        load_time = time.time() - load_tic
+        inputs = (data_dict['ra_matrix'].to(device).float(), data_dict['rv_matrix'].to(device).float(), data_dict['va_matrix'].to(device).float())
+        for i in range(train_cfg['train_stride']):
+            if data_dict['gt_label'][0][i]:
+                for obj in data_dict['gt_label'][0][i]:
+                    ridx, aidx, category = obj
+                    rng = rng_grid[ridx]
+                    agl = agl_grid[aidx]
+                    classid = get_class_id(category, classes)
+                    gt_obj = {'id': id_gt, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
+                                    'classid': classid, 'score': 1.0}
+                    gt_objs[iter, classid].append(gt_obj)
+                    id_gt += 1
+            # TODO: Handle the case of empty annotation
+                
+        # seq_name = data_dict['seq_name']
+        # if seq_name not in sequences:
+        #     sequences.append(seq_name)
+        
+        # # Currently only support batch_size set to 1 for val evaluation
+        # start_frame_id = data_dict['start_frame'].item()
+        # end_frame_id = data_dict['end_frame'].item()
+        
+        tic = time.time()
+        with torch.set_grad_enabled(False):
+            output = net(inputs)
+        
+        confmap_pred = output['confmap_pred'][-1].cpu().detach().numpy()  
+        confmap_pred = np.expand_dims(confmap_pred, axis=0)
+        infer_time = time.time() - tic
+        total_time += infer_time
+        
+        iter_ = init_genConfmap
+        for i in range(confmap_pred.shape[2]):
+            if iter_.next is None and i != confmap_pred.shape[2] - 1:
+                iter_.next = ConfmapStack(confmap_shape)
+            iter_.append(confmap_pred[0, :, i, :, :])
+            iter_ = iter_.next
+
+        process_tic = time.time()
+        # save_path = os.path.join(save_dir, seq_name + '_rampcnn_res.txt')
+        for i in range(train_cfg['train_stride']): # test_stride
+            total_count += 1
+            res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+            # cur_frame_id = start_frame_id + i
+            # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
+            for obj in res_final:
+                class_id, ridx, aidx, conf = obj
+                if class_id == -1:
+                    continue
+                rng = rng_grid[ridx]
+                agl = agl_grid[aidx]
+                res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
+                            'classid': class_id, 'score': conf}
+                res_objs[iter, classid].append(res_obj)
+                id_res += 1
+            init_genConfmap = init_genConfmap.next
+
+        if iter == len(dataloader) - 1:
+            # offset = train_cfg['train_stride'] # test_stride
+            # cur_frame_id = start_frame_id + offset
+            while init_genConfmap is not None:
+                total_count += 1
+                res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+                # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
+                for obj in res_final:
+                    class_id, ridx, aidx, conf = obj
+                    if class_id == -1:
+                        continue
+                    rng = rng_grid[ridx]
+                    agl = agl_grid[aidx]
+                    res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
+                                'classid': class_id, 'score': conf}
+                    res_objs[iter, classid].append(res_obj)
+                    id_res += 1
+                init_genConfmap = init_genConfmap.next
+                # offset += 1
+                # cur_frame_id += 1
+        print(f"Sample {iter}/{len(dataloader)} finished")
+
+        if init_genConfmap is None:
+            init_genConfmap = ConfmapStack(confmap_shape)
+
+        # proc_time = time.time() - process_tic
+        # print("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
+        #         (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
+
+        load_tic = time.time()
+    print("ave time: %f" % (total_time / total_count))
+
+    # 2.Evaluation the detection predictions with Ground-truth annotations
+    olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
+    recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
+    evalImgs = evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
+    eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+    print("AP_total: %.4f | AR_total: %.4f" % (stats[0] * 100, stats[1] * 100))
+    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}

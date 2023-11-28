@@ -26,7 +26,7 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, Cont_Loss, FocalLoss_Neg
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation
 from data import crud, schemas
 from data.database import SessionLocal
 
@@ -522,6 +522,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
         elif model_type == "DAROD":
             eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
+        elif model_type == "RAMP_CNN":
+            eval = RAMP_CNN_evaluation(net, val_loader, train_config, model_config, device)
         else:
             raise ValueError
             
@@ -573,6 +575,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
     elif model_type == "DAROD":
         eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
+    elif model_type == "RAMP_CNN":
+        eval = RAMP_CNN_evaluation(net, test_loader, train_config, model_config, device)
     else:
         raise ValueError
     
