@@ -1530,7 +1530,7 @@ class CRUW(Dataset):
     def __getitem__(self, index):
         data_dict = dict(
             status=True,
-            seq_names=self.seq_name,
+            seq_name=self.seq_name,
             image_paths=[]
         )
 
@@ -2427,14 +2427,16 @@ class UWCR(Dataset):
                 self.label_filenames = self.label_filenames[:id_min - id_max + 1]
 
         self.frame_sync = len(self.image_filenames) 
-        print(self.frame_sync, self.image_filenames[0], self.image_filenames[-1])
+        print(f"Parsing {file_name}: {self.frame_sync} sync frames({id_max} - {id_min})")
+        with open(self.config, 'r') as f:
+            self.radar_cfg = json.load(f)
         self.n_angle = 128
         self.n_vel = 128
         self.n_range = 128
         self.n_chirp = 255
         self.n_rx = 8
         self.n_sample = 128
-        self.label_map = {0: 'person',
+        self.label_map = {0: 'pedestrian',
                         2: 'car',
                         3: 'motorbike',
                         5: 'bus',
@@ -2576,6 +2578,7 @@ class UWCR(Dataset):
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         self.n_class = 3
+        self.class_ids = {'pedestrian': 0, 'cyclist': 1, 'car': 2, 'truck': 2}
         self.win_size = train_cfg['win_size'] 
         if splittype in ('train', 'val') or splittype is None:
             self.step = train_cfg['train_step']
@@ -2588,26 +2591,6 @@ class UWCR(Dataset):
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
-        self.radar_cfg = {
-            'ramap_rsize': 128,             # RAMap range size
-            'ramap_asize': 128,             # RAMap angle size
-            'ramap_vsize': 128,             # RAMap angle size
-            'frame_rate': 30,
-            'crop_num': 3,                  # crop some indices in range domain
-            'n_chirps': 255,                # number of chirps in one frame
-            'sample_freq': 4e6,
-            'sweep_slope': 21.0017e12,
-            'ramap_rsize_label': 122,       
-            'ramap_asize_label': 121,       
-            'ra_min_label': -60,            # min radar angle
-            'ra_max_label': 60,             # max radar angle
-            'rr_min': 1.0,                  # min radar range (fixed)
-            'rr_max': 25.0,                 # max radar range (fixed)
-            'ra_min': -90,                  # min radar angle (fixed)
-            'ra_max': 90,                   # max radar angle (fixed)
-            'ramap_folder': 'WIN_HEATMAP',
-        }
-        
         self.rng_grid = confmap2ra(self.radar_cfg, name='range')
         self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
         self.noise_channel = False
@@ -2639,37 +2622,35 @@ class UWCR(Dataset):
             radar_npy_win_va[idx * 2, :, :, 0] = va[:, :, 0]
             radar_npy_win_va[idx * 2 + 1, :, :, 0] = va[:, :, 1]
             # label file: [uid, class, px, py, wid, len]
-            labels = pd.read_csv(self.label_filenames[frameid], header=None).values.tolist()
-            n_obj = len(labels)
             obj_in_frame = []
-            for obj in labels:
-                category = self.label_map[int(obj[1])]
-                x = int(float(obj[2]))
-                y = int(float(obj[3]))
-                distance = math.sqrt(x ** 2 + y ** 2)
-                angle = math.degrees(math.atan(x / y))  # in degree
-                if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
-                    continue
-                if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
-                    continue
-                rng_idx, _ = find_nearest(self.rng_grid, distance)
-                agl_idx, _ = find_nearest(self.agl_grid, angle)
-                obj_in_frame.append([rng_idx, agl_idx, category])
-            # generate confmap
-            if n_obj == 0:
-                confmap_gt_in_frame = np.zeros(
-                    (self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize']), dtype=float)
-                confmap_gt_in_frame[-1, :, :] = 1.0  # initialize noise channal
-            else:
+            try:
+                labels = pd.read_csv(self.label_filenames[frameid], header=None).values.tolist()
+                n_obj = len(labels)
+                for obj in labels:
+                    category = self.label_map[int(obj[1])]
+                    # class_id = self.class_ids[category]
+                    x = int(float(obj[2]))
+                    y = int(float(obj[3]))
+                    distance = math.sqrt(x ** 2 + y ** 2)
+                    angle = math.degrees(math.atan(x / y))  # in degree
+                    if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
+                        continue
+                    if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
+                        continue
+                    rng_idx, _ = find_nearest(self.rng_grid, distance)
+                    agl_idx, _ = find_nearest(self.agl_grid, angle)
+                    obj_in_frame.append([rng_idx, agl_idx, category])
                 confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
                 confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
                 confmap_gt_in_frame = add_noise_channel(confmap_gt_in_frame, self.radar_cfg)
-            assert confmap_gt_in_frame.shape == (
-                self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
-            
-            obj_info.append(obj_in_frame)
+                assert confmap_gt_in_frame.shape == (self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
+            except pd.errors.EmptyDataError:
+                confmap_gt_in_frame = np.zeros((self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize']), dtype=float)
+                confmap_gt_in_frame[-1, :, :] = 1.0  # initialize noise channal
+                
             confmap_gt[idx, :, :, :] = confmap_gt_in_frame
-        
+            obj_info.append(obj_in_frame)
+            
         radar_npy_win_ra = np.transpose(radar_npy_win_ra, (3, 0, 1, 2))
         radar_npy_win_rv = np.transpose(radar_npy_win_rv, (3, 0, 1, 2))
         radar_npy_win_va = np.transpose(radar_npy_win_va, (3, 0, 1, 2))
@@ -2686,5 +2667,7 @@ class UWCR(Dataset):
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             assert np.shape(obj_info)[0] == self.win_size
-        data_dict = {'ra_matrix': radar_npy_win_ra, 'rv_matrix': radar_npy_win_rv, 'va_matrix': radar_npy_win_va, 'confmap_gt': confmap_gt}
+        data_dict = {'ra_matrix': radar_npy_win_ra, 'rv_matrix': radar_npy_win_rv, 'va_matrix': radar_npy_win_va, \
+                     'confmap_gt': confmap_gt, 'gt_label': obj_info, \
+                     'seq_name': self.seq_name,  'start_frame': data_id, 'end_frame': data_id + self.win_size * self.step - 1}
         return data_dict
