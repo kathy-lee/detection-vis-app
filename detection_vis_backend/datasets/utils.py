@@ -509,11 +509,11 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
 
     confmap = np.zeros((n_class, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
     for objid in range(n_obj):
-        if isinstance(obj_info, dict):
+        if isinstance(obj_info, dict): # Case: CRUW dataset
             rng_idx = obj_info['center_ids'][objid][0]
             agl_idx = obj_info['center_ids'][objid][1]
             class_name = obj_info['categories'][objid]
-        elif isinstance(obj_info, list):
+        elif isinstance(obj_info, list): # Case: UWCR dataset
             rng_idx, agl_idx, class_name = obj_info[objid]
         else:
             raise TypeError
