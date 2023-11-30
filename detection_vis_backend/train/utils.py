@@ -884,3 +884,66 @@ def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
         else:
             best_bboxes = np.zeros([0, 8])
     return best_bboxes
+
+
+class Cont_Loss(nn.Module):
+    '''nn.Module warpper for focal loss'''
+    def __init__(self, win_size):
+        super(Cont_Loss, self).__init__()
+        self.win_size = win_size
+        self.MSE_loss = nn.MSELoss()
+
+    def forward(self, out, target):
+        loss = 0
+        for i in range(out.shape[0]):
+            batch_loss = 0
+            for j in range(self.win_size):
+                if j % 2 == 0:
+                    batch_loss = batch_loss + self.MSE_loss(out[i, :, j, :, :], target[i, :, j + 1, :, :])
+            loss = loss + batch_loss/(self.win_size/2)
+            # loss = loss + batch_loss
+        return loss
+
+
+def _neg_loss(pred, gt):
+    ''' Modified focal loss. Exactly the same as CornerNet.
+        Runs faster and costs a little bit more memory
+    Arguments:
+        pred (batch x c x h x w)
+        gt_regr (batch x c x h x w)
+    '''
+    balance_cof = 4
+    # focal_inds = pred.gt(1.4013e-45) * pred.lt(1-1.4013e-45)
+    pred = torch.clamp(pred, 1.4013e-45, 1)
+    fos = torch.sum(gt, 1)
+    pos_inds = gt.eq(1).float()
+    neg_inds = gt.lt(1).float()
+    fos_inds = torch.unsqueeze(fos.gt(0).float(), 1)
+    fos_inds = fos_inds.expand(-1, 3, -1, -1, -1)
+    neg_inds = neg_inds + (balance_cof - 1) * fos_inds * gt.eq(0)
+
+    neg_weights = torch.pow(1 - gt, 4)
+    loss = 0
+    # pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds * focal_inds
+    # neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds * focal_inds
+    pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds * balance_cof
+    neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
+
+    num_pos  = pos_inds.float().sum()
+    pos_loss = pos_loss.sum()
+    neg_loss = neg_loss.sum()
+
+    if num_pos == 0:
+        loss = loss - neg_loss
+    else:
+        loss = loss - (pos_loss + neg_loss) / num_pos
+    return loss
+
+class FocalLoss_Neg(nn.Module):
+    '''nn.Module warpper for focal loss'''
+    def __init__(self):
+        super(FocalLoss_Neg, self).__init__()
+        self.neg_loss = _neg_loss
+
+    def forward(self, out, target):
+        return self.neg_loss(out, target)

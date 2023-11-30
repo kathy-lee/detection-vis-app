@@ -509,11 +509,16 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
 
     confmap = np.zeros((n_class, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
     for objid in range(n_obj):
-        rng_idx = obj_info['center_ids'][objid][0]
-        agl_idx = obj_info['center_ids'][objid][1]
-        class_name = obj_info['categories'][objid]
+        if isinstance(obj_info, dict): # Case: CRUW dataset
+            rng_idx = obj_info['center_ids'][objid][0]
+            agl_idx = obj_info['center_ids'][objid][1]
+            class_name = obj_info['categories'][objid]
+        elif isinstance(obj_info, list): # Case: UWCR dataset
+            rng_idx, agl_idx, class_name = obj_info[objid]
+        else:
+            raise TypeError
         if class_name not in classes:
-            # print("not recognized class: %s" % class_name)
+            print("not recognized class: %s" % class_name)
             continue
         class_id = get_class_id(class_name, classes)
         sigma = 2 * np.arctan(confmap_length[class_name] / (2 * range_grid[rng_idx])) * confmap_sigmas[class_name]
@@ -544,7 +549,6 @@ def normalize_confmap(confmap):
 
 def add_noise_channel(confmap, radar_configs):
     n_class = 3 # dataset.object_cfg.n_class
-
     confmap_new = np.zeros((n_class + 1, radar_configs['ramap_rsize'], radar_configs['ramap_asize']), dtype=float)
     confmap_new[:n_class, :, :] = confmap
     conf_max = np.max(confmap, axis=0)
