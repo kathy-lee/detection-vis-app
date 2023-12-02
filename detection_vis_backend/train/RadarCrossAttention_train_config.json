@@ -1,0 +1,40 @@
+{
+    "seed":3,
+    "losses": {
+        "weight": [1, 1, 10],
+        "class_weight": [1.33, 2.81, 0.86]
+    },
+    "lr_scheduler": {
+        "type": "step",
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs":1,
+    "dataloader": {
+        "splitmode":"",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random":[],
+        "train": {
+            "batch_size": 4,
+            "num_workers": 1
+    	},
+        "val": {
+            "batch_size": 1,
+            "num_workers": 1
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    },
+
+    "win_size": 5,
+    "gauss_type": "Bivar"
+}
