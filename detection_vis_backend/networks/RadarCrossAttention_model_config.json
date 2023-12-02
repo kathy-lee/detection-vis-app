@@ -1,0 +1,6 @@
+{
+    "win_size": 5,
+    "n_class": 3,
+    "center_offset": true,
+    "orientation": true
+}
