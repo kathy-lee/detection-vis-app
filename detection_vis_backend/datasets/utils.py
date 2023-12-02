@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 from skimage import transform
-
+from torchvision import transforms
 
 
 logger = logging.getLogger()
@@ -1029,3 +1029,111 @@ def flip_vertical(img, gt_boxes):
                                  1.0 - gt_boxes[..., 0],
                                  gt_boxes[..., 3]], axis=-1)
     return flipped_img, flipped_gt_boxes
+
+
+def data_transform():
+    rad = {}
+    ra_transform = transforms.Compose([
+    transforms.Normalize(
+        mean = [678.5],
+        std = [1352.6]
+    )])
+
+    rd_transform = transforms.Compose([
+        transforms.Normalize(
+            mean = [34.1],
+            std = [2.93]
+        )])
+             
+    ad_transform = transforms.Compose([
+        transforms.Normalize(
+            mean = [35.3],
+            std = [2.07]
+        )])
+
+    rad['ra_map'] = ra_transform
+    rad['rd_map'] = rd_transform
+    rad['ad_map'] = ad_transform
+    return rad
+
+def get_co_vec():
+    '''
+    create a dummy center offset mask of size 2x9x9
+    '''
+    vect = np.zeros((2,9,9))
+    for i in range(9):
+        for j in range(9):
+            vect[0,i,j] = 4-i
+            vect[1,i,j] = 4-j
+    return vect
+
+
+def bi_var_gauss(anno):
+    map = np.zeros((3,256,256))
+    for cnt,cls in enumerate(anno['cls']):
+        sigma_r = anno['sigma_r'][cnt]
+        sigma_a = anno['sigma_a'][cnt]
+        mu = [anno['mu_r'][cnt],anno['mu_a'][cnt]]
+  
+        row = anno['sigma_cov'][cnt]
+
+        i_mat = np.arange(map.shape[1])
+        i_mat = np.reshape(i_mat,(map.shape[1],1))
+        i_mat = np.tile(i_mat,(1,map.shape[1]))
+
+        j_mat = np.arange(map.shape[1])
+        j_mat = np.tile(j_mat,(map.shape[1],1))
+
+        dist = ((i_mat-mu[0])/(sigma_r))**2 + ((j_mat-mu[1])/(sigma_a))**2 -2*row*(i_mat-mu[0])/(sigma_r)*(j_mat-mu[1])/(sigma_a)
+        dist = dist/(2*(1-row**2))
+
+        map[int(cls-1),::] = np.amax((np.stack((map[int(cls-1),::],np.exp(-dist)),axis=0)),axis=0)
+          
+    return map.astype('float32')
+        
+def get_center_map(anno, vect):
+    center_map = np.zeros((2,256,256))
+    for cnt,cls in enumerate(anno['cls']):
+        mu = [anno['mu_r'][cnt],anno['mu_a'][cnt]]
+        mu = [int(mu[0]),int(mu[1])]
+        r_p = np.min((4,mu[0]))
+        a_p = np.min((4,mu[1]))
+        r_n = np.min((4,255-mu[0]))
+        a_n = np.min((4,255-mu[1]))
+        center_map[:,(mu[0]-r_p):(mu[0]+r_n+1),(mu[1]-a_p):(mu[1]+a_n+1)] = vect[:,(4-r_p):(4+r_n+1), (4-a_p):(4+a_n+1)]
+    return center_map.astype('float32')
+
+def get_orent_map(anno):
+    orent_map = np.zeros((2,64,64))
+    for cnt,cls in enumerate(anno['cls']):
+        mu = [anno['mu_r'][cnt],anno['mu_a'][cnt]]
+        mu = [int(mu[0]),int(mu[1])]
+        orent_map[:,mu[0]//4,mu[1]//4] = [np.sin(np.deg2rad(anno['orent'][cnt])) ,np.cos(np.deg2rad(anno['orent'][cnt]))]
+    return orent_map.astype('float32')
+
+
+def plain_gauss(anno, s_r=15, s_a=15):
+    map = np.zeros((3,256,256))
+    for cnt,cls in enumerate(anno['cls']):
+        if type(anno['orent']) is not list:
+            anno['orent'] = [anno['orent']]
+
+        sigma_r = s_r
+        sigma_a = s_a
+        mu = [anno['mu_r'][cnt],anno['mu_a'][cnt]]
+  
+        row = 0
+
+        i_mat = np.arange(map.shape[1])
+        i_mat = np.reshape(i_mat,(map.shape[1],1))
+        i_mat = np.tile(i_mat,(1,map.shape[1]))
+
+        j_mat = np.arange(map.shape[1])
+        j_mat = np.tile(j_mat,(map.shape[1],1))
+
+        dist = ((i_mat-mu[0])/(sigma_r))**2 + ((j_mat-mu[1])/(sigma_a))**2 -2*row*(i_mat-mu[0])/(sigma_r)*(j_mat-mu[1])/(sigma_a)
+        dist = dist/(2*(1-row**2))
+
+        map[int(cls-1),::] = np.amax((np.stack((map[int(cls-1),::],np.exp(-dist)),axis=0)),axis=0)
+
+    return map.astype('float32')

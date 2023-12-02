@@ -27,7 +27,7 @@ from mmwave import dsp
 from mmwave.dsp.utils import Window
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -1773,18 +1773,8 @@ class CARRADA(Dataset):
         return frame
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
-        # self.dataset = dataset
-        self.process_signal = True
         self.win_frames = train_cfg['win_size']
-        # self.dataset = self.dataset[self.win_frames-1:]  # remove n first frames
-        self.transformations = get_transformations(transform_names=train_cfg['transformations'])
-        self.add_temp = True
-        self.annotation_type = 'dense'
-        self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
-
         self.features = features
-        self.norm_type = train_cfg['norm_type']
-        self.n_class = 4
 
         radar_range_max, radar_range_resolution = 50, 0.2
         radar_vel_max, radar_vel_resolution = 13.43, 0.42
@@ -1793,148 +1783,238 @@ class CARRADA(Dataset):
         self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
         self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
         self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
+        
+        self.model_type = model_cfg['class']
+        if self.model_type in ('RECORD', 'MVRECORD') :
+            self.process_signal = True
+            self.transformations = get_transformations(transform_names=train_cfg['transformations'])
+            self.add_temp = True
+            self.annotation_type = 'dense'
+            self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
+            self.norm_type = train_cfg['norm_type']
+            self.n_class = 4
+            self.datasamples_length = self.frame_sync - self.win_frames + 1
+        elif self.model_type == 'RadarCrossAttention':
+            anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
+            with open(anno_path, 'r') as f:
+                self.annos = json.load(f)
+            tracks = self.annos[self.seq_name]['tracks']
+            # Get data frame intervals in the seq
+            intervals = []
+            for i, track in enumerate(tracks):
+                if i == 0:
+                    last_frame = track[0]
+                    new_frame = track[0]
+                    intervals.append(new_frame)
+                elif i == len(tracks) - 1:
+                    intervals.append(track[-1])
+                else:
+                    last_frame = tracks[i-1][0]
+                    new_frame = track[0]
+                    if new_frame != last_frame + 1:
+                        intervals.append(last_frame+4)
+                        intervals.append(new_frame)
+            print(intervals)
+            seq_intervals = []
+            self.indexmapping = []
+            self.datasamples_length = 0
+            for i in range(int(len(intervals)/2)):
+                seq_intervals.append([intervals[2*i], intervals[2*i + 1]])
+                self.datasamples_length += intervals[2*i + 1] - intervals[2*i] + 2 - self.win_frames 
+                self.indexmapping.extend(list(range(intervals[2*i], intervals[2*i + 1] + 2 - self.win_frames)))
+            self.gauss_type = train_cfg['gauss_type']
+            self.center_offset = model_cfg['center_offset']
+            self.orientation = model_cfg['orientation']
         return
 
     def __len__(self):
-        return self.frame_sync - self.win_frames + 1
+        return self.datasamples_length
 
     def __getitem__(self, index):
-        frame_id = index + self.win_frames - 1
-        init_frame_name = "{:06d}".format(frame_id)
-        frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
-        if self.features == ['RD'] or self.features == ['RA']: 
-            # Get radar feature data 
-            featurestr = 'range_doppler' if self.features == ['RD'] else 'range_angle'
-            feature_matrices = list()
-            mask = np.load(os.path.join(self.path_to_annots, init_frame_name, f'{featurestr}.npy'))
+        if self.model_type in ('RECORD', 'MVRECORD') :
+            frame_id = index + self.win_frames - 1
+            init_frame_name = "{:06d}".format(frame_id)
+            frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
+            if self.features == ['RD'] or self.features == ['RA']: 
+                # Get radar feature data 
+                featurestr = 'range_doppler' if self.features == ['RD'] else 'range_angle'
+                feature_matrices = list()
+                mask = np.load(os.path.join(self.path_to_annots, init_frame_name, f'{featurestr}.npy'))
 
-            for frame_name in frame_names:
-                if self.process_signal:
-                    feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_processed', frame_name + '.npy'))
+                for frame_name in frame_names:
+                    if self.process_signal:
+                        feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_processed', frame_name + '.npy'))
+                    else:
+                        feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_raw', frame_name + '.npy'))
+                    feature_matrices.append(feature_matrix)
+                feature_matrix = np.dstack(feature_matrices)
+                feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
+                feature_frame = {'matrix': feature_matrix, 'mask': mask}
+                # Apply the same transform to all representations
+                if np.random.uniform(0, 1) > 0.5:
+                    is_vflip = True
                 else:
-                    feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_raw', frame_name + '.npy'))
-                feature_matrices.append(feature_matrix)
-            feature_matrix = np.dstack(feature_matrices)
-            feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
-            feature_frame = {'matrix': feature_matrix, 'mask': mask}
-            # Apply the same transform to all representations
-            if np.random.uniform(0, 1) > 0.5:
-                is_vflip = True
-            else:
-                is_vflip = False
-            if np.random.uniform(0, 1) > 0.5:
-                is_hflip = True
-            else:
-                is_hflip = False
-            feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            # Expand one more dim
-            if self.add_temp and self.win_frames > 1:
-                if isinstance(self.add_temp, bool):
-                    feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
+                    is_vflip = False
+                if np.random.uniform(0, 1) > 0.5:
+                    is_hflip = True
                 else:
-                    assert isinstance(self.add_temp, int)
-                    feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
-            # Apply normalization
-            feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-            frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
-        elif len(self.features) > 1:
-            rd_matrices = list()
-            ra_matrices = list()
-            ad_matrices = list()
-            rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
-                                        'range_doppler.npy'))
-            ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
-                                        'range_angle.npy'))
-            for frame_name in frame_names:
-                if self.process_signal:
-                    rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_doppler_processed',
-                                                    frame_name + '.npy'))
-                    ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_angle_processed',
-                                                    frame_name + '.npy'))
-                    ad_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'angle_doppler_processed',
-                                                    frame_name + '.npy'))
+                    is_hflip = False
+                feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+                # Expand one more dim
+                if self.add_temp and self.win_frames > 1:
+                    if isinstance(self.add_temp, bool):
+                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
+                    else:
+                        assert isinstance(self.add_temp, int)
+                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
+                # Apply normalization
+                feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
+                frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
+            elif len(self.features) > 1:
+                rd_matrices = list()
+                ra_matrices = list()
+                ad_matrices = list()
+                rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
+                                            'range_doppler.npy'))
+                ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
+                                            'range_angle.npy'))
+                for frame_name in frame_names:
+                    if self.process_signal:
+                        rd_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'range_doppler_processed',
+                                                        frame_name + '.npy'))
+                        ra_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'range_angle_processed',
+                                                        frame_name + '.npy'))
+                        ad_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'angle_doppler_processed',
+                                                        frame_name + '.npy'))
+                    else:
+                        rd_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'range_doppler_raw',
+                                                        frame_name + '.npy'))
+                        ra_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'range_angle_raw',
+                                                        frame_name + '.npy'))
+                        ad_matrix = np.load(os.path.join(self.path_to_seq,
+                                                        'angle_doppler_raw',
+                                                        frame_name + '.npy'))
+
+                    rd_matrices.append(rd_matrix)
+                    ra_matrices.append(ra_matrix)
+                    ad_matrices.append(ad_matrix)
+
+                # Apply the same transfo to all representations
+                if np.random.uniform(0, 1) > 0.5:
+                    is_vflip = True
                 else:
-                    rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_doppler_raw',
-                                                    frame_name + '.npy'))
-                    ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'range_angle_raw',
-                                                    frame_name + '.npy'))
-                    ad_matrix = np.load(os.path.join(self.path_to_seq,
-                                                    'angle_doppler_raw',
-                                                    frame_name + '.npy'))
-
-                rd_matrices.append(rd_matrix)
-                ra_matrices.append(ra_matrix)
-                ad_matrices.append(ad_matrix)
-
-            # Apply the same transfo to all representations
-            if np.random.uniform(0, 1) > 0.5:
-                is_vflip = True
-            else:
-                is_vflip = False
-            if np.random.uniform(0, 1) > 0.5:
-                is_hflip = True
-            else:
-                is_hflip = False
-
-            rd_matrix = np.dstack(rd_matrices)
-            rd_matrix = np.rollaxis(rd_matrix, axis=-1)
-            rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
-            rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            if self.add_temp:
-                if isinstance(self.add_temp, bool):
-                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
+                    is_vflip = False
+                if np.random.uniform(0, 1) > 0.5:
+                    is_hflip = True
                 else:
-                    assert isinstance(self.add_temp, int)
-                    rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
-                                                        axis=self.add_temp)
+                    is_hflip = False
 
-            ra_matrix = np.dstack(ra_matrices)
-            ra_matrix = np.rollaxis(ra_matrix, axis=-1)
-            ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
-            ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            if self.add_temp:
-                if isinstance(self.add_temp, bool):
-                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
-                else:
-                    assert isinstance(self.add_temp, int)
-                    ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
-                                                        axis=self.add_temp)
+                rd_matrix = np.dstack(rd_matrices)
+                rd_matrix = np.rollaxis(rd_matrix, axis=-1)
+                rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
+                rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+                if self.add_temp:
+                    if isinstance(self.add_temp, bool):
+                        rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
+                    else:
+                        assert isinstance(self.add_temp, int)
+                        rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
+                                                            axis=self.add_temp)
 
-            ad_matrix = np.dstack(ad_matrices)
-            ad_matrix = np.rollaxis(ad_matrix, axis=-1)
-            # Fill fake mask just to apply transform
-            ad_frame = {'matrix': ad_matrix, 'mask': rd_mask.copy()}
-            ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-            if self.add_temp:
-                if isinstance(self.add_temp, bool):
-                    ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'], axis=0)
-                else:
-                    assert isinstance(self.add_temp, int)
-                    ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'],
-                                                        axis=self.add_temp)
+                ra_matrix = np.dstack(ra_matrices)
+                ra_matrix = np.rollaxis(ra_matrix, axis=-1)
+                ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
+                ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+                if self.add_temp:
+                    if isinstance(self.add_temp, bool):
+                        ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
+                    else:
+                        assert isinstance(self.add_temp, int)
+                        ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
+                                                            axis=self.add_temp)
 
-            rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
-            ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
-            ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
-            frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
-                    'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
-                    'ad_matrix': ad_frame['matrix']}
+                ad_matrix = np.dstack(ad_matrices)
+                ad_matrix = np.rollaxis(ad_matrix, axis=-1)
+                # Fill fake mask just to apply transform
+                ad_frame = {'matrix': ad_matrix, 'mask': rd_mask.copy()}
+                ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+                if self.add_temp:
+                    if isinstance(self.add_temp, bool):
+                        ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'], axis=0)
+                    else:
+                        assert isinstance(self.add_temp, int)
+                        ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'],
+                                                            axis=self.add_temp)
+
+                rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
+                ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
+                ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
+                frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
+                        'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
+                        'ad_matrix': ad_frame['matrix']}
+                
+            # Get ground truth boxes and labels
+            gt_boxes = []
+            gt_labels = []
+            if self.annos[self.seq_name][init_frame_name]:
+                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    #obj_anno['range_doppler']['dense']
+                    gt_boxes.append(obj_anno[featurestr]['box'])
+                    gt_labels.append(obj_anno[featurestr]['label'])
+            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+            frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
+        elif self.model_type == 'RadarCrossAttention':
+            print(f"\nItem {index}:")
+            raw_index = self.indexmapping[index]
+            frame = {'image_path': self.image_filenames[raw_index]}
+            ra_map = np.zeros((self.win_frames, 256, 256))
+            rd_map = np.zeros((self.win_frames, 256, 64))
+            ad_map = np.zeros((self.win_frames, 64, 256))
+            for i in range(self.win_frames):
+                frame_id = raw_index + i
+                ra_map[i, ::] = self.get_RA(frame_id)
+
+                rd_map_temp = self.get_RD(frame_id)
+                # flip the axis in the order of increasing velocity (L->R)
+                rd_map_temp = np.flip(rd_map_temp, 0)
+                rd_map_temp = np.flip(rd_map_temp, 1)
+                rd_map_temp[:, 31:34]=0 # removing dc component
+                rd_map[i, ::] = np.float32(rd_map_temp)
+
+                rad_map = self.get_RAD(frame_id)
+                ad_map_temp = np.fft.ifftshift(rad_map, axes=0)
+                ad_map_temp = np.fft.ifft(ad_map_temp, axis=0)
+                ad_map_temp = pow(np.abs(ad_map_temp), 2)
+                ad_map_temp = np.sum(ad_map_temp, axis=0)
+                ad_map_temp = 10*np.log10(ad_map_temp + 1)
+                ad_map_temp = np.transpose(ad_map_temp)
+                ad_map_temp[31:34,:]=0
+                ad_map_temp = np.float32(ad_map_temp)
+                ad_map[i, ::] = ad_map_temp
+            # TODO: normalize rd_map, ad_map, rd_map
+            raw_index = str(raw_index).zfill(6)
+            if self.gauss_type == "Bivar":
+                gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
+            else:                                        
+                gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
+            frame.update({'rd_matrix': rd_map, 'ra_matrix': ra_map, 'ad_matrix': ad_map, 'mask': gauss_map})
+            if self.center_offset:
+                center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
+                frame.update({'center_map': center_offset}) 
+            if self.orientation:
+                orient_map = get_orent_map(self.annos[self.seq_name][raw_index])  
+                frame.update({'orent_map': orient_map}) 
             
-        # Get ground truth boxes and labels
-        gt_boxes = []
-        gt_labels = []
-        if self.annos[self.seq_name][init_frame_name]:
-            for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                #obj_anno['range_doppler']['dense']
-                gt_boxes.append(obj_anno[featurestr]['box'])
-                gt_labels.append(obj_anno[featurestr]['label'])
-        camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-        frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
+            for key,value in frame.items():
+                if key != 'image_path':
+                    print(f"{key}: {value.shape}")
+        else:
+            raise ValueError(f"CARRADA dataset doesn't support the model type({self.model_type}) training/inference.")
         return frame
 
 
