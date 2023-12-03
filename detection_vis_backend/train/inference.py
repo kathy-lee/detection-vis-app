@@ -17,8 +17,7 @@ from PIL import Image
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.datasets.utils import confmap2ra
-from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, boxDecoder, nms
+from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, boxDecoder, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
 
 
 def infer(model, checkpoint_id, sample_id, file_id, split_type):
@@ -187,6 +186,41 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_labels = pred_labels - 1
             pred_objs = [list(pred_boxes[i]) + [pred_labels[i], pred_scores[i]] for i in range(len(pred_boxes))]
             pred_objs = {"RD": pred_objs}
+        elif model_type == "RAMP_CNN":
+            input = (data['ra_matrix'].to(device).float(), data['rv_matrix'].to(device).float(), data['va_matrix'].to(device).float())
+            output = net(input)
+            confmap_pred = output['confmap_pred'].cpu().detach().numpy() 
+            pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            # filter invalid predictions
+            mask = pred_objs[:, 0] != -1 
+            pred_objs = pred_objs[mask]
+            # limit conf value
+            mask = pred_objs[:, -1] > 1  
+            pred_objs[mask, -1] = 1
+            # reorganize the items: [row_id, col_id, cls_id, conf_value]
+            pred_objs = pred_objs[:, [1, 2, 0, 3]]
+            #feature_show_pred = "RA"
+            pred_objs = {"RA": pred_objs.tolist()}
+        elif model_type == "RadarCrossAttention":
+            input = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
+            output = net(input)
+            pred_map = torch.sigmoid(output["pred_mask"])
+            pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
+            pred_o = output["pred_orent"]
+            mask, peak_cls = create_default(pred_map.size(), kernel_window=(3,5))
+            pred_intent, pred_idx = peaks_detect(pred_map, mask, peak_cls, heat_thresh=0.6)
+            pred_idx= distribute(pred_idx,device)
+            pred_idx = update_peaks(pred_c, pred_idx)
+            pred_idx, pred_intent= association(pred_intent, pred_idx, device)
+            ra_objs = []
+            for cnt, cord in enumerate(pred_idx):
+                p_cls, p_r, p_c = int(cord[1]), cord[2], cord[3]
+                ang = (p_c*57.29*2/256 - 57.29)/np.pi
+                ra_objs.append([50*p_r*np.cos(ang), 50*p_r*np.sin(ang), p_cls, pred_intent[cnt], 0]) # [row_id, col_id, cls_id, conf_value, heading]
+                print(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
+                    Range: {50*p_r/256}, Angle(deg): {p_c*57.29*2/256 - 57.29},\
+                    Heading: {orent(pred_o[p_r,::], int(p_r//4), int(p_c//4), pred=True)}")  
+            pred_objs = {"RA": ra_objs.tolist()}
         else:
             raise ValueError("Inference of the chosen model type is not supported")
 
