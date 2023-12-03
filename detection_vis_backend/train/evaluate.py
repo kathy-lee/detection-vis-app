@@ -16,7 +16,7 @@ from sklearn.metrics import confusion_matrix
 from copy import deepcopy
 
 
-from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms 
+from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -1740,26 +1740,6 @@ def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
     return {'loss':0, 'mAP':0, 'mAR':0, 'mIoU':0}
 
 
-def create_default(map_shape, kernel_window):
-    peaks_cls = nn.MaxPool2d(kernel_size= kernel_window,stride=1,return_indices=True)
-
-    h,w = torch.div(torch.Tensor(kernel_window), 2, rounding_mode='floor')
-
-    mask_h = (map_shape[2]-2*h).int()
-    mask_w = (map_shape[3]-2*w).int()
-    mask_t = torch.zeros(mask_h,mask_w)
-
-    for i in range(mask_t.shape[0]):
-        for j in range(mask_t.shape[1]):
-            mask_t[i,j]=(i+h)*map_shape[3]+ j+w
-    
-    mask = torch.zeros(map_shape[0],map_shape[1],mask_h,mask_w)
-    for i in range(mask.shape[0]):
-        for j in range(mask.shape[1]):
-            mask[i,j,:,:]= mask_t           
-    return mask, peaks_cls
-
-
 def metrics_center(grd_map, pred_map, pred_c, mask, 
                   peaks_cls, tr_o, pred_o, cls,
                   thresh, device):
@@ -1775,79 +1755,7 @@ def metrics_center(grd_map, pred_map, pred_c, mask,
     cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
     return cls  
 
-def peaks_detect(map, mask, peaks_cls, heat_thresh):
-    out = peaks_cls(map)
-
-    peak = out[1]==mask
-    peak_thresh = out[0]>heat_thresh
-
-    idx = torch.where(peak*peak_thresh ==True)
-    return out[0][idx], idx  # intensity, index
-
-def distribute(index_t, device='cpu'):
-    index = torch.tensor(()).to(device=device)
-    for i in range(len(index_t[0])):
-        index = torch.cat((index, torch.stack((index_t[0][i],index_t[1][i],index_t[2][i],index_t[3][i]),dim=0)))
-
-    index = torch.reshape(index,(len(index_t[0]),4))
-    return index
-
-def update_peaks(pred_cen, pred_idx):
-    for cnt,cord in enumerate(pred_idx):
-        r_id = int(cord[2])
-        a_id = int(cord[3])
-        bat = int(cord[0])
-        cord[2] += int(pred_cen[bat,0,r_id,a_id])
-        cord[3] += int(pred_cen[bat,1,r_id,a_id])
-        pred_idx[cnt]= cord
-        #print(int(8*pred_cen[bat,0,r_id,a_id]))
-    return pred_idx
-
-def association(intensity, index, device="cpu"):
-    idx_list = torch.argsort(intensity)
-    idx_list = torch.flip(idx_list,dims=[-1])
-    out_intent =torch.Tensor().to(device=device)
-    out_idx =torch.Tensor().to(device=device)
-
-    while len(idx_list)!=0:
-        out_intent=torch.cat((out_intent,torch.Tensor([intensity[idx_list[0]]]).to(device=device)))
-        out_idx = torch.cat((out_idx, index[idx_list[0]]))
-        p1_row , p1_col = index[idx_list[0]][2],index[idx_list[0]][3]
-        frame_1, cls_1 = index[idx_list[0]][0],index[idx_list[0]][1]
-        #print(p1_row,p1_col)
-        x1,y1 = pol2cord(p1_row,p1_col)
-        #print(x1,y1)
-        idx_list = idx_list[1:]
-
-        count = 0
-        while len(idx_list)!=0 and count != len(idx_list):
-            frame_2, cls_2 = index[idx_list[count]][0],index[idx_list[count]][1]
-            #if frame_2==frame_1 and cls_1==cls_2:
-            if frame_2 == frame_1:
-                p2_row , p2_col = index[idx_list[count]][2],index[idx_list[count]][3]
-                x2,y2 = pol2cord(p2_row,p2_col)
-                #print(x2,y2)
-                dist = distance(x1,y1,x2,y2)
-                #print(dist)
-            
-                if dist < 2:
-                   idx_list = torch.cat([idx_list[:count], idx_list[count+1:]])
-                else:
-                    count += 1
-            else: 
-                count += 1
-    out_idx = torch.reshape(out_idx,(len(out_idx)//4,4))
-    return out_idx,out_intent
-    
-def pol2cord(rng_idx, agl_idx):
-    range_array = torch.linspace(50,0,steps=256)
-    w = torch.linspace(-1,1,steps=256) # angular range from -1 radian to 1 radian
-    angle_array = torch.arcsin(w)
-    range = range_array[int(rng_idx)]
-    angle = angle_array[int(agl_idx)]
-    return range*torch.sin(angle), range*torch.cos(angle)
-
-def distance (x1,y1,x2,y2):
+def distance(x1,y1,x2,y2):
     dx = x1-x2
     dy = y1-y2
     return torch.sqrt(dx**2 + dy**2)
@@ -1903,30 +1811,4 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
     return cls
 
 
-def orent(orent_map, r, a, velo=0, pred=False):
-    s_t = orent_map[0, r, a]
-    c_t = orent_map[1, r, a]
-    s = s_t/((s_t**2 + c_t**2)**0.5)
-    c = c_t/((s_t**2 + c_t**2)**0.5)
-    angle = torch.arccos(c).rad2deg()
-    if s<0:
-        angle= -angle
 
-    if pred and torch.abs(angle)>150:
-        w = torch.linspace(-1,1,steps=64)
-        angle_array = torch.rad2deg(torch.arcsin(w))
-        prj_angle = angle_array[a]
-        delta = angle-prj_angle
-
-        if velo>0:
-            if delta<90 and delta>-90:pass
-            else:
-                #print(v,angle,prj_angle)
-                angle +=180
-        else:
-            if delta<90 and delta>-90: 
-                angle+=180
-        if angle>180:
-            angle = angle-360
-        return angle
-    return angle
