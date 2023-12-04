@@ -214,12 +214,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_idx, pred_intent= association(pred_intent, pred_idx, device)
             ra_objs = []
             for cnt, cord in enumerate(pred_idx):
-                p_cls, p_r, p_c = int(cord[1]), cord[2], cord[3]
-                ang = (p_c*57.29*2/256 - 57.29)/np.pi
-                ra_objs.append([50*p_r*np.cos(ang), 50*p_r*np.sin(ang), p_cls, pred_intent[cnt], 0]) # [row_id, col_id, cls_id, conf_value, heading]
+                p_cls, p_row, p_col = int(cord[1]), cord[2], cord[3]
+                orientation = orent(pred_o[p_row,::], int(p_row//4), int(p_col//4), pred=True)
+                ra_objs.append([p_row, p_col, p_cls, pred_intent[cnt], orientation]) # [row_id, col_id, cls_id, confidence, heading]
                 print(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
-                    Range: {50*p_r/256}, Angle(deg): {p_c*57.29*2/256 - 57.29},\
-                    Heading: {orent(pred_o[p_r,::], int(p_r//4), int(p_c//4), pred=True)}")  
+                    Range: {50*p_row/256}, Angle(deg): {p_col*57.29*2/256 - 57.29},\
+                    Heading: {orientation}")  
             pred_objs = {"RA": ra_objs.tolist()}
         else:
             raise ValueError("Inference of the chosen model type is not supported")
