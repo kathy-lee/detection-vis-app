@@ -16,7 +16,7 @@ from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, 
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
 from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
 from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep 
-
+from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode
 
 class NetworkFactory:
     _instances = {}
@@ -708,3 +708,47 @@ class RAMP_CNN(nn.Module):
         dets2 = self.fuse_fea(torch.zeros_like(feas_ra), feas_rv, feas_va) # (B, 3, W/2, 128, 128)
         output = {'confmap_pred': dets, 'confmap_pred2': dets2}
         return output
+
+
+class RadarCrossAttention(nn.Module):
+    def __init__(self, win_size, n_class,
+                center_offset=True, orientation=False):
+        super(RadarCrossAttention, self).__init__()
+        
+        self.center_offset = center_offset
+        self.orientation = orientation
+
+        self.raencode = Encode(in_channels=win_size)
+        self.rdencode = Encode(in_channels=win_size)
+        self.adencode = Encode(in_channels=win_size)
+        self.decode = Decode()
+        self.attention = CrossAttention()
+        
+        self.finalConv_cls = nn.Conv2d(in_channels=32, out_channels=n_class, stride=(1,1), padding=(1,1), kernel_size=(3,3))
+        self.finalConv_center = nn.Conv2d(in_channels=32, out_channels=2, stride=(1,1), padding=(1,1), kernel_size=(3,3))
+        self.finalConv_orent = nn.Sequential(
+            nn.Conv2d(in_channels=32,out_channels=16,stride=(2,2),padding=(2,2),kernel_size=(5,5)),
+            nn.PReLU(),
+            nn.Conv2d(in_channels=16,out_channels=2,stride=(2,2),padding=(2,2),kernel_size=(5,5)),
+            nn.Tanh()
+        )
+
+    def forward(self, input):
+        ra, rd, ad = input
+        ra_e = self.raencode(ra) # (B,1,256,256)-> (B,256,32,32)
+        rd_e = self.rdencode(rd) # (B,1,256,64)-> (B,256,32,8)
+        ad_e = self.adencode(ad)# (B,1,64,256)-> (B,256,8,32)
+
+        ca = self.attention(ra_e=ra_e, rd_e=rd_e, ad_e=ad_e)
+
+        x = self.decode(ca)
+
+        x_cls = self.finalConv_cls(x) # (B,32,256,256) -> (B,3,256,256)
+        x_center = 0
+        x_orent = 0
+        if self.center_offset:
+            x_center = self.finalConv_center(x) # (B,32,256,256) -> (B,2,256,256)
+            
+        if self.orientation:
+            x_orent = self.finalConv_orent(x) # (B,32,256,256) -> (B,2,64,64)
+        return {"pred_mask": x_cls, "pred_center": x_center, "pred_orent": x_orent}

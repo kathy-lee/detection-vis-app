@@ -16,7 +16,6 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import lr_scheduler
 from torch.utils.data import ConcatDataset, DataLoader, random_split, Subset
-from tqdm import tqdm
 from contextlib import contextmanager
 
 import sys
@@ -25,8 +24,8 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, Cont_Loss, FocalLoss_Neg
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, Cont_Loss, FocalLoss_Neg, FocalLoss_weight, CenterLoss, L2Loss
+from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation, RadarCrossAttention_evaluation
 from data import crud, schemas
 from data.database import SessionLocal
 
@@ -59,6 +58,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'RADDet': default_collate,
         'DAROD': DAROD_collate,
         'RAMP_CNN': default_collate,
+        'RadarCrossAttention': default_collate
     }  
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
@@ -380,7 +380,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 # print(inputs.shape, label)
             elif model_type == "RAMP_CNN":
                 inputs = (data['ra_matrix'].to(device).float(), data['rv_matrix'].to(device).float(), data['va_matrix'].to(device).float())
-                confmap_gt = data['confmap_gt'].to(device).float()         
+                confmap_gt = data['confmap_gt'].to(device).float()   
+            elif model_type == "RadarCrossAttention":
+                inputs = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
+                gt_mask = data["mask"].to(device).float()
+                if model_config["center_offset"]:
+                    gt_center_map = data["center_map"].to(device).float() 
+                if model_config["orientation"]:
+                    gt_orent_map = data["orent_map"].to(device).float()
             else:
                 raise ValueError
             
@@ -480,6 +487,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 criterion3 = Cont_Loss(train_config['win_size'])
                 loss_cont = criterion3(outputs['confmap_pred'], confmap_gt)
                 loss = loss_cur + loss_cont + loss_cur2 * 0.5
+            elif model_type == "RadarCrossAttention":
+                cls_weight = torch.zeros([3, 256, 256]) + torch.tensor(train_config["losses"]["class_weight"]).view(-1, 1, 1)
+                cls_loss = FocalLoss_weight(cls_weight.to(device).float(), alpha=2, beta=0)
+                loss =  train_config['losses']['weight'][0] * cls_loss(outputs["pred_mask"], gt_mask)
+                if model_config["center_offset"]:
+                    center_loss = CenterLoss()
+                    loss += train_config['losses']['weight'][1] * center_loss(outputs["pred_center"], gt_center_map)
+                if model_config["orientation"]:
+                    orent_loss = L2Loss()
+                    loss += train_config['losses']['weight'][2] * orent_loss(outputs["pred_orent"], gt_orent_map)          
             else:
                 raise ValueError
 
@@ -524,6 +541,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
         elif model_type == "RAMP_CNN":
             eval = RAMP_CNN_evaluation(net, val_loader, train_config, model_config, device)
+        elif model_type == "RadarCrossAttention":
+            eval = RadarCrossAttention_evaluation(net, val_loader, model_config, device)
         else:
             raise ValueError
             
@@ -577,6 +596,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
     elif model_type == "RAMP_CNN":
         eval = RAMP_CNN_evaluation(net, test_loader, train_config, model_config, device)
+    elif model_type == "RadarCrossAttention":
+        eval = RadarCrossAttention_evaluation(net, test_loader, model_config, device)
     else:
         raise ValueError
     

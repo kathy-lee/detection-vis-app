@@ -13,9 +13,10 @@ import torch.nn as nn
 from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
-from PIL import Image
+from copy import deepcopy
 
-from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms 
+
+from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -1677,3 +1678,137 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
     print("AP_total: %.4f | AR_total: %.4f" % (stats[0] * 100, stats[1] * 100))
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+
+
+def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
+    net.eval()
+
+    cls = dict()
+    temp_dict = {'grd_no':0,'Conf':[],'O_P':[],'O_T':[],'TP':[],'P':[],'R':[],'AP':[],'asc':{'gt_r':[],'gt_a':[],'pd_r':[],'pd_a':[]}}
+    cls['0'] = deepcopy(temp_dict)
+    cls['1'] = deepcopy(temp_dict)
+    cls['2'] = deepcopy(temp_dict)
+
+    prev_size = 0
+
+    with torch.no_grad():
+        for idx, data in enumerate(loader):
+            inputs = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
+            grd_map = data["mask"].to(device).float()
+            if model_config["orientation"]:
+                tr_o = data["orent_map"].to(device).float()
+        
+            with torch.set_grad_enabled(False):
+                output = net(inputs)
+
+            if data['ra_matrix'].shape[0] != prev_size:
+                mask, peak_cls = create_default(grd_map.size(), kernel_window=(3,5))
+                mask = mask.to(device=device)
+                peak_cls = peak_cls.to(device=device)
+           
+            prev_size = data['ra_matrix'].shape[0]
+    
+            pred_map = torch.sigmoid(output["pred_mask"])
+            pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
+ 
+            print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
+            cls = metrics_center(grd_map=grd_map, pred_map=pred_map,
+                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
+                                 tr_o=tr_o, pred_o=output["pred_orent"], cls=cls,
+                                 thresh=thresh, device=device)
+            print(f"item {idx} finished")
+
+        for idx in range(len(cls)):
+            categ = cls[f"{idx}"]
+            P =[]
+            R=[]
+            TP = 0
+            GT = categ['grd_no']
+            index = np.argsort(-categ['Conf'])
+            for cnt, i in enumerate(index):
+                TP += categ['TP'][i]
+                P = np.append(P,TP/(cnt+1))
+                R = np.append(R, TP/GT)
+            categ['P']= P
+            categ['R'] = R
+            categ['AP'] = np.trapz(P,R)
+            prec = np.sum(categ['TP'])
+            rec =  len(categ['TP'])
+            print(idx, 'AP:',categ['AP'],'P:' f"{prec/rec}" , 'R:',f"{prec/GT}", 'GT:'f" {GT}")
+            #print('Heading Accuracy', cls[f"{idx}"]['O_T'],'\n',cls[f"{idx}"]['O_P'])
+            cls[f"{idx}"] = categ
+    return {'loss':0, 'mAP':0, 'mAR':0, 'mIoU':0}
+
+
+def metrics_center(grd_map, pred_map, pred_c, mask, 
+                  peaks_cls, tr_o, pred_o, cls,
+                  thresh, device):
+    grd_intent, grd_idx = peaks_detect(grd_map, mask, peaks_cls, heat_thresh=0.8)
+    grd_idx = distribute(grd_idx, device)
+    pred_intent, pred_idx = peaks_detect(pred_map, mask, peaks_cls, heat_thresh=0.1)
+    pred_idx= distribute(pred_idx,device)
+
+    #if pred_c!=0:
+    if torch.all(pred_c)!=0: 
+        pred_idx = update_peaks(pred_c, pred_idx)
+    pred_idx, pred_intent= association(pred_intent, pred_idx, device)
+    cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
+    return cls  
+
+def distance(x1,y1,x2,y2):
+    dx = x1-x2
+    dy = y1-y2
+    return torch.sqrt(dx**2 + dy**2)
+
+def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, device='cpu'):
+    for grd_cord in grd_idx:
+        g_fr, g_cls = grd_cord[0], int(grd_cord[1])
+        cls[f"{g_cls}"]['grd_no'] +=1
+
+    while len(pred_int) != 0:
+        cord = pred_idx[0]
+        p_r, p_c= cord[2], cord[3]
+        p_fr, p_cls = cord[0], int(cord[1])
+        cls[f"{p_cls}"]['Conf'] = np.append(cls[f"{p_cls}"]['Conf'], pred_int[0].to('cpu').numpy())
+        x1, y1 = pol2cord(p_r, p_c)
+        dist = torch.Tensor().to(device =device)
+        pred_int = pred_int[1:]
+        pred_idx = pred_idx[1:]
+        
+        for grd_cord in grd_idx:
+            g_fr, g_cls = grd_cord[0], int(grd_cord[1])
+            if g_fr==p_fr and g_cls==p_cls:
+                g_r, g_c = grd_cord[2], grd_cord[3]
+                x2, y2 = pol2cord(g_r, g_c)
+                dist = torch.cat([dist, torch.Tensor([distance(x1, y1, x2, y2)]).to(device=device)])
+            else :
+                dist = torch.cat([dist,torch.Tensor([100]).to(device=device)]) # dummy distance
+
+        if len(dist)!=0:
+            #print(f"{dist}\n")
+            if torch.min(dist) < dist_thresh:
+                min_idx = torch.argmin(dist)
+                t_r = int(grd_idx[min_idx][2])
+                grd_idx = torch.cat([grd_idx[0:min_idx], grd_idx[1+min_idx:]])
+                cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'], 1)
+                
+                p_fr = int(p_fr)
+                if torch.all(pr_o) != 0:
+                        
+                    tro_id = torch.nonzero(tr_o[p_fr, 1, ::], as_tuple=True)
+                    if len(tro_id[0])>0 :
+                        tro_min = torch.argmin(torch.abs(tro_id[0]-(t_r//4)))
+                    else:
+                        tro_id = torch.nonzero(tr_o[p_fr, 0, ::], as_tuple=True)
+                        tro_min = torch.argmin(torch.abs(tro_id[0] - t_r//4))
+    
+                    cls[f"{p_cls}"]['O_T'].append(orent(tr_o[p_fr,::], tro_id[0][tro_min], tro_id[1][tro_min]))
+                    cls[f"{p_cls}"]['O_P'].append(orent(pr_o[p_fr,::], int(p_r//4), int(p_c//4), pred=True))
+            else:
+                cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'],0)
+        else:
+            cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'],0)
+    return cls
+
+
+
