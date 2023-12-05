@@ -1,10 +1,9 @@
 {
     "seed":3,
     "losses": {
-        "detection_loss": "PixorLoss",
         "classification": "FocalLoss",
         "regression": "smoothL1Loss",
-        "segmentation_loss": "BCEWithLogitsLoss",
+        "segmentation": "BCEWithLogitsLoss",
         "weight": [1,100,100]
     },
     "lr_scheduler": {
