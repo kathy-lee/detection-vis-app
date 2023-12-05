@@ -250,3 +250,28 @@ class RangeAngle_Decoder(nn.Module):
         out = self.conv_block3(S43)
         
         return out
+    
+
+class FocalLoss(nn.Module):
+    """
+    Focal loss class. Stabilize training by reducing the weight of easily classified background sample and focussing
+    on difficult foreground detections.
+    """
+
+    def __init__(self, gamma=0, size_average=False):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.size_average = size_average
+
+    def forward(self, prediction, target):
+
+        # get class probability
+        pt = torch.where(target == 1.0, prediction, 1-prediction)
+
+        # compute focal loss
+        loss = -1 * (1-pt)**self.gamma * torch.log(pt+1e-6)
+
+        if self.size_average:
+            return loss.mean()
+        else:
+            return loss.sum()

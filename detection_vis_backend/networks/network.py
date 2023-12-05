@@ -6,11 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.container import Sequential
 from torchvision.transforms.transforms import Sequence
+from abc import abstractmethod
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
-from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
+from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock, FocalLoss
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
@@ -39,7 +40,21 @@ class NetworkFactory:
     
 
 
-class FFTRadNet(nn.Module):
+
+class BaseNetwork(nn.Module):
+    def __init__(self):
+        super(BaseNetwork, self).__init__()
+
+    @abstractmethod
+    def init_lossfunc(self, param):
+        pass
+
+    @abstractmethod
+    def get_loss(self, pred, label, param):
+        pass
+
+
+class FFTRadNet(BaseNetwork):
     def __init__(self,mimo_layer,channels,blocks,regression_layer = 2, detection_head=True,segmentation_head=True):
         super(FFTRadNet, self).__init__()
     
@@ -70,6 +85,54 @@ class FFTRadNet(nn.Module):
             out['Segmentation'] = self.freespace(Y)
         
         return out
+
+    def init_lossfunc(self, param):
+        if param['segmentation_loss'] == 'BCEWithLogitsLoss':
+            self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')  
+        else:
+            self.criterion_seg = nn.BCELoss()
+        
+        if param['classification'] == 'FocalLoss':
+            self.criterion_classif = FocalLoss(gamma=2)
+        else:
+            self.criterion_classif = nn.BCELoss(reduction='sum')
+
+        if(param['regression']=='SmoothL1Loss'):
+            self.criterion_reg = nn.SmoothL1Loss(reduction='sum')
+        else:
+            self.criterion_reg = nn.L1Loss(reduction='sum')
+    
+    def get_loss(self, pred, label, param):
+        # loss of classification
+        classif_pred = pred['Detection'][:, 0,:, :].contiguous().flatten()
+        classif_label = label['encoded_label'][:, 0,:, :].contiguous().flatten()
+        loss_classif = self.criterion_classif(classif_pred, classif_label)
+
+        # loss of regression
+        regression_prediction = pred['Detection'].permute([0, 2, 3, 1])[:, :, :, :-1]
+        regression_prediction = regression_prediction.contiguous().view(-1, regression_prediction.size(3))
+        regression_label = label['encoded_label'].permute([0, 2, 3, 1])[:, :, :, :-1]
+        regression_label = regression_label.contiguous().view(-1, regression_label.size(3))
+        T = label['encoded_label'][:,1:]
+        P = pred['Detection'][:,1:]
+        M = label['encoded_label'][:,0].unsqueeze(1)
+        loss_reg = self.criterion_reg(P*M,T)
+        NbPts = M.sum()
+        if NbPts > 0 :
+            loss_reg/=NbPts
+
+        # loss of segmentation
+        if 'Segmentation' in pred:
+            seg_pred = pred['Segmentation'].contiguous().flatten()
+            seg_label = label['seg_label'].contiguous().flatten()   
+            loss_seg = self.criterion_seg(seg_pred, seg_label)
+            loss_seg *= pred['Segmentation'].size(0)
+        else:
+            loss_seg = 0
+
+        losses = [loss_classif, loss_reg, loss_seg]
+        losses = sum([weight * loss_item for loss_item, weight in zip(losses, param['weight'])])
+        return losses
 
 
 # class RODNet(nn.Module):
