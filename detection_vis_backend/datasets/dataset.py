@@ -1639,16 +1639,16 @@ class CRUW(Dataset):
                 assert confmap_gt.shape == \
                     (self.n_class, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
 
-            data_dict['anno'] = dict(
-                obj_infos=obj_info,
-                confmaps=confmap_gt,
-            )
-        else:
-            data_dict['anno'] = None
+            # data_dict['anno'] = dict(
+            #     obj_infos=obj_info,
+            #     confmaps=confmap_gt,
+            # )
+            data_dict.update({'obj_infos': obj_info, 'confmaps': confmap_gt})
+        # else:
+        #     data_dict['anno'] = None
 
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
-            if data_dict['anno'] is not None: # self.all_confmaps and 
-                data_dict['anno']['confmaps'] = data_dict['anno']['confmaps'][:, -1]
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['confmaps'] is not None: 
+            data_dict['confmaps'] = data_dict['confmaps'][:, -1]
         return data_dict
 
 
@@ -1868,7 +1868,7 @@ class CARRADA(Dataset):
                         feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
                 # Apply normalization
                 feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-                frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
+                frame = {self.features[0]: feature_frame['matrix'], 'mask': feature_frame['mask']}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
@@ -1953,9 +1953,9 @@ class CARRADA(Dataset):
                 rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
                 ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
                 ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
-                frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
-                        'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
-                        'ad_matrix': ad_frame['matrix']}
+                frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
+                        'RA': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
+                        'AD': ad_frame['matrix']}
                 
             # Get ground truth boxes and labels
             gt_boxes = []
@@ -2001,7 +2001,7 @@ class CARRADA(Dataset):
                 gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
             else:                                        
                 gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
-            frame.update({'rd_matrix': rd_map, 'ra_matrix': ra_map, 'ad_matrix': ad_map, 'mask': gauss_map})
+            frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'mask': gauss_map})
             if self.center_offset:
                 center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
                 frame.update({'center_map': center_offset}) 
@@ -2183,11 +2183,14 @@ class RADDetDataset(Dataset):
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
             feature_data = np.transpose(feature_data, (2, 0, 1))
+            feature_name = "RAD"
         elif self.model_type == "DAROD":
             if self.features == ["RD"]:
                 feature_data = self.get_RD(index)
+                feature_name = "RD"
             elif self.features == ["RA"]:
                 feature_data = self.get_RA(index)
+                feature_name = "RA"
 
             x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
             boxes = gt_instances["boxes"]
@@ -2229,7 +2232,7 @@ class RADDetDataset(Dataset):
             feature_data = np.expand_dims(feature_data, axis=0)  
         else:
             raise ValueError("Model type not supported")    
-        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
+        return {feature_name: feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
     
     def encodeToLabels(self, gt_instances):
         """ Transfer ground truth instances into Detection Head format """
@@ -2746,7 +2749,7 @@ class UWCR(Dataset):
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
             assert np.shape(obj_info)[0] == self.win_size
-        data_dict = {'ra_matrix': radar_npy_win_ra, 'rv_matrix': radar_npy_win_rv, 'va_matrix': radar_npy_win_va, \
+        data_dict = {'RA': radar_npy_win_ra, 'RD': radar_npy_win_rv, 'AD': radar_npy_win_va, \
                      'confmap_gt': confmap_gt, 'gt_label': obj_info, \
                      'seq_name': self.seq_name,  'start_frame': data_id, 'end_frame': data_id + self.win_size * self.step - 1}
         return data_dict
