@@ -16,7 +16,7 @@ from sklearn.metrics import confusion_matrix
 from copy import deepcopy
 
 
-from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
+from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -28,48 +28,33 @@ def FFTRadNet_val_evaluation(net, loader, check_perf=False, losses_params=None, 
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
     metrics = Metrics()
     metrics.reset()
-    criterion_det = pixor_loss if losses_params['detection_loss'] == 'PixorLoss' else None
-    criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if losses_params['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
-
+    
     for i, data in enumerate(loader):
-        # input, out_label,segmap,labels
-        inputs = data[0].to(device).float()
-        label_map = data[1].to(device).float()
-        seg_map_label = data[2].to(device).double()
-
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
+        inputs = data['RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
 
-        if(criterion_det!=None and criterion_seg!=None):
-            classif_loss,reg_loss = criterion_det(outputs['Detection'], label_map,losses_params)           
-            prediction = outputs['Segmentation'].contiguous().flatten()
-            label = seg_map_label.contiguous().flatten()        
-            loss_seg = criterion_seg(prediction, label)
-            loss_seg *= inputs.size(0)
-                
-            classif_loss *= losses_params['weight'][0]
-            reg_loss *= losses_params['weight'][1]
-            loss_seg *=losses_params['weight'][2]
-
-            loss = classif_loss + reg_loss + loss_seg
-
-            # statistics
-            running_loss += loss.item() * inputs.size(0)
+        data.pop('RD')
+        loss = net.get_loss(outputs, data, losses_params)
+        running_loss += loss.item() * inputs.size(0)
 
         if(check_perf):
             out_obj = outputs['Detection'].detach().cpu().numpy().copy()
-            labels = data[3]
+            label_obj = data['box_label']
 
             out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
-            label_freespace = seg_map_label.detach().cpu().numpy().copy()
+            label_freespace = data['seg_label'].detach().cpu().numpy().copy()
 
-            for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels,label_freespace):
+            for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,label_obj,label_freespace):
                 metrics.update(pred_map[0],true_map,np.asarray(decode(pred_obj,0.05)),true_obj,threshold=0.2,range_min=5,range_max=100) 
                 
         kbar.update(i)
         
     mAP,mAR, mIoU = metrics.GetMetrics()
-
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
@@ -81,27 +66,22 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
 
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
     for i, data in enumerate(loader):
-
-        # input, out_label,segmap,labels
-        inputs = data[0].to(device).float()
-
+        inputs = data['RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
 
         out_obj = outputs['Detection'].detach().cpu().numpy().copy()
         out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
         
-        labels_object = data[3]
-        label_freespace = data[2].numpy().copy()
+        labels_obj = data['box_label']
+        label_freespace = data['seg_label'].numpy().copy()
             
-        for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels_object,label_freespace):
-            
+        for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels_obj,label_freespace):
             predictions['prediction']['objects'].append( np.asarray(decode(pred_obj,0.05)))
             predictions['label']['objects'].append(true_obj)
 
             predictions['prediction']['freespace'].append(pred_map[0])
-            predictions['label']['freespace'].append(true_map)
-                
+            predictions['label']['freespace'].append(true_map)   
 
         kbar.update(i)
         print(f'Step {i+1}/{len(loader)}')
