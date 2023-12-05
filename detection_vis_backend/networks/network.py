@@ -87,7 +87,7 @@ class FFTRadNet(BaseNetwork):
         return out
 
     def init_lossfunc(self, param):
-        if param['segmentation_loss'] == 'BCEWithLogitsLoss':
+        if param['segmentation'] == 'BCEWithLogitsLoss':
             self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')  
         else:
             self.criterion_seg = nn.BCELoss()
@@ -122,7 +122,7 @@ class FFTRadNet(BaseNetwork):
             loss_reg/=NbPts
 
         # loss of segmentation
-        if 'Segmentation' in pred:
+        if pred['Segmentation']:
             seg_pred = pred['Segmentation'].contiguous().flatten()
             seg_label = label['seg_label'].contiguous().flatten()   
             loss_seg = self.criterion_seg(seg_pred, seg_label)
@@ -501,7 +501,7 @@ class MVRECORD(nn.Module):
         self.rd_decoder = RecordDecoder(config=decoder_rd_config, n_class=self.n_class)
         self.ra_decoder = RecordDecoder(config=decoder_ra_config, n_class=self.n_class)
 
-    def forward(self, inputs):
+    def forward(self, input):
         """
         Forward pass MV-RECORD model
         @param x_rd: RD input tensor with shape (B, C, T, H, W) where T is the number of timesteps
@@ -509,7 +509,7 @@ class MVRECORD(nn.Module):
         @param x_ad: AD input tensor with shape (B, C, T, H, W) where T is the number of timesteps
         @return: RD and RA segmentation masks of the last time step with shape (B, n_class, H, W)
         """
-        x_rd, x_ra, x_ad = inputs
+        x_rd, x_ra, x_ad = input['RD'], input['RA'], input['AD']
         win_size = x_rd.shape[2]
         # Backbone
         for t in range(win_size):
@@ -760,7 +760,7 @@ class RAMP_CNN(nn.Module):
         self.fuse_fea = Fuse_fea_new_rep(n_class, ramap_rsize, ramap_asize)
 
     def forward(self, x):
-        x_ra, x_rv, x_va = x
+        x_ra, x_rv, x_va = x['RA'], x['RD'], x['AD']
         x_ra = self.c3d_encode_ra(x_ra)
         feas_ra = self.c3d_decode_ra(x_ra)  # (B, 32, W/2, 128, 128)
         x_rv = self.c3d_encode_rv(x_rv)
@@ -797,7 +797,7 @@ class RadarCrossAttention(nn.Module):
         )
 
     def forward(self, input):
-        ra, rd, ad = input
+        ra, rd, ad = input['RA'], input['RD'], input['AD']
         ra_e = self.raencode(ra) # (B,1,256,256)-> (B,256,32,32)
         rd_e = self.rdencode(rd) # (B,1,256,64)-> (B,256,32,8)
         ad_e = self.adencode(ad)# (B,1,64,256)-> (B,256,8,32)
