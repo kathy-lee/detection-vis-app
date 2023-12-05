@@ -626,6 +626,7 @@ class RADIal(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        self.segmentation_head = True if model_cfg['segmentation_head'] else False
         return
 
     def __len__(self):
@@ -647,12 +648,7 @@ class RADIal(Dataset):
         # format as following: [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
-        ######################
-        #  Encode the labels #
-        ######################
-        out_label=[]
-        # if(self.encoder!=None):
-        out_label = self.encode(box_labels).copy()      
+        encoded_label = self.encode(box_labels).copy()      
 
         # Read the Radar FFT data
         # radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
@@ -663,18 +659,21 @@ class RADIal(Dataset):
             for i in range(len(self.statistics['input_mean'])):
                 radar_FFT[...,i] -= self.statistics['input_mean'][i]
                 radar_FFT[...,i] /= self.statistics['input_std'][i]
-
-        # Read the segmentation map
-        segmap_name = os.path.join(self.root_dir,'radar_Freespace',"freespace_{:06d}.png".format(sample_id))
-        segmap = Image.open(segmap_name) # [512,900]
-        # 512 pix for the range and 900 pix for the horizontal FOV (180deg)
-        # We crop the fov to 89.6deg
-        segmap = self.crop(segmap)
-        # and we resize to half of its size
-        segmap = np.asarray(self.resize(segmap))==255
-
         radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
-        return radar_FFT, segmap, out_label, box_labels
+        data_dict = {'RD': radar_FFT, 'encoded_label': encoded_label, 'box_label': box_labels}
+        
+        # Read the segmentation map
+        if self.segmentation_head:
+            segmap_name = os.path.join(self.root_dir,'radar_Freespace',"freespace_{:06d}.png".format(sample_id))
+            segmap = Image.open(segmap_name) # [512,900]
+            # 512 pix for the range and 900 pix for the horizontal FOV (180deg)
+            # We crop the fov to 89.6deg
+            segmap = self.crop(segmap)
+            # and we resize to half of its size
+            segmap = np.asarray(self.resize(segmap))==255
+            data_dict.update({'seg_label': segmap})
+   
+        return data_dict # radar_FFT, segmap, encoded_label, box_labels
     
     def set_features(self, features):
         self.features = features
