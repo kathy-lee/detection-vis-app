@@ -339,7 +339,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         print('       ... Start at epoch:',startEpoch)
 
 
-    for epoch in range(startEpoch,num_epochs):
+    for epoch in range(startEpoch, num_epochs):
         kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
         print(f'Epoch {epoch+1}/{num_epochs}')
         ###################
@@ -356,7 +356,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             if len(features) == 1:
                 inputs = data[features[0]]
             else:
-                inputs = tuple(data[feature] for feature in features)
+                #inputs = tuple(data[feature] for feature in features)
+                inputs = {feature: data[feature] for feature in features}
+
                     
             # if model_type == "FFTRadNet":
             #     inputs = data[0].to(device).float()
@@ -411,7 +413,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # pop out feature data from data dict, keep only label info
             for feature in features:
                 data.pop(feature)
-            loss = net.get_loss(outputs, data, train_config['losses'])
+            loss = net.get_loss(outputs, data, train_config)
             # if model_type == "FFTRadNet":
             #     criterion_det = pixor_loss if train_config['losses']['detection_loss'] == 'PixorLoss' else None
             #     criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if train_config['losses']['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
