@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.modules.container import Sequential
 from torchvision.transforms.transforms import Sequence
 from abc import abstractmethod
+from typing import Optional
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -46,11 +47,11 @@ class BaseNetwork(nn.Module):
         super(BaseNetwork, self).__init__()
 
     @abstractmethod
-    def init_lossfunc(self, param):
+    def init_lossfunc(self, config):
         pass
 
     @abstractmethod
-    def get_loss(self, pred, label, param):
+    def get_loss(self, pred, label, config):
         pass
 
 
@@ -70,8 +71,7 @@ class FFTRadNet(BaseNetwork):
         if(self.segmentation_head):
             self.freespace = nn.Sequential(BasicBlock(256,128),BasicBlock(128,64),nn.Conv2d(64, 1, kernel_size=1))
 
-    def forward(self,x):
-                       
+    def forward(self,x):       
         out = {'Detection':[],'Segmentation':[]}
         
         features= self.FPN(x)
@@ -86,23 +86,23 @@ class FFTRadNet(BaseNetwork):
         
         return out
 
-    def init_lossfunc(self, param):
-        if param['segmentation'] == 'BCEWithLogitsLoss':
+    def init_lossfunc(self, config):
+        if config['losses']['segmentation'] == 'BCEWithLogitsLoss':
             self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')  
         else:
             self.criterion_seg = nn.BCELoss()
         
-        if param['classification'] == 'FocalLoss':
+        if config['losses']['classification'] == 'FocalLoss':
             self.criterion_classif = FocalLoss(gamma=2)
         else:
             self.criterion_classif = nn.BCELoss(reduction='sum')
 
-        if(param['regression']=='SmoothL1Loss'):
+        if(config['losses']['regression']=='SmoothL1Loss'):
             self.criterion_reg = nn.SmoothL1Loss(reduction='sum')
         else:
             self.criterion_reg = nn.L1Loss(reduction='sum')
     
-    def get_loss(self, pred, label, param):
+    def get_loss(self, pred, label, config):
         # loss of classification
         classif_pred = pred['Detection'][:, 0,:, :].contiguous().flatten()
         classif_label = label['encoded_label'][:, 0,:, :].contiguous().flatten()
@@ -131,7 +131,7 @@ class FFTRadNet(BaseNetwork):
             loss_seg = 0
 
         losses = [loss_classif, loss_reg, loss_seg]
-        losses = sum([weight * loss_item for loss_item, weight in zip(losses, param['weight'])])
+        losses = sum([weight * loss_item for loss_item, weight in zip(losses, config['losses']['weight'])])
         return losses
 
 
@@ -245,7 +245,7 @@ class FFTRadNet(BaseNetwork):
 #         return out
     
 
-class RODNet_CDC(nn.Module):
+class RODNet_CDC(BaseNetwork):
     def __init__(self, in_channels, n_class):
         super(RODNet_CDC, self).__init__()
         self.cdc = RadarVanilla(in_channels, n_class, use_mse_loss=False)
@@ -253,9 +253,21 @@ class RODNet_CDC(nn.Module):
     def forward(self, x):
         x = self.cdc(x)
         return x
+    
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = self.criterion(pred, label['gt_confmaps'])
+        return loss
 
 
-class RODNet_CDCv2(nn.Module):
+class RODNet_CDCv2(BaseNetwork):
     def __init__(self, in_channels, n_class, mnet_cfg=None, dcn=True):
         super(RODNet_CDCv2, self).__init__()
         self.dcn = dcn
@@ -278,24 +290,70 @@ class RODNet_CDCv2(nn.Module):
             x = self.mnet(x)
         x = self.cdc(x)
         return x
+    
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
 
-class RODNet_HG(nn.Module):
+    def get_loss(self, pred, label, config):
+        loss = self.criterion(pred, label['gt_confmaps'])
+        return loss
+
+
+class RODNet_HG(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=2):
         super(RODNet_HG, self).__init__()
         self.stacked_hourglass = RadarStackedHourglass_HG(in_channels, n_class, stacked_num=stacked_num)
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         out = self.stacked_hourglass(x)
         return out
+    
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
 
-class RODNet_HGwI(nn.Module):
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss += loss_cur   
+        return loss
+
+
+class RODNet_HGwI(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=1):
         super(RODNet_HGwI, self).__init__()
         self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels, n_class, stacked_num=stacked_num)
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         out = self.stacked_hourglass(x)
         return out
+
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss += loss_cur   
+        return loss
 
 ## If only consider all subtypes of RODNet paper/project, the following declaration way is more compact. 
 ## If also consider to include all subtypes in RadarFormer paper/project, choose the declaration way below. 
@@ -332,7 +390,7 @@ class RODNet_HGwI(nn.Module):
 #         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn, hourglass_type)
 
 
-class RODNet_v2Base(nn.Module):
+class RODNet_v2Base(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super(RODNet_v2Base, self).__init__()
         self.dcn = dcn
@@ -354,15 +412,33 @@ class RODNet_v2Base(nn.Module):
         out = self.stacked_hourglass(x)
         return out
     
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss += loss_cur   
+        return loss
+
+
 class RODNet_HGv2(RODNet_v2Base):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn)
         self.stacked_hourglass = RadarStackedHourglass_HG(in_channels if mnet_cfg is None else mnet_cfg[1], n_class, stacked_num=stacked_num, conv_op=self.conv_op)
 
+
 class RODNet_HGwIv2(RODNet_v2Base):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn)
         self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels if mnet_cfg is None else mnet_cfg[1], n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+
 
 # #Subtypes from RadarFormer: 'hrformer2d', 'unetr_2d', 'unetr_2d_res_final', 'maxvit2'
 # class RadarFormer_hrformer2d(RODNet_v2Base):
@@ -393,7 +469,7 @@ class RODNet_HGwIv2(RODNet_v2Base):
 #                                                                 num_layers = num_layers, receptive_field = receptive_field, out_head = out_head)
 
 
-class RECORD(nn.Module):
+class RECORD(BaseNetwork):
     def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
         """
         RECurrent Online object detectOR (RECORD) model class
@@ -426,9 +502,30 @@ class RECORD(nn.Module):
         confmap_pred = self.decoder(st_features_lstm1, st_features_lstm2, st_features_backbone)
         return self.sigmoid(confmap_pred)
     
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+        elif config['losses']['type'] == 'wce':
+            self.criterion = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+        elif config['losses']['type'] == 'sdice':
+            self.criterion = SoftDiceLoss()
+        elif config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+        
+    def get_loss(self, pred, label, config):
+        loss = self.criterion(pred, label['gt_confmaps'])
+        return loss
+    
 
-class RECORDNoLstm(nn.Module):
-    def __init__(self, encoder_config, decoder_config,  in_channels=8, norm='layer', n_class=3):
+class RECORDNoLstm(BaseNetwork):
+    def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
         """
         RECurrent Online object detectOR (RECORD) model class for online inference
         @param config: configuration file of the model
@@ -450,6 +547,27 @@ class RECORDNoLstm(nn.Module):
         x3, x2, x1 = self.encoder(x)
         confmap_pred = self.decoder(x3, x2, x1)
         return self.sigmoid(confmap_pred)
+    
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+        elif config['losses']['type'] == 'wce':
+            self.criterion = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+        elif config['losses']['type'] == 'sdice':
+            self.criterion = SoftDiceLoss()
+        elif config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+        
+    def get_loss(self, pred, label, param):
+        loss = self.criterion(pred, label['gt_confmaps'])
+        return loss
 
 
 class RECORDNoLstmMulti(RECORDNoLstm):
@@ -554,6 +672,24 @@ class MVRECORD(nn.Module):
         pred_ra = self.ra_decoder(rd_ad_ra_latent_space, latent_rd_ad_ra_skip_connection_2, latent_skip_connection1_ra)
 
         return {"rd": pred_rd, "ra": pred_ra}
+    
+    def init_lossfunc(self, config):
+        if config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight_rd'])
+            self.rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
+        
+            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight_ra'])
+            self.ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])    
+        else:
+            raise ValueError()
+        
+    def get_loss(self, pred, label, config):
+        rd_losses = [c(pred['rd'], torch.argmax(label['rd'], axis=1)) for c in self.rd_criterion]
+        rd_loss = torch.mean(torch.stack(rd_losses))
+        ra_losses = [c(pred['ra'], torch.argmax(label['ra'], axis=1)) for c in self.ra_criterion]
+        ra_loss = torch.mean(torch.stack(ra_losses))
+        loss = torch.mean(rd_loss + ra_loss)
+        return loss
     
 
 class RADDet(nn.Module):
@@ -815,3 +951,157 @@ class RadarCrossAttention(nn.Module):
         if self.orientation:
             x_orent = self.finalConv_orent(x) # (B,32,256,256) -> (B,2,64,64)
         return {"pred_mask": x_cls, "pred_center": x_center, "pred_orent": x_orent}
+    
+
+class SmoothCELoss(nn.Module):
+    """
+    Smooth cross entropy loss
+    SCE = SmoothL1Loss() + BCELoss()
+    By default reduction is mean. 
+    """
+    def __init__(self, alpha):
+        super().__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+        self.bce = nn.BCELoss()
+        self.alpha = alpha
+    
+    def forward(self, input, target):
+        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)
+    
+
+def soft_dice_loss(input: torch.Tensor, target: torch.Tensor, eps: float = 1e-8,
+                   global_weight: float = 1.) -> torch.Tensor:
+    r"""Function that computes Sørensen-Dice Coefficient loss.
+    Arthur: add ^2 for soft formulation
+
+    See :class:`~kornia.losses.DiceLoss` for details.
+    """
+    if not torch.is_tensor(input):
+        raise TypeError("Input type is not a torch.Tensor. Got {}"
+                        .format(type(input)))
+
+    if not len(input.shape) == 4:
+        raise ValueError("Invalid input shape, we expect BxNxHxW. Got: {}"
+                         .format(input.shape))
+
+    if not input.shape[-2:] == target.shape[-2:]:
+        raise ValueError("input and target shapes must be the same. Got: {} and {}"
+                         .format(input.shape, input.shape))
+
+    if not input.device == target.device:
+        raise ValueError(
+            "input and target must be in the same device. Got: {} and {}" .format(
+                input.device, target.device))
+
+    # compute softmax over the classes axis
+    input_soft: torch.Tensor = F.softmax(input, dim=1)
+
+    # create the labels one hot tensor
+    target_one_hot: torch.Tensor = one_hot(target, num_classes=input.shape[1], device=input.device, dtype=input.dtype)
+
+    # compute the actual dice score
+    dims = (1, 2, 3)
+    intersection = torch.sum(input_soft * target_one_hot, dims)
+    cardinality = torch.sum(torch.pow(input_soft, 2) + torch.pow(target_one_hot, 2), dims)
+
+    dice_score = 2. * intersection / (cardinality + eps)
+    return global_weight*torch.mean(-dice_score + 1.)
+
+
+class SoftDiceLoss(nn.Module):
+    r"""Criterion that computes Sørensen-Dice Coefficient loss.
+    Arthur: add ^2 for soft formulation
+
+    According to [1], we compute the Sørensen-Dice Coefficient as follows:
+
+    .. math::
+
+        \text{Dice}(x, class) = \frac{2 |X| \cap |Y|}{|X| + |Y|}
+
+    where:
+       - :math:`X` expects to be the scores of each class.
+       - :math:`Y` expects to be the one-hot tensor with the class labels.
+
+    the loss, is finally computed as:
+
+    .. math::
+
+        \text{loss}(x, class) = 1 - \text{Dice}(x, class)
+
+    [1] https://en.wikipedia.org/wiki/S%C3%B8rensen%E2%80%93Dice_coefficient
+
+    Shape:
+        - Input: :math:`(N, C, H, W)` where C = number of classes.
+        - Target: :math:`(N, H, W)` where each value is
+          :math:`0 ≤ targets[i] ≤ C−1`.
+
+    Examples:
+        >>> N = 5  # num_classes
+        >>> loss = DiceLoss()
+        >>> input = torch.randn(1, N, 3, 5, requires_grad=True)
+        >>> target = torch.empty(1, 3, 5, dtype=torch.long).random_(N)
+        >>> output = loss(input, target)
+        >>> output.backward()
+    """
+
+    def __init__(self, global_weight: float = 1.) -> None:
+        super(SoftDiceLoss, self).__init__()
+        self.eps: float = 1e-6
+        self.global_weight = global_weight
+
+    def forward(  # type: ignore
+            self,
+            input: torch.Tensor,
+            target: torch.Tensor) -> torch.Tensor:
+        return soft_dice_loss(input, target, self.eps, self.global_weight)
+    
+
+def one_hot(labels: torch.Tensor,
+            num_classes: int,
+            device: Optional[torch.device] = None,
+            dtype: Optional[torch.dtype] = None,
+            eps: Optional[float] = 1e-6) -> torch.Tensor:
+    r"""Converts an integer label x-D tensor to a one-hot (x+1)-D tensor.
+
+    Args:
+        labels (torch.Tensor) : tensor with labels of shape :math:`(N, *)`,
+                                where N is batch size. Each value is an integer
+                                representing correct classification.
+        num_classes (int): number of classes in labels.
+        device (Optional[torch.device]): the desired device of returned tensor.
+         Default: if None, uses the current device for the default tensor type
+         (see torch.set_default_tensor_type()). device will be the CPU for CPU
+         tensor types and the current CUDA device for CUDA tensor types.
+        dtype (Optional[torch.dtype]): the desired data type of returned
+         tensor. Default: if None, infers data type from values.
+
+    Returns:
+        torch.Tensor: the labels in one hot tensor of shape :math:`(N, C, *)`,
+
+    Examples::
+        >>> labels = torch.LongTensor([[[0, 1], [2, 0]]])
+        >>> one_hot(labels, num_classes=3)
+        tensor([[[[1.0000e+00, 1.0000e-06],
+                  [1.0000e-06, 1.0000e+00]],
+        <BLANKLINE>
+                 [[1.0000e-06, 1.0000e+00],
+                  [1.0000e-06, 1.0000e-06]],
+        <BLANKLINE>
+                 [[1.0000e-06, 1.0000e-06],
+                  [1.0000e+00, 1.0000e-06]]]])
+
+    """
+    if not torch.is_tensor(labels):
+        raise TypeError("Input labels type is not a torch.Tensor. Got {}"
+                        .format(type(labels)))
+    if not labels.dtype == torch.int64:
+        raise ValueError(
+            "labels must be of the same dtype torch.int64. Got: {}" .format(
+                labels.dtype))
+    if num_classes < 1:
+        raise ValueError("The number of classes must be bigger than one."
+                         " Got: {}".format(num_classes))
+    shape = labels.shape
+    one_hot = torch.zeros(shape[0], num_classes, *shape[1:],
+                          device=device, dtype=dtype)
+    return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
