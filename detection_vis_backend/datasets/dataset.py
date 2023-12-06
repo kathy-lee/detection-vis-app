@@ -1610,7 +1610,7 @@ class CRUW(Dataset):
             else:
                 raise ValueError
             
-            data_dict['radar_data'] = radar_npy_win
+            data_dict['RA'] = radar_npy_win
             data_dict['start_frame'] = data_id
             data_dict['end_frame'] = data_id + self.win_size * self.step - 1
             #print(f"############################ {data_dict['start_frame']} - {data_dict['end_frame']}")
@@ -1643,12 +1643,12 @@ class CRUW(Dataset):
             #     obj_infos=obj_info,
             #     confmaps=confmap_gt,
             # )
-            data_dict.update({'obj_infos': obj_info, 'confmaps': confmap_gt})
+            data_dict.update({'obj_infos': obj_info, 'gt_confmaps': confmap_gt})
         # else:
         #     data_dict['anno'] = None
 
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['confmaps'] is not None: 
-            data_dict['confmaps'] = data_dict['confmaps'][:, -1]
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['gt_confmaps'] is not None: 
+            data_dict['gt_confmaps'] = data_dict['gt_confmaps'][:, -1]
         return data_dict
 
 
