@@ -16,7 +16,7 @@ from sklearn.metrics import confusion_matrix
 from copy import deepcopy
 
 
-from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
+from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
@@ -666,23 +666,6 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
 
     stats = summarize()
     return stats
-
-
-def validate(net, dataloader, criterion, device):
-    net.eval()
-    running_loss = 0.0
-    
-    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
-    for i, data_dict in enumerate(dataloader):
-        data = data_dict['radar_data'].to(device).float()
-        confmap_gt = data['anno']['confmaps'].to(device).float()
-        with torch.set_grad_enabled(False):
-            confmap_pred = net(data)
-        loss = criterion(confmap_pred, confmap_gt)
-        print(f'val loss of sample {i}: {loss}')
-        running_loss += loss.item() * data.size(0)
-        kbar.update(i)
-    return
 
 
 def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
@@ -1735,10 +1718,6 @@ def metrics_center(grd_map, pred_map, pred_c, mask,
     cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
     return cls  
 
-def distance(x1,y1,x2,y2):
-    dx = x1-x2
-    dy = y1-y2
-    return torch.sqrt(dx**2 + dy**2)
 
 def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, device='cpu'):
     for grd_cord in grd_idx:
