@@ -2001,7 +2001,7 @@ class CARRADA(Dataset):
                 gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
             else:                                        
                 gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
-            frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'mask': gauss_map})
+            frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
                 center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
                 frame.update({'center_map': center_offset}) 

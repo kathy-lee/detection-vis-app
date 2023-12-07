@@ -16,13 +16,14 @@ from sklearn.metrics import confusion_matrix
 from copy import deepcopy
 
 
-from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
+from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
+from detection_vis_backend.networks.raddet import boxDecoder, lossYolo
 
 
 
-def FFTRadNet_val_evaluation(net, loader, check_perf=False, losses_params=None, device='cpu'):
+def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device='cpu'):
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
@@ -39,7 +40,7 @@ def FFTRadNet_val_evaluation(net, loader, check_perf=False, losses_params=None, 
             outputs = net(inputs)
 
         data.pop('RD')
-        loss = net.get_loss(outputs, data, losses_params)
+        loss = net.get_loss(outputs, data, train_config)
         running_loss += loss.item() * inputs.size(0)
 
         if(check_perf):
@@ -668,7 +669,7 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
-def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
+def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -695,33 +696,21 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     sequences = []
     for iter, data_dict in enumerate(dataloader):
         load_time = time.time() - load_tic
-        data = data_dict['radar_data'].to(device).float()
-        try:
-            image_paths = data_dict['image_paths'][0]
-        except:
-            print('warning: fail to load RGB images, will not visualize results')
-            image_paths = None
+        data = data_dict['RA'].to(device).float()
+        
         seq_name = data_dict['seq_name']
         if seq_name not in sequences:
             sequences.append(seq_name)
-
-        # if not args.demo:
-        confmap_gt = data_dict['anno']['confmaps']
-        obj_info = data_dict['anno']['obj_infos']
-        # else:
-        #     confmap_gt = None
-        #     obj_info = None
         
         # Currently only support batch_size set to 1 for val evaluation
         start_frame_id = data_dict['start_frame'].item()
         end_frame_id = data_dict['end_frame'].item()
 
         tic = time.time()
-        #confmap_pred = net(data.float().cuda())
         with torch.set_grad_enabled(False):
             confmap_pred = net(data)
 
-        if 'stacked_num' in model_cfg:
+        if hasattr(net, 'stacked_num'):
             confmap_pred = confmap_pred[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
         else:
             confmap_pred = confmap_pred.cpu().detach().numpy()
@@ -820,7 +809,7 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
 
-def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, model_type):
+def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -835,8 +824,8 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, devi
     for iter, data_dict in enumerate(dataloader):
         print(f"Sample {iter}")
         
-        ra_maps = data_dict['radar_data'].to(device).float()
-        confmap_gts = data_dict['anno']['confmaps'].float()
+        ra_maps = data_dict['RA'].to(device).float()
+        confmap_gts = data_dict['gt_confmaps'].float()
         image_paths = data_dict['image_paths']
         seq_name = data_dict['seq_name']
         if seq_name not in sequences:
@@ -852,7 +841,7 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, devi
             frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
             frame_id = int(frame_name)
 
-        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstm'):
+        if frame_id == train_cfg['win_size']-1:
             for tmp_frame_id in range(frame_id):
                 print("Eval frame", tmp_frame_id)
                 tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
@@ -994,23 +983,25 @@ class Evaluator:
         self.confusion_matrix = np.zeros((self.num_class,) * 2)
 
 
-def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
+def RECORD_CARRADA_evaluation(net, dataloader, features, train_cfg, device):
     net.eval()
     metrics = Evaluator(4) # number of classes
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}") 
-        input = data['radar'].to(device).float()
-        label = data['mask'].to(device).float()
-     
+        print(f"Sample No. {iter}") 
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
+    
+        input = data[features[0]]
         with torch.set_grad_enabled(False):
             outputs = net(input)
 
-        losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
-        loss = torch.mean(torch.stack(losses))
+        loss = net.get_loss(outputs, data, train_cfg)
         running_loss += loss.item() * input.size(0)
-        metrics.add_batch(torch.argmax(label, axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
+        metrics.add_batch(torch.argmax(data['mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
         kbar.update(iter)
 
     metrics_dict = get_metrics(metrics)
@@ -1020,31 +1011,28 @@ def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':metrics_dict['miou']}
    
 
-def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_criterion, device):
+def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, device):
     net.eval()
     rd_metrics = Evaluator(4) # number of classes
     ra_metrics = Evaluator(4) # number of classes
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}")
-        input = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
-        label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
-            
+        print(f"Sample No. {iter}")
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
+        
+        input = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
         with torch.set_grad_enabled(False):
             outputs = net(input)
 
-        rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
-        rd_loss = torch.mean(torch.stack(rd_losses))
-        
-        ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
-        ra_loss = torch.mean(torch.stack(ra_losses))
-
-        loss = torch.mean(rd_loss + ra_loss)
+        loss = net.get_loss(outputs, data, train_cfg)
         running_loss += loss.item() * input[0].size(0)
 
-        rd_metrics.add_batch(torch.argmax(label['rd'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
-        ra_metrics.add_batch(torch.argmax(label['ra'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
+        rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
+        ra_metrics.add_batch(torch.argmax(data['ra_mask'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
         kbar.update(iter)
 
     metrics_dict = dict()
@@ -1180,28 +1168,34 @@ def mAP(predictions, gts, input_size, ap_each_class, tp_iou_threshold=0.5, mode=
     return mean_ap, ap_each_class
 
 
-def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, device):
+def RADDet_evaluation(net, dataloader, train_config, device):
     net.eval()
+    n_class = net.n_class
+
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     mean_ap_test = 0.0
     ap_all_class_test = []
     ap_all_class = []
-    for class_id in range(model_config['n_class']):
+    for class_id in range(n_class):
         ap_all_class.append([])
     with torch.set_grad_enabled(False):
         for iter, data in enumerate(dataloader):
-            inputs = data['radar'].to(device).float()
-            label = data['label'].to(device).float()
-            raw_boxes = data['boxes'].to(device).float()
+            for key in data:
+                if isinstance(data[key], str) or isinstance(data[key], list):
+                    continue
+                data[key] = data[key].to(device).float()
+
+            inputs = data["RAD"]
             outputs = net(inputs)
-            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
-            box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, raw_boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
+            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], n_class, train_config['yolohead_xyz_scales'][0], device)
+            box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, data['label'], data['boxes'][..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
             box_loss *= 1e-1
             loss = box_loss + conf_loss + category_loss
             running_loss += loss.item() * inputs.size(0)
+
             pred = pred.detach().cpu().numpy()
-            raw_boxes = raw_boxes.detach().cpu().numpy()
+            raw_boxes = data['boxes'].detach().cpu().numpy()
             for batch_id in range(raw_boxes.shape[0]):
                 raw_boxes_frame = raw_boxes[batch_id]
                 pred_frame = pred[batch_id]
@@ -1220,7 +1214,7 @@ def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, d
         else:
             class_ap = np.mean(ap_class_i)
         ap_all_class_test.append(class_ap)
-    mean_ap_test /= batch_size * len(dataloader)
+    mean_ap_test /= train_config['dataloader']['val']['batch_size'] * len(dataloader)
     print("-------> ap: %.6f"%(mean_ap_test))
     return {'loss': running_loss, 
             'mAP': mean_ap_test, 
@@ -1452,14 +1446,16 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     return ap_dict
 
 
-def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_thresholds=[0.5]):
+def DAROD_evaluation(net, dataloader, train_config, device, iou_thresholds=[0.5]):
     net.eval()
+    n_class = net.n_class
+
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
-    n_classes = model_config['n_class'] - 1 # Ignore 0 class which is BG
+    n_class = n_class - 1 # Ignore 0 class which is BG
     tp_dict = dict()
     val_loss = RunningAverage()
-    for class_id in range(n_classes):
+    for class_id in range(n_class):
         tp_dict[class_id] = {
             "tp": [[] for _ in range(len(iou_thresholds))],
             "fp": [[] for _ in range(len(iou_thresholds))],
@@ -1468,16 +1464,16 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
         }
     with torch.set_grad_enabled(False):
         for iter, data in enumerate(dataloader):
-            inputs = data['radar'].to(device).float()
-            gt_labels = data['label'].to(device).int()
-            gt_boxes = data['boxes'].to(device).float()
+            for key in data:
+                if isinstance(data[key], str) or isinstance(data[key], list):
+                    continue
+                data[key] = data[key].to(device).float()
+            
+            inputs = data['RD']
             outputs = net(inputs)
             # loss
-            bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, gt_boxes, gt_labels, model_config, train_config["seed"])
-            frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], gt_boxes, gt_labels, model_config, train_config["seed"])
-            rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-            losses = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss
-            val_loss(losses)
+            loss = net.get_loss(outputs, data, train_config)
+            val_loss(loss)
             print("Get loss, begin evaluation")
             if outputs["decoder_output"] is not None:
                 pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
@@ -1487,13 +1483,13 @@ def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_th
                 gt_labels = gt_labels - 1
                 for batch_id in range(pred_boxes.shape[0]):
                     tp_dict = accumulate_tp_fp(pred_boxes.cpu().numpy()[batch_id], pred_labels.cpu().numpy()[batch_id],
-                                                    pred_scores.cpu().numpy()[batch_id], gt_boxes.cpu().numpy()[batch_id],
-                                                    gt_labels.cpu().numpy()[batch_id], tp_dict,
+                                                    pred_scores.cpu().numpy()[batch_id], data['gt_boxes'].cpu().numpy()[batch_id],
+                                                    data['gt_labels'].cpu().numpy()[batch_id], tp_dict,
                                                     iou_thresholds=iou_thresholds)
             kbar.update(iter)
 
     print("******************* Eval metrics******************")
-    ap_dict = AP(tp_dict, n_classes, iou_thresholds)
+    ap_dict = AP(tp_dict, n_class, iou_thresholds)
     # Added
     running_loss = val_loss.total
     mAP = np.mean(ap_dict["mean"]["AP"])
@@ -1513,19 +1509,19 @@ def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid,
     return evalImgs
 
 
-def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
+def RAMP_CNN_evaluation(net, dataloader, train_cfg, device):
 
     net.eval()
+    n_class = net.n_class
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
-    n_class = model_cfg['n_class']
     classes = ["pedestrian", "cyclist", "car"] 
-    confmap_shape = (model_cfg['n_class'], model_cfg['ramap_rsize'], model_cfg['ramap_asize'])
     with open('/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'r') as file:
         radar_cfg = json.load(file)
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
     
+    confmap_shape = (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
     iter_ = init_genConfmap
     for i in range(train_cfg['win_size'] - 1):
@@ -1542,12 +1538,11 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
     gt_objs = {(i, j): [] for i in range(n_frame) for j in range(n_class)}
     id_gt = 1
     id_res = 1
-    for iter, data_dict in enumerate(dataloader):
-        load_time = time.time() - load_tic
-        inputs = (data_dict['ra_matrix'].to(device).float(), data_dict['rv_matrix'].to(device).float(), data_dict['va_matrix'].to(device).float())
+    for iter, data in enumerate(dataloader):
+        # get gt info
         for i in range(train_cfg['train_stride']):
-            if data_dict['gt_label'][0][i]:
-                for obj in data_dict['gt_label'][0][i]:
+            if data['gt_label'][0][i]:
+                for obj in data['gt_label'][0][i]:
                     ridx, aidx, category = obj
                     rng = rng_grid[ridx]
                     agl = agl_grid[aidx]
@@ -1557,6 +1552,14 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
                     gt_objs[iter, classid].append(gt_obj)
                     id_gt += 1
             # TODO: Handle the case of empty annotation
+
+        load_time = time.time() - load_tic
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
+        
+        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
                 
         # seq_name = data_dict['seq_name']
         # if seq_name not in sequences:
@@ -1643,7 +1646,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
 
-def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
+def RadarCrossAttention_evaluation(net, loader, device, thresh=2):
     net.eval()
 
     cls = dict()
@@ -1654,52 +1657,52 @@ def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
 
     prev_size = 0
 
-    with torch.no_grad():
-        for idx, data in enumerate(loader):
-            inputs = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
-            grd_map = data["mask"].to(device).float()
-            if model_config["orientation"]:
-                tr_o = data["orent_map"].to(device).float()
+    for idx, data in enumerate(loader):
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
         
-            with torch.set_grad_enabled(False):
-                output = net(inputs)
+        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
+        with torch.set_grad_enabled(False):
+            output = net(inputs)
 
-            if data['ra_matrix'].shape[0] != prev_size:
-                mask, peak_cls = create_default(grd_map.size(), kernel_window=(3,5))
-                mask = mask.to(device=device)
-                peak_cls = peak_cls.to(device=device)
-           
-            prev_size = data['ra_matrix'].shape[0]
-    
-            pred_map = torch.sigmoid(output["pred_mask"])
-            pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
- 
-            print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
-            cls = metrics_center(grd_map=grd_map, pred_map=pred_map,
-                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                 tr_o=tr_o, pred_o=output["pred_orent"], cls=cls,
-                                 thresh=thresh, device=device)
-            print(f"item {idx} finished")
+        if data['RA'].shape[0] != prev_size:
+            mask, peak_cls = create_default(data["gt_mask"].size(), kernel_window=(3,5))
+            mask = mask.to(device=device)
+            peak_cls = peak_cls.to(device=device)
+        
+        prev_size = data['RA'].shape[0]
 
-        for idx in range(len(cls)):
-            categ = cls[f"{idx}"]
-            P =[]
-            R=[]
-            TP = 0
-            GT = categ['grd_no']
-            index = np.argsort(-categ['Conf'])
-            for cnt, i in enumerate(index):
-                TP += categ['TP'][i]
-                P = np.append(P,TP/(cnt+1))
-                R = np.append(R, TP/GT)
-            categ['P']= P
-            categ['R'] = R
-            categ['AP'] = np.trapz(P,R)
-            prec = np.sum(categ['TP'])
-            rec =  len(categ['TP'])
-            print(idx, 'AP:',categ['AP'],'P:' f"{prec/rec}" , 'R:',f"{prec/GT}", 'GT:'f" {GT}")
-            #print('Heading Accuracy', cls[f"{idx}"]['O_T'],'\n',cls[f"{idx}"]['O_P'])
-            cls[f"{idx}"] = categ
+        pred_map = torch.sigmoid(output["pred_mask"])
+        pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
+
+        print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
+        cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
+                                pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
+                                tr_o=data["orent_map"], pred_o=output["pred_orent"], cls=cls,
+                                thresh=thresh, device=device)
+        print(f"item {idx} finished")
+
+    for idx in range(len(cls)):
+        categ = cls[f"{idx}"]
+        P =[]
+        R=[]
+        TP = 0
+        GT = categ['grd_no']
+        index = np.argsort(-categ['Conf'])
+        for cnt, i in enumerate(index):
+            TP += categ['TP'][i]
+            P = np.append(P,TP/(cnt+1))
+            R = np.append(R, TP/GT)
+        categ['P']= P
+        categ['R'] = R
+        categ['AP'] = np.trapz(P,R)
+        prec = np.sum(categ['TP'])
+        rec =  len(categ['TP'])
+        print(idx, 'AP:',categ['AP'],'P:' f"{prec/rec}" , 'R:',f"{prec/GT}", 'GT:'f" {GT}")
+        #print('Heading Accuracy', cls[f"{idx}"]['O_T'],'\n',cls[f"{idx}"]['O_P'])
+        cls[f"{idx}"] = categ
     return {'loss':0, 'mAP':0, 'mAR':0, 'mIoU':0}
 
 
@@ -1768,6 +1771,3 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
         else:
             cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'],0)
     return cls
-
-
-

@@ -541,23 +541,23 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if model_type == "FFTRadNet":
-            eval = FFTRadNet_val_evaluation(net, val_loader, check_perf=(epoch>=10), losses_params=train_config['losses'], device=device)
+            eval = FFTRadNet_val_evaluation(net, val_loader, train_config, check_perf=(epoch>=10), device=device)
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-            eval = RODNet_evaluation(net, val_loader, output_dir, train_config, model_config, device)
+            eval = RODNet_evaluation(net, val_loader, output_dir, train_config, device)
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-            eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, model_config, device, model_type)
+            eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, device)
         elif model_type == "RECORD" and dataset_type == "CARRADA":
-            eval = RECORD_CARRADA_evaluation(net, val_loader, features, criterion, device)
+            eval = RECORD_CARRADA_evaluation(net, val_loader, features, train_config, device)
         elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-            eval = MVRECORD_CARRADA_evaluation(net, val_loader, features, rd_criterion, ra_criterion, device)
+            eval = MVRECORD_CARRADA_evaluation(net, val_loader, train_config, device)
         elif model_type == "RADDet":
-            eval = RADDet_evaluation(net, val_loader, train_config['dataloader']['val']['batch_size'], model_config, train_config, device)
+            eval = RADDet_evaluation(net, val_loader, train_config, device)
         elif model_type == "DAROD":
-            eval = DAROD_evaluation(net, val_loader, model_config, train_config, device)
+            eval = DAROD_evaluation(net, val_loader, train_config, device)
         elif model_type == "RAMP_CNN":
-            eval = RAMP_CNN_evaluation(net, val_loader, train_config, model_config, device)
+            eval = RAMP_CNN_evaluation(net, val_loader, train_config, device)
         elif model_type == "RadarCrossAttention":
-            eval = RadarCrossAttention_evaluation(net, val_loader, model_config, device)
+            eval = RadarCrossAttention_evaluation(net, val_loader, device)
         else:
             raise ValueError
             
