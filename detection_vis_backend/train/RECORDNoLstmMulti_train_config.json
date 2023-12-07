@@ -1,7 +1,7 @@
 
 {
+  "default": {
     "seed":3,
-    "losses": "bce",
     "lr_scheduler": {
       "type": "exp",
       "gamma": 0.9
@@ -31,8 +31,13 @@
         "batch_size": 1,
         "num_workers": 1
       }
+    }
+  },
+
+  "CRUW": {
+    "losses": {
+      "type": "bce"
     },
-  
     "win_size": 12,
     "train_step": 1,
     "train_stride": 4,
@@ -41,4 +46,28 @@
     "max_dets": 20,
     "peak_thres": 0.3,
     "ols_thres": 0.3
+  },
+
+  "CARRADA": {
+    "RD": {
+      "losses": {
+        "type": "wce_w10sdice",
+        "weight": [0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]
+      },
+      "win_size": 5,
+      "transformations": ["hflip", "vflip"],
+      "norm_type": "tvt"
+    },
+
+    "RA": {
+      "losses": {
+        "type": "wce_w10sdice",
+        "weight": [0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]
+      },
+      "win_size": 5,
+      "transformations": ["hflip", "vflip"],
+      "norm_type": "tvt"
+    }
+  }
+  
 }

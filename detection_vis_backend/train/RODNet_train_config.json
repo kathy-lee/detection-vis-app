@@ -1,7 +1,8 @@
 {
     "seed":3,
     "losses": {
-    },
+        "type": "bce"
+      },
     "lr_scheduler": {
         "type": "step",
         "step_size": 10,
