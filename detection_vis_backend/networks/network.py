@@ -7,18 +7,18 @@ import torch.nn.functional as F
 from torch.nn.modules.container import Sequential
 from torchvision.transforms.transforms import Sequence
 from abc import abstractmethod
-from typing import Optional
+
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock, FocalLoss
-from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet
-from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
-from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
-from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
-from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep 
-from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode
+from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, SmoothCELoss
+from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss
+from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead, boxDecoder, lossYolo
+from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D, calculate_rpn_actual_outputs, roi_delta, darod_loss
+from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
+from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 
 class NetworkFactory:
     _instances = {}
@@ -520,7 +520,7 @@ class RECORD(BaseNetwork):
             self.criterion = nn.CrossEntropyLoss()
         
     def get_loss(self, pred, label, config):
-        loss = self.criterion(pred, label['gt_confmaps'])
+        loss = self.criterion(pred, label['mask'])
         return loss
     
 
@@ -566,7 +566,7 @@ class RECORDNoLstm(BaseNetwork):
             self.criterion = nn.CrossEntropyLoss()
         
     def get_loss(self, pred, label, param):
-        loss = self.criterion(pred, label['gt_confmaps'])
+        loss = self.criterion(pred, label['mask'])
         return loss
 
 
@@ -684,9 +684,9 @@ class MVRECORD(nn.Module):
             raise ValueError()
         
     def get_loss(self, pred, label, config):
-        rd_losses = [c(pred['rd'], torch.argmax(label['rd'], axis=1)) for c in self.rd_criterion]
+        rd_losses = [c(pred['rd'], torch.argmax(label['rd_mask'], axis=1)) for c in self.rd_criterion]
         rd_loss = torch.mean(torch.stack(rd_losses))
-        ra_losses = [c(pred['ra'], torch.argmax(label['ra'], axis=1)) for c in self.ra_criterion]
+        ra_losses = [c(pred['ra'], torch.argmax(label['ra_mask'], axis=1)) for c in self.ra_criterion]
         ra_loss = torch.mean(torch.stack(ra_losses))
         loss = torch.mean(rd_loss + ra_loss)
         return loss
@@ -698,6 +698,7 @@ class RADDet(nn.Module):
 
         self.backbone_stage = RadarResNet3D(input_channels)
         self.yolohead = YoloHead(num_anchors_layer, n_class, 256, 4) 
+        self.n_class = n_class
         
     def forward(self, x):
         features = self.backbone_stage(x)
@@ -706,6 +707,15 @@ class RADDet(nn.Module):
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
         #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
         return yolo_raw
+    
+    def init_lossfunc(self, config):
+        return
+
+    def get_loss(self, pred, label, config):
+        obj_pred_raw, obj_pred = boxDecoder(pred, config['input_size'], config['anchor_boxes'], self.n_class, config['yolohead_xyz_scales'][0])
+        box_loss, conf_loss, category_loss = lossYolo(obj_pred_raw, obj_pred, label['label'], label['boxes'][..., :6], config['input_size'], config['focal_loss_iou_threshold'])
+        loss = 1e-1 * box_loss + conf_loss + category_loss
+        return loss    
     
 
 class DAROD(nn.Module):
@@ -724,6 +734,7 @@ class DAROD(nn.Module):
         self.range_res = range_res
         self.doppler_res = doppler_res
         self.anchors = self.anchors_generation()
+        self.n_class = n_class
 
         if self.use_bn:
             block_norm = "group_norm"  # By default for this model
@@ -834,7 +845,6 @@ class DAROD(nn.Module):
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 
-    
     def anchors_generation(self,):
         """
         Generating anchors boxes with different shapes centered on
@@ -883,6 +893,16 @@ class DAROD(nn.Module):
         #     output = torch.clamp(output, min=0.0, max=1.0)
         return output
 
+    def init_lossfunc(self, config):
+        return
+
+    def get_loss(self, pred, target, config):
+        bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(self.anchors, target['boxes'], target['label'], self.rpn_cfg, self.feature_map_shape, config["seed"])
+        frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(pred["roi_bboxes_out"], target['boxes'], target['label'], self.n_class, self.fastrcnn_cfg, config["seed"])
+        rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(pred, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
+        loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
+        return loss
+    
 
 class RAMP_CNN(nn.Module):
     def __init__(self, n_class, win_size, ramap_rsize, ramap_asize):
@@ -907,6 +927,17 @@ class RAMP_CNN(nn.Module):
         dets2 = self.fuse_fea(torch.zeros_like(feas_ra), feas_rv, feas_va) # (B, 3, W/2, 128, 128)
         output = {'confmap_pred': dets, 'confmap_pred2': dets2}
         return output
+
+    def init_lossfunc(self, config):
+        self.criterion = FocalLoss_Neg()
+        self.criterion_cont = Cont_Loss(config['win_size'])
+
+    def get_loss(self, pred, target, config):
+        loss_cur = self.criterion(pred['confmap_pred'], target['confmap_gt'])
+        loss_cur2 = self.criterion(pred['confmap_pred2'], target['confmap_gt'])
+        loss_cont = self.criterion_cont(pred['confmap_pred'], target['confmap_gt'])
+        loss = loss_cur + loss_cont + loss_cur2 * 0.5
+        return loss
 
 
 class RadarCrossAttention(nn.Module):
@@ -939,10 +970,9 @@ class RadarCrossAttention(nn.Module):
         ad_e = self.adencode(ad)# (B,1,64,256)-> (B,256,8,32)
 
         ca = self.attention(ra_e=ra_e, rd_e=rd_e, ad_e=ad_e)
-
         x = self.decode(ca)
-
         x_cls = self.finalConv_cls(x) # (B,32,256,256) -> (B,3,256,256)
+
         x_center = 0
         x_orent = 0
         if self.center_offset:
@@ -952,156 +982,17 @@ class RadarCrossAttention(nn.Module):
             x_orent = self.finalConv_orent(x) # (B,32,256,256) -> (B,2,64,64)
         return {"pred_mask": x_cls, "pred_center": x_center, "pred_orent": x_orent}
     
+    def init_lossfunc(self, config):
+        cls_weight = torch.zeros([3, 256, 256]) + torch.tensor(config["losses"]["class_weight"]).view(-1, 1, 1)
+        self.cls_criterion = FocalLoss_weight(cls_weight, alpha=2, beta=0)
+        self.center_criterion = CenterLoss()
+        self.orent_criterion = L2Loss()
+        return
 
-class SmoothCELoss(nn.Module):
-    """
-    Smooth cross entropy loss
-    SCE = SmoothL1Loss() + BCELoss()
-    By default reduction is mean. 
-    """
-    def __init__(self, alpha):
-        super().__init__()
-        self.smooth_l1 = nn.SmoothL1Loss()
-        self.bce = nn.BCELoss()
-        self.alpha = alpha
-    
-    def forward(self, input, target):
-        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)
-    
-
-def soft_dice_loss(input: torch.Tensor, target: torch.Tensor, eps: float = 1e-8,
-                   global_weight: float = 1.) -> torch.Tensor:
-    r"""Function that computes Sørensen-Dice Coefficient loss.
-    Arthur: add ^2 for soft formulation
-
-    See :class:`~kornia.losses.DiceLoss` for details.
-    """
-    if not torch.is_tensor(input):
-        raise TypeError("Input type is not a torch.Tensor. Got {}"
-                        .format(type(input)))
-
-    if not len(input.shape) == 4:
-        raise ValueError("Invalid input shape, we expect BxNxHxW. Got: {}"
-                         .format(input.shape))
-
-    if not input.shape[-2:] == target.shape[-2:]:
-        raise ValueError("input and target shapes must be the same. Got: {} and {}"
-                         .format(input.shape, input.shape))
-
-    if not input.device == target.device:
-        raise ValueError(
-            "input and target must be in the same device. Got: {} and {}" .format(
-                input.device, target.device))
-
-    # compute softmax over the classes axis
-    input_soft: torch.Tensor = F.softmax(input, dim=1)
-
-    # create the labels one hot tensor
-    target_one_hot: torch.Tensor = one_hot(target, num_classes=input.shape[1], device=input.device, dtype=input.dtype)
-
-    # compute the actual dice score
-    dims = (1, 2, 3)
-    intersection = torch.sum(input_soft * target_one_hot, dims)
-    cardinality = torch.sum(torch.pow(input_soft, 2) + torch.pow(target_one_hot, 2), dims)
-
-    dice_score = 2. * intersection / (cardinality + eps)
-    return global_weight*torch.mean(-dice_score + 1.)
-
-
-class SoftDiceLoss(nn.Module):
-    r"""Criterion that computes Sørensen-Dice Coefficient loss.
-    Arthur: add ^2 for soft formulation
-
-    According to [1], we compute the Sørensen-Dice Coefficient as follows:
-
-    .. math::
-
-        \text{Dice}(x, class) = \frac{2 |X| \cap |Y|}{|X| + |Y|}
-
-    where:
-       - :math:`X` expects to be the scores of each class.
-       - :math:`Y` expects to be the one-hot tensor with the class labels.
-
-    the loss, is finally computed as:
-
-    .. math::
-
-        \text{loss}(x, class) = 1 - \text{Dice}(x, class)
-
-    [1] https://en.wikipedia.org/wiki/S%C3%B8rensen%E2%80%93Dice_coefficient
-
-    Shape:
-        - Input: :math:`(N, C, H, W)` where C = number of classes.
-        - Target: :math:`(N, H, W)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
-
-    Examples:
-        >>> N = 5  # num_classes
-        >>> loss = DiceLoss()
-        >>> input = torch.randn(1, N, 3, 5, requires_grad=True)
-        >>> target = torch.empty(1, 3, 5, dtype=torch.long).random_(N)
-        >>> output = loss(input, target)
-        >>> output.backward()
-    """
-
-    def __init__(self, global_weight: float = 1.) -> None:
-        super(SoftDiceLoss, self).__init__()
-        self.eps: float = 1e-6
-        self.global_weight = global_weight
-
-    def forward(  # type: ignore
-            self,
-            input: torch.Tensor,
-            target: torch.Tensor) -> torch.Tensor:
-        return soft_dice_loss(input, target, self.eps, self.global_weight)
-    
-
-def one_hot(labels: torch.Tensor,
-            num_classes: int,
-            device: Optional[torch.device] = None,
-            dtype: Optional[torch.dtype] = None,
-            eps: Optional[float] = 1e-6) -> torch.Tensor:
-    r"""Converts an integer label x-D tensor to a one-hot (x+1)-D tensor.
-
-    Args:
-        labels (torch.Tensor) : tensor with labels of shape :math:`(N, *)`,
-                                where N is batch size. Each value is an integer
-                                representing correct classification.
-        num_classes (int): number of classes in labels.
-        device (Optional[torch.device]): the desired device of returned tensor.
-         Default: if None, uses the current device for the default tensor type
-         (see torch.set_default_tensor_type()). device will be the CPU for CPU
-         tensor types and the current CUDA device for CUDA tensor types.
-        dtype (Optional[torch.dtype]): the desired data type of returned
-         tensor. Default: if None, infers data type from values.
-
-    Returns:
-        torch.Tensor: the labels in one hot tensor of shape :math:`(N, C, *)`,
-
-    Examples::
-        >>> labels = torch.LongTensor([[[0, 1], [2, 0]]])
-        >>> one_hot(labels, num_classes=3)
-        tensor([[[[1.0000e+00, 1.0000e-06],
-                  [1.0000e-06, 1.0000e+00]],
-        <BLANKLINE>
-                 [[1.0000e-06, 1.0000e+00],
-                  [1.0000e-06, 1.0000e-06]],
-        <BLANKLINE>
-                 [[1.0000e-06, 1.0000e-06],
-                  [1.0000e+00, 1.0000e-06]]]])
-
-    """
-    if not torch.is_tensor(labels):
-        raise TypeError("Input labels type is not a torch.Tensor. Got {}"
-                        .format(type(labels)))
-    if not labels.dtype == torch.int64:
-        raise ValueError(
-            "labels must be of the same dtype torch.int64. Got: {}" .format(
-                labels.dtype))
-    if num_classes < 1:
-        raise ValueError("The number of classes must be bigger than one."
-                         " Got: {}".format(num_classes))
-    shape = labels.shape
-    one_hot = torch.zeros(shape[0], num_classes, *shape[1:],
-                          device=device, dtype=dtype)
-    return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
+    def get_loss(self, pred, target, config):
+        loss =  config['losses']['weight'][0] * self.cls_criterion(pred["pred_mask"], target["gt_mask"])
+        if self.center_offset:
+            loss += config['losses']['weight'][1] * self.center_criterion(pred["pred_center"], target["gt_center_map"])
+        if self.orientation:
+            loss += config['losses']['weight'][2] * self.orent_criterion(pred["pred_orent"], target["gt_orent_map"]) 
+        return loss    

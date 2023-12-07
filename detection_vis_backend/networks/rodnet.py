@@ -585,3 +585,19 @@ class RODDecode_HGwI2d(nn.Module):
         x = self.prelu(self.convt3(x + x_in1))
         x = self.prelu(self.conv3(x))
         return x
+    
+
+class SmoothCELoss(nn.Module):
+    """
+    Smooth cross entropy loss
+    SCE = SmoothL1Loss() + BCELoss()
+    By default reduction is mean. 
+    """
+    def __init__(self, alpha):
+        super().__init__()
+        self.smooth_l1 = nn.SmoothL1Loss()
+        self.bce = nn.BCELoss()
+        self.alpha = alpha
+    
+    def forward(self, input, target):
+        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)
