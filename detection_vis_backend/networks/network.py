@@ -102,20 +102,16 @@ class FFTRadNet(BaseNetwork):
         else:
             self.criterion_reg = nn.L1Loss(reduction='sum')
     
-    def get_loss(self, pred, label, config):
+    def get_loss(self, pred, target, config):
         # loss of classification
         classif_pred = pred['Detection'][:, 0,:, :].contiguous().flatten()
-        classif_label = label['encoded_label'][:, 0,:, :].contiguous().flatten()
+        classif_label = target['encoded_label'][:, 0,:, :].contiguous().flatten()
         loss_classif = self.criterion_classif(classif_pred, classif_label)
 
         # loss of regression
-        regression_prediction = pred['Detection'].permute([0, 2, 3, 1])[:, :, :, :-1]
-        regression_prediction = regression_prediction.contiguous().view(-1, regression_prediction.size(3))
-        regression_label = label['encoded_label'].permute([0, 2, 3, 1])[:, :, :, :-1]
-        regression_label = regression_label.contiguous().view(-1, regression_label.size(3))
-        T = label['encoded_label'][:,1:]
+        T = target['encoded_label'][:,1:]
         P = pred['Detection'][:,1:]
-        M = label['encoded_label'][:,0].unsqueeze(1)
+        M = target['encoded_label'][:,0].unsqueeze(1)
         loss_reg = self.criterion_reg(P*M,T)
         NbPts = M.sum()
         if NbPts > 0 :
@@ -124,7 +120,7 @@ class FFTRadNet(BaseNetwork):
         # loss of segmentation
         if pred['Segmentation']:
             seg_pred = pred['Segmentation'].contiguous().flatten()
-            seg_label = label['seg_label'].contiguous().flatten()   
+            seg_label = target['seg_label'].contiguous().flatten()   
             loss_seg = self.criterion_seg(seg_pred, seg_label)
             loss_seg *= pred['Segmentation'].size(0)
         else:
@@ -693,12 +689,15 @@ class MVRECORD(nn.Module):
     
 
 class RADDet(nn.Module):
-    def __init__(self, input_channels, n_class, num_anchors_layer):
+    def __init__(self, input_channels, n_class, input_size, anchor_boxes, yolohead_xyz_scales):
         super(RADDet, self).__init__()
 
         self.backbone_stage = RadarResNet3D(input_channels)
-        self.yolohead = YoloHead(num_anchors_layer, n_class, 256, 4) 
+        self.yolohead = YoloHead(len(anchor_boxes), n_class, 256, 4) 
         self.n_class = n_class
+        self.input_size = input_size
+        self.anchor_boxes = anchor_boxes
+        self.yolohead_xyz_scales = yolohead_xyz_scales
         
     def forward(self, x):
         features = self.backbone_stage(x)
@@ -706,14 +705,15 @@ class RADDet(nn.Module):
         yolo_raw = self.yolohead(features)
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
         #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
-        return yolo_raw
+
+        pred_raw, pred = boxDecoder(yolo_raw, self.input_size, self.anchor_boxes, self.n_class, self.yolohead_xyz_scales[0])
+        return {'pred_raw': pred_raw, 'pred': pred}
     
     def init_lossfunc(self, config):
         return
 
-    def get_loss(self, pred, label, config):
-        obj_pred_raw, obj_pred = boxDecoder(pred, config['input_size'], config['anchor_boxes'], self.n_class, config['yolohead_xyz_scales'][0])
-        box_loss, conf_loss, category_loss = lossYolo(obj_pred_raw, obj_pred, label['label'], label['boxes'][..., :6], config['input_size'], config['focal_loss_iou_threshold'])
+    def get_loss(self, pred, target, config):
+        box_loss, conf_loss, category_loss = lossYolo(pred['pred_raw'], pred['pred'], target['label'], target['boxes'][..., :6], self.input_size, config['focal_loss_iou_threshold'])
         loss = 1e-1 * box_loss + conf_loss + category_loss
         return loss    
     

@@ -1,5 +1,14 @@
 {
     "input_channels": 64,
     "n_class": 6,
-    "num_anchors_layer": 6
+    "input_size": [256, 256, 64],
+    "yolohead_xyz_scales": [1, 1, 1],
+    "anchor_boxes": [
+        [6, 9, 5],
+        [19, 17, 8],
+        [19, 28, 19],
+        [22, 45, 28],
+        [19, 36, 60],
+        [26, 75, 61]
+    ]
 }
