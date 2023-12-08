@@ -2004,10 +2004,10 @@ class CARRADA(Dataset):
             frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
                 center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
-                frame.update({'center_map': center_offset}) 
+                frame.update({'gt_center_map': center_offset}) 
             if self.orientation:
                 orient_map = get_orent_map(self.annos[self.seq_name][raw_index])  
-                frame.update({'orent_map': orient_map}) 
+                frame.update({'gt_orent_map': orient_map}) 
             
             for key,value in frame.items():
                 if key != 'image_path':

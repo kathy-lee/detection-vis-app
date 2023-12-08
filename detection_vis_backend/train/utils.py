@@ -293,6 +293,7 @@ def get_class_name(class_id, classes):
         raise ValueError("Class ID is not defined")
     return class_name
 
+
 def lnms(obj_dicts_in_class, train_cfg):
     """
     Location-based NMS

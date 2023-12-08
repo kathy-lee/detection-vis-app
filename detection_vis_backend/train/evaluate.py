@@ -1196,9 +1196,9 @@ def RADDet_evaluation(net, dataloader, train_config, device):
             predicitons = yoloheadToPredictions(pred_frame, \
                                 conf_threshold=train_config["confidence_threshold"])
             nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
-                            train_config["input_size"], sigma=0.3, method="nms")
+                            net.input_size, sigma=0.3, method="nms")
             mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
-                                    train_config["input_size"], ap_all_class, \
+                                    net.input_size, ap_all_class, \
                                     tp_iou_threshold=train_config["mAP_iou3d_threshold"])
             mean_ap_test += mean_ap
         kbar.update(iter)
@@ -1674,7 +1674,7 @@ def RadarCrossAttention_evaluation(net, loader, device, thresh=2):
         print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
         cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                tr_o=data["orent_map"], pred_o=output["pred_orent"], cls=cls,
+                                tr_o=data["gt_orent_map"], pred_o=output["pred_orent"], cls=cls,
                                 thresh=thresh, device=device)
         print(f"item {idx} finished")
 
