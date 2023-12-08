@@ -10,14 +10,10 @@ import cv2
 import polarTransform
 import torch.nn as nn
 
-from shapely.geometry import Polygon
-from scipy.stats import hmean
-from sklearn.metrics import confusion_matrix
-from PIL import Image
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, boxDecoder, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
+from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
 
 
 def infer(model, checkpoint_id, sample_id, file_id, split_type):
@@ -164,8 +160,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
             output = net(input)
             train_config = parameters["train_config"]
-            _, pred = boxDecoder(output, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
-            pred = pred.detach().cpu()
+            pred = output['pred'].detach().cpu()
             predicitons = yoloheadToPredictions(pred[0], conf_threshold=train_config["confidence_threshold"])
             pred_objs = nms(predicitons, train_config["nms_iou3d_threshold"], train_config["input_size"], sigma=0.3, method="nms")
             rd_objs = []

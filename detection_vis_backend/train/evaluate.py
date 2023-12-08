@@ -18,8 +18,6 @@ from copy import deepcopy
 
 from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
-from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
-from detection_vis_backend.networks.raddet import boxDecoder, lossYolo
 
 
 
@@ -212,8 +210,8 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     mAR = np.mean(perfs['recall'])
     return mAP, mAR, F1_score
 
-def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=70,IOU_threshold=0.2):
 
+def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=70,IOU_threshold=0.2):
     TP = 0
     FP = 0
     FN = 0
@@ -257,7 +255,6 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
             else:
                 FP+=1
         FN += np.sum(used_gt==0)
-
     elif(NbGT==0):
         FP += NbDet
     elif(NbDet==0):
@@ -267,7 +264,6 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
 
 
 def GetSegMetrics(PredMap,label_map):
-
     # Segmentation
     pred = PredMap.reshape(-1)>=0.5
     label = label_map.reshape(-1)
@@ -275,8 +271,8 @@ def GetSegMetrics(PredMap,label_map):
     intersection = np.abs(pred*label).sum()
     union = np.sum(label) + np.sum(pred) -intersection
     iou = intersection /union
-
     return iou
+
 
 class Metrics():
     def __init__(self,):
@@ -324,7 +320,6 @@ class Metrics():
             self.mIoU = np.asarray(self.iou).mean()
 
         return self.precision,self.recall,self.mIoU 
-
 
 
 class ConfmapStack:
@@ -985,7 +980,7 @@ class Evaluator:
 
 def RECORD_CARRADA_evaluation(net, dataloader, features, train_cfg, device):
     net.eval()
-    metrics = Evaluator(4) # number of classes
+    metrics = Evaluator(net.n_class) # number of classes
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
@@ -1179,35 +1174,34 @@ def RADDet_evaluation(net, dataloader, train_config, device):
     ap_all_class = []
     for class_id in range(n_class):
         ap_all_class.append([])
-    with torch.set_grad_enabled(False):
-        for iter, data in enumerate(dataloader):
-            for key in data:
-                if isinstance(data[key], str) or isinstance(data[key], list):
-                    continue
-                data[key] = data[key].to(device).float()
+    
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
 
-            inputs = data["RAD"]
+        inputs = data["RAD"]
+        with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], n_class, train_config['yolohead_xyz_scales'][0], device)
-            box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, data['label'], data['boxes'][..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
-            box_loss *= 1e-1
-            loss = box_loss + conf_loss + category_loss
-            running_loss += loss.item() * inputs.size(0)
+            
+        loss = net.get_loss(outputs, data, train_config)
+        running_loss += loss.item() * inputs.size(0)
 
-            pred = pred.detach().cpu().numpy()
-            raw_boxes = data['boxes'].detach().cpu().numpy()
-            for batch_id in range(raw_boxes.shape[0]):
-                raw_boxes_frame = raw_boxes[batch_id]
-                pred_frame = pred[batch_id]
-                predicitons = yoloheadToPredictions(pred_frame, \
-                                    conf_threshold=train_config["confidence_threshold"])
-                nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
-                                train_config["input_size"], sigma=0.3, method="nms")
-                mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
-                                        train_config["input_size"], ap_all_class, \
-                                        tp_iou_threshold=train_config["mAP_iou3d_threshold"])
-                mean_ap_test += mean_ap
-            kbar.update(iter)
+        pred = outputs['pred'].detach().cpu().numpy()
+        raw_boxes = data['boxes'].detach().cpu().numpy()
+        for batch_id in range(raw_boxes.shape[0]):
+            raw_boxes_frame = raw_boxes[batch_id]
+            pred_frame = pred[batch_id]
+            predicitons = yoloheadToPredictions(pred_frame, \
+                                conf_threshold=train_config["confidence_threshold"])
+            nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
+                            train_config["input_size"], sigma=0.3, method="nms")
+            mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
+                                    train_config["input_size"], ap_all_class, \
+                                    tp_iou_threshold=train_config["mAP_iou3d_threshold"])
+            mean_ap_test += mean_ap
+        kbar.update(iter)
     for ap_class_i in ap_all_class:
         if len(ap_class_i) == 0:
             class_ap = 0.
