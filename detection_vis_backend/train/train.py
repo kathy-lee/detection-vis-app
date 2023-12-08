@@ -23,8 +23,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-#from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate # pixor_loss, SmoothCELoss, SoftDiceLoss, boxDecoder, lossYolo, Cont_Loss, FocalLoss_Neg, FocalLoss_weight, CenterLoss, L2Loss
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate 
 from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation, RadarCrossAttention_evaluation
 from data import crud, schemas
 from data.database import SessionLocal
@@ -258,6 +257,24 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     return train_loader, val_loader, test_loader
 
 
+RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
+RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
+network_types = ["FFRRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
+dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
+eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
+eval_func_dict["FFRRadNet"]["RADIal"] = FFTRadNet_val_evaluation
+for i in RODNet_subtypes:
+    eval_func_dict[i]["CRUW"] = RODNet_evaluation
+for i in RECORD_subtypes:
+    eval_func_dict[i]["CRUW"] = RECORD_CRUW_evaluation
+    eval_func_dict[i]["CARRADA"] = RECORD_CARRADA_evaluation
+eval_func_dict["MVRECORD"]["CARRADA"] = MVRECORD_CARRADA_evaluation
+eval_func_dict["RADDet"]["RADDetDataset"] = RADDet_evaluation
+eval_func_dict["DAROD"]["RADDetDataset"] = DAROD_evaluation
+eval_func_dict["RAMP_CNN"]["UWCR"] = RAMP_CNN_evaluation
+eval_func_dict["RadarCrossAttention"]["CARRADA"] = RadarCrossAttention_evaluation
+
+
 def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):    
     # Setup random seed
     torch.manual_seed(train_config['seed'])
@@ -359,54 +376,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 #inputs = tuple(data[feature] for feature in features)
                 inputs = {feature: data[feature] for feature in features}
 
-                    
-            # if model_type == "FFTRadNet":
-            #     inputs = data[0].to(device).float()
-            #     label_map = data[1].to(device).float()
-            #     if model_config['segmentation_head']:
-            #         seg_map_label = data[2].to(device).double()
-            # elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-            #     if dataset_type == "CRUW":
-            #         inputs = data['radar_data'].to(device).float()
-            #         confmap_gt = data['anno']['confmaps'].to(device).float()
-            #         # print(f"###input:{inputs.shape}")
-            #         # print(f"###confmap:{confmap_gt.shape}")
-            #     elif dataset_type == "CARRADA":
-            #         inputs = data['radar'].to(device).float()
-            #         label = data['mask'].to(device).float()
-            #         #print(f"###input:{inputs.shape}")
-            #         #print(f"###label:{label.shape}")
-            # elif model_type == "MVRECORD":
-            #     inputs = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
-            #     label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
-            #     #print(inputs[0].shape, inputs[1].shape, inputs[2].shape)
-            # elif model_type == "RADDet":
-            #     inputs = data['radar'].to(device).float()
-            #     label = data['label'].to(device).float()
-            #     boxes = data['boxes'].to(device).float()
-            #     #print(inputs.shape, label.shape, boxes.shape)
-            # elif model_type == "DAROD":
-            #     inputs = data['radar'].to(device).float()
-            #     label = data['label'].to(device).int()
-            #     boxes = data['boxes'].to(device).float()
-            #     # print(inputs.shape, label)
-            # elif model_type == "RAMP_CNN":
-            #     inputs = (data['ra_matrix'].to(device).float(), data['rv_matrix'].to(device).float(), data['va_matrix'].to(device).float())
-            #     confmap_gt = data['confmap_gt'].to(device).float()   
-            # elif model_type == "RadarCrossAttention":
-            #     inputs = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
-            #     gt_mask = data["mask"].to(device).float()
-            #     if model_config["center_offset"]:
-            #         gt_center_map = data["center_map"].to(device).float() 
-            #     if model_config["orientation"]:
-            #         gt_orent_map = data["orent_map"].to(device).float()
-            # else:
-            #     raise ValueError
-            
-            # reset the gradient
             optimizer.zero_grad()
-
-            # forward pass, enable to track our gradient
             with torch.set_grad_enabled(True):
                 outputs = net(inputs)
 
@@ -414,152 +384,28 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             for feature in features:
                 data.pop(feature)
             loss = net.get_loss(outputs, data, train_config)
-            # if model_type == "FFTRadNet":
-            #     criterion_det = pixor_loss if train_config['losses']['detection_loss'] == 'PixorLoss' else None
-            #     criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if train_config['losses']['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
-            #     classif_loss, reg_loss = criterion_det(outputs['Detection'], label_map, train_config['losses'])           
-            #     prediction = outputs['Segmentation'].contiguous().flatten()
-            #     label = seg_map_label.contiguous().flatten()   
-            #     loss_seg = criterion_seg(prediction, label)
-            #     loss_seg *= inputs.size(0)
-            #     classif_loss *= train_config['losses']['weight'][0]
-            #     reg_loss *= train_config['losses']['weight'][1]
-            #     loss_seg *= train_config['losses']['weight'][2]
-            #     loss = classif_loss + reg_loss + loss_seg
-
-            #     writer.add_scalar('Loss/train', loss.item(), global_step)
-            #     writer.add_scalar('Loss/train_clc', classif_loss.item(), global_step)
-            #     writer.add_scalar('Loss/train_reg', reg_loss.item(), global_step)
-            #     writer.add_scalar('Loss/train_freespace', loss_seg.item(), global_step)
-            # elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-            #     criterion = nn.BCELoss()
-            #     if 'stacked_num' in model_config:
-            #         loss = 0.0
-            #         for i in range(model_config['stacked_num']):
-            #             loss_cur = criterion(outputs[i], confmap_gt)
-            #             loss += loss_cur   
-            #     else:
-            #         loss = criterion(outputs, confmap_gt)
-            # elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
-            #     loss_type = train_config['losses']
-            #     if loss_type == 'bce':
-            #         criterion = nn.BCELoss()
-            #         loss = criterion(outputs, confmap_gt)
-            #     elif loss_type == 'mse':
-            #         criterion = nn.SmoothL1Loss()
-            #         loss = criterion(outputs, confmap_gt)
-            #     elif loss_type == 'smooth_ce':
-            #         alpha = train_config['alpha_loss']
-            #         criterion = SmoothCELoss(alpha)
-            #         loss = criterion(outputs, confmap_gt)
-            #     elif loss_type == 'wce_w10sdice':
-            #         # weights order: background, pedestrian, cyclist, car
-            #         weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
-            #         weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
-            #         weights = weights_rd if features == ['RD'] else weights_ra
-            #         ce_loss = nn.CrossEntropyLoss(weight=weights)
-            #         criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
-            #         losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
-            #         loss = torch.mean(torch.stack(losses))
-            #     else:
-            #         loss = nn.CrossEntropyLoss()
-            # elif model_type == "MVRECORD":
-            #     loss_type = train_config['losses']
-            #     if loss_type == 'wce_w10sdice': 
-            #         # weights order: background, pedestrian, cyclist, car
-            #         weights_rd = torch.tensor([0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]).to(device)
-            #         weights_ra = torch.tensor([0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]).to(device)
-            #         ce_loss = nn.CrossEntropyLoss(weight=weights_rd)
-            #         rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
-            #         rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
-            #         rd_loss = torch.mean(torch.stack(rd_losses))
-
-            #         ce_loss = nn.CrossEntropyLoss(weight=weights_ra)
-            #         ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
-            #         ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
-            #         ra_loss = torch.mean(torch.stack(ra_losses))
-
-            #         loss = torch.mean(rd_loss + ra_loss)
-            # elif model_type == "RADDet":
-            #     pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
-            #     box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
-            #     box_loss *= 1e-1
-            #     loss = box_loss + conf_loss + category_loss
-            # elif model_type == "DAROD":
-            #     #print("--------loss----------")
-            #     #print(f"pred_labels: {outputs['decoder_output'][2]}")
-            #     bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, boxes, label, model_config, train_config["seed"])
-            #     #print(f'calculate_rpn_actual_outputs OUTPUT: {bbox_deltas.shape}, {bbox_labels.shape}')
-            #     frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], boxes, label, model_config, train_config["seed"])
-            #     #print(f'roi_delta OUTPUT: {frcnn_reg_actuals.shape}, {frcnn_cls_actuals.shape}')
-            #     rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-            #     #print("--------loss----------")
-            #     loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
-            # elif model_type == "RAMP_CNN":
-            #     criterion = FocalLoss_Neg()
-            #     loss_cur = criterion(outputs['confmap_pred'], confmap_gt)
-            #     loss_cur2 = criterion(outputs['confmap_pred2'], confmap_gt)
-            #     criterion3 = Cont_Loss(train_config['win_size'])
-            #     loss_cont = criterion3(outputs['confmap_pred'], confmap_gt)
-            #     loss = loss_cur + loss_cont + loss_cur2 * 0.5
-            # elif model_type == "RadarCrossAttention":
-            #     cls_weight = torch.zeros([3, 256, 256]) + torch.tensor(train_config["losses"]["class_weight"]).view(-1, 1, 1)
-            #     cls_loss = FocalLoss_weight(cls_weight.to(device).float(), alpha=2, beta=0)
-            #     loss =  train_config['losses']['weight'][0] * cls_loss(outputs["pred_mask"], gt_mask)
-            #     if model_config["center_offset"]:
-            #         center_loss = CenterLoss()
-            #         loss += train_config['losses']['weight'][1] * center_loss(outputs["pred_center"], gt_center_map)
-            #     if model_config["orientation"]:
-            #         orent_loss = L2Loss()
-            #         loss += train_config['losses']['weight'][2] * orent_loss(outputs["pred_orent"], gt_orent_map)          
-            # else:
-            #     raise ValueError
-
-            # backprop
             loss.backward()
             optimizer.step()
-
-            # statistics
             running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
-        
             # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
             # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
             kbar.update(i, values=[("loss", loss.item())])
             print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
-
             global_step += 1
-
 
         scheduler.step()
 
         history['train_loss'].append(running_loss / len(train_loader.dataset))
         history['lr'].append(scheduler.get_last_lr()[0])
 
-        
         ######################
         ## validation phase ##
         ######################
         print(f'=========== Validation of Val data ===========')
-        if model_type == "FFTRadNet":
-            eval = FFTRadNet_val_evaluation(net, val_loader, train_config, check_perf=(epoch>=10), device=device)
-        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-            eval = RODNet_evaluation(net, val_loader, output_dir, train_config, device)
-        elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-            eval = RECORD_CRUW_evaluation(net, val_loader, output_dir, train_config, device)
-        elif model_type == "RECORD" and dataset_type == "CARRADA":
-            eval = RECORD_CARRADA_evaluation(net, val_loader, features, train_config, device)
-        elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-            eval = MVRECORD_CARRADA_evaluation(net, val_loader, train_config, device)
-        elif model_type == "RADDet":
-            eval = RADDet_evaluation(net, val_loader, train_config, device)
-        elif model_type == "DAROD":
-            eval = DAROD_evaluation(net, val_loader, train_config, device)
-        elif model_type == "RAMP_CNN":
-            eval = RAMP_CNN_evaluation(net, val_loader, train_config, device)
-        elif model_type == "RadarCrossAttention":
-            eval = RadarCrossAttention_evaluation(net, val_loader, device)
+        if callable(eval_func_dict[model_type][dataset_type]):
+            eval = eval_func_dict[model_type][dataset_type](net, val_loader, train_config, features, output_dir, device)
         else:
-            raise ValueError
+            raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
             
         history['val_loss'].append(eval['loss'])
         history['mAP'].append(eval['mAP'])
@@ -570,7 +416,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
 
         kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
-
 
         writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
         writer.add_scalar('Loss/test', eval['loss'], global_step)
@@ -595,26 +440,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     df_val_eval.to_csv(val_eval_path, index=False)
 
     print(f'=========== Evaluation of Test data ===========')
-    if model_type == "FFTRadNet":
-        eval = FFTRadNet_test_evaluation(net, test_loader, device=device)
-    elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-        eval = RODNet_evaluation(net, test_loader, output_dir, train_config, model_config, device)
-    elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-        eval = RECORD_CRUW_evaluation(net, test_loader, output_dir, train_config, model_config, device, model_type)
-    elif model_type == "RECORD" and dataset_type == "CARRADA":
-        eval = RECORD_CARRADA_evaluation(net, test_loader, features, criterion, device)
-    elif model_type == "MVRECORD" and dataset_type == "CARRADA":
-        eval = MVRECORD_CARRADA_evaluation(net, test_loader, features, rd_criterion, ra_criterion, device)
-    elif model_type == "RADDet":
-        eval = RADDet_evaluation(net, test_loader, train_config['dataloader']['test']['batch_size'], model_config, train_config, device)
-    elif model_type == "DAROD":
-        eval = DAROD_evaluation(net, test_loader, model_config, train_config, device, iou_thresholds=[0.1, 0.3, 0.5, 0.7])
-    elif model_type == "RAMP_CNN":
-        eval = RAMP_CNN_evaluation(net, test_loader, train_config, model_config, device)
-    elif model_type == "RadarCrossAttention":
-        eval = RadarCrossAttention_evaluation(net, test_loader, model_config, device)
+    if callable(eval_func_dict[model_type][dataset_type]):
+        eval = eval_func_dict[model_type][dataset_type](net, test_loader, train_config, features, output_dir, device)
     else:
-        raise ValueError
+        raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
     
     df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
     df_test_val.to_csv(test_eval_path, index=False)       
