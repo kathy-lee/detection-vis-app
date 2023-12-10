@@ -101,6 +101,7 @@ class FFTRadNet(BaseNetwork):
             self.criterion_reg = nn.SmoothL1Loss(reduction='sum')
         else:
             self.criterion_reg = nn.L1Loss(reduction='sum')
+        return
     
     def get_loss(self, pred, target, config):
         # loss of classification
@@ -118,7 +119,7 @@ class FFTRadNet(BaseNetwork):
             loss_reg/=NbPts
 
         # loss of segmentation
-        if pred['Segmentation']:
+        if pred['Segmentation'] != []:
             seg_pred = pred['Segmentation'].contiguous().flatten()
             seg_label = target['seg_label'].contiguous().flatten()   
             loss_seg = self.criterion_seg(seg_pred, seg_label)
