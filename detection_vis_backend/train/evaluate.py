@@ -57,17 +57,25 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
-
+def FFTRadNet_evaluation(net, loader, train_config, eval_type, device='cpu'):
     net.eval()
-    
+    running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
 
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
     for i, data in enumerate(loader):
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
         inputs = data['RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
+
+        if eval_type == "val":
+            data.pop('RD')
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.size(0)
 
         out_obj = outputs['Detection'].detach().cpu().numpy().copy()
         out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
@@ -82,8 +90,10 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
             predictions['prediction']['freespace'].append(pred_map[0])
             predictions['label']['freespace'].append(true_map)   
 
-        kbar.update(i)
-        print(f'Step {i+1}/{len(loader)}')
+        if eval_type == "val":
+            kbar.update(i, values=[("loss", loss.item())])
+        else:
+            kbar.update(i)
         
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
 
@@ -101,7 +111,11 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
     mIoU = np.asarray(mIoU).mean()
     print('------- Freespace Scores ------------')
     print('  mIoU',mIoU*100,'%')
-    return {'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score], 'mIoU': [mIoU*100]}
+
+    result = {'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score], 'mIoU': [mIoU*100]}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(loader.dataset)})
+    return result
 
 
 def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_threshold=0.5):
@@ -111,8 +125,6 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     iou_threshold = []
     RangeError = []
     AngleError = []
-
-    out = []
 
     for threshold in np.arange(0.1,0.96,0.1):
         print(f"begin the iteration of threshold = {threshold}")
@@ -156,12 +168,10 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
 
             # valid predictions and labels exist for the currently inspected point cloud
             if len(ground_truth_box_corners)>0 and len(Object_predictions)>0:
-
                 used_gt = np.zeros(len(ground_truth_box_corners))
                 for pid, prediction in enumerate(Object_predictions):
                     iou = bbox_iou(prediction[1:], ground_truth_box_corners)
                     ids = np.where(iou>=IOU_threshold)[0]
-
                     
                     if(len(ids)>0):
                         TP += 1
@@ -174,8 +184,6 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
                     else:
                         FP+=1
                 FN += np.sum(used_gt==0)
-
-
             elif(len(ground_truth_box_corners)==0):
                 FP += len(Object_predictions)
             elif(len(Object_predictions)==0):
@@ -185,14 +193,13 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
             precision.append( TP / (TP+FP)) # When there is a detection, how much I m sure
             recall.append(TP / (TP+FN))
         else:
-            precision.append( 0) # When there is a detection, how much I m sure
+            precision.append(0) 
             recall.append(0)
 
         if nbObjects > 0:
             RangeError.append(range_error/nbObjects)
             AngleError.append(angle_error/nbObjects)
         
-
     perfs['precision']=precision
     perfs['recall']=recall
 
@@ -242,9 +249,7 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
 
     # valid predictions and labels exist for the currently inspected point cloud
     if NbDet>0 and NbGT>0:
-
         used_gt = np.zeros(len(ground_truth_box_corners))
-
         for pid, prediction in enumerate(Object_predictions):
             iou = bbox_iou(prediction[1:], ground_truth_box_corners)
             ids = np.where(iou>=IOU_threshold)[0]
@@ -295,7 +300,7 @@ class Metrics():
             union = np.sum(label) + np.sum(pred) -intersection
             self.iou.append(intersection /union)
 
-        TP,FP,FN = GetDetMetrics(ObjectPred,Objectlabels,threshold=0.2,range_min=range_min,range_max=range_max)
+        TP,FP,FN = GetDetMetrics(ObjectPred,Objectlabels,threshold=threshold,range_min=range_min,range_max=range_max)
 
         self.TP += TP
         self.FP += FP

@@ -24,7 +24,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate 
-from detection_vis_backend.train.evaluate import FFTRadNet_val_evaluation, FFTRadNet_test_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation, RadarCrossAttention_evaluation
+from detection_vis_backend.train.evaluate import FFTRadNet_evaluation, RODNet_evaluation, RECORD_CRUW_evaluation, RECORD_CARRADA_evaluation, MVRECORD_CARRADA_evaluation, RADDet_evaluation, DAROD_evaluation, RAMP_CNN_evaluation, RadarCrossAttention_evaluation
 from data import crud, schemas
 from data.database import SessionLocal
 
@@ -262,7 +262,7 @@ RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
 network_types = ["FFRRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
-eval_func_dict["FFRRadNet"]["RADIal"] = FFTRadNet_val_evaluation
+eval_func_dict["FFRRadNet"]["RADIal"] = FFTRadNet_evaluation
 for i in RODNet_subtypes:
     eval_func_dict[i]["CRUW"] = RODNet_evaluation
 for i in RECORD_subtypes:
