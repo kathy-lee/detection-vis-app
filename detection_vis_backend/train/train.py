@@ -259,20 +259,20 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
 
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFRRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
-eval_func_dict["FFRRadNet"]["RADIal"] = FFTRadNet_evaluation
+eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
 for i in RODNet_subtypes:
-    eval_func_dict[i]["CRUW"] = RODNet_evaluation
+    eval_func_dict[i, "CRUW"] = RODNet_evaluation
 for i in RECORD_subtypes:
-    eval_func_dict[i]["CRUW"] = RECORD_CRUW_evaluation
-    eval_func_dict[i]["CARRADA"] = RECORD_CARRADA_evaluation
-eval_func_dict["MVRECORD"]["CARRADA"] = MVRECORD_CARRADA_evaluation
-eval_func_dict["RADDet"]["RADDetDataset"] = RADDet_evaluation
-eval_func_dict["DAROD"]["RADDetDataset"] = DAROD_evaluation
-eval_func_dict["RAMP_CNN"]["UWCR"] = RAMP_CNN_evaluation
-eval_func_dict["RadarCrossAttention"]["CARRADA"] = RadarCrossAttention_evaluation
+    eval_func_dict[i, "CRUW"] = RECORD_CRUW_evaluation
+    eval_func_dict[i, "CARRADA"] = RECORD_CARRADA_evaluation
+eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
+eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
+eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
+eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
+eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation
 
 
 def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):    
@@ -318,7 +318,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     net = network_factory.get_instance(model_type, model_config)
     print(f'Network initialized: {exp_name}')
     net.to(device)
-    net.init_lossfunc(train_config['losses'])
+    net.init_lossfunc(train_config)
 
     # Optimizer
     lr = float(train_config['optimizer']['lr'])
@@ -390,7 +390,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # kbar.update(i, values=[("loss", loss.item()), ("class", classif_loss.item()), ("reg", reg_loss.item()),("freeSpace", loss_seg.item())])
             # print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}, class: {classif_loss.item()}, reg: {reg_loss.item()}, freeSpace: {loss_seg.item()}')
             kbar.update(i, values=[("loss", loss.item())])
-            print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
+            #print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
             global_step += 1
 
         scheduler.step()
@@ -401,32 +401,32 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         ## validation phase ##
         ######################
-        print(f'=========== Validation of Val data ===========')
-        if callable(eval_func_dict[model_type][dataset_type]):
-            eval = eval_func_dict[model_type][dataset_type](net, val_loader, train_config, features, output_dir, 'val', device)
+        print(f'\n=========== Validation of Val data ===========')
+        if callable(eval_func_dict[model_type, dataset_type]):
+            eval = eval_func_dict[model_type, dataset_type](net, val_loader, train_config, features, output_dir, 'val', device)
         else:
             raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
-            
+          
         history['val_loss'].append(eval['loss'])
         history['mAP'].append(eval['mAP'])
         history['mAR'].append(eval['mAR'])
         history['mIoU'].append(eval['mIoU'])
-
+        
         new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
         df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
-
+        
         kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
-
+        
         writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
         writer.add_scalar('Loss/test', eval['loss'], global_step)
         writer.add_scalar('Metrics/mAP', eval['mAP'], global_step)
         writer.add_scalar('Metrics/mAR', eval['mAR'], global_step)
         writer.add_scalar('Metrics/mIoU', eval['mIoU'], global_step)
-
+        
         # Saving all checkpoint as the best checkpoint for multi-task is a balance between both --> up to the user to decide
         name_output_file = model_type + '_epoch{:02d}_loss_{:.4f}_AP_{:.4f}_AR_{:.4f}_IOU_{:.4f}.pth'.format(epoch, eval['loss'],eval['mAP'],eval['mAR'],eval['mIoU'])
         filename = output_dir / name_output_file
-
+        
         checkpoint={}
         checkpoint['net_state_dict'] = net.state_dict()
         checkpoint['optimizer'] = optimizer.state_dict()
@@ -434,14 +434,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         checkpoint['epoch'] = epoch
         checkpoint['history'] = history
         checkpoint['global_step'] = global_step
-
+        
         torch.save(checkpoint,filename)
-
+    
     df_val_eval.to_csv(val_eval_path, index=False)
 
     print(f'=========== Evaluation of Test data ===========')
-    if callable(eval_func_dict[model_type][dataset_type]):
-        eval = eval_func_dict[model_type][dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
+    if callable(eval_func_dict[model_type, dataset_type]):
+        eval = eval_func_dict[model_type, dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
     else:
         raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
     
