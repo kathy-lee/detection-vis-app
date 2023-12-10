@@ -403,7 +403,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         ######################
         print(f'=========== Validation of Val data ===========')
         if callable(eval_func_dict[model_type][dataset_type]):
-            eval = eval_func_dict[model_type][dataset_type](net, val_loader, train_config, features, output_dir, device)
+            eval = eval_func_dict[model_type][dataset_type](net, val_loader, train_config, features, output_dir, 'val', device)
         else:
             raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
             
@@ -441,7 +441,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
     print(f'=========== Evaluation of Test data ===========')
     if callable(eval_func_dict[model_type][dataset_type]):
-        eval = eval_func_dict[model_type][dataset_type](net, test_loader, train_config, features, output_dir, device)
+        eval = eval_func_dict[model_type][dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
     else:
         raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
     

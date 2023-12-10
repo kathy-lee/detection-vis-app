@@ -57,7 +57,7 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def FFTRadNet_evaluation(net, loader, train_config, eval_type, device='cpu'):
+def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
@@ -669,7 +669,7 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
-def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
+def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -680,12 +680,14 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
     net.eval()
+    running_loss = 0.0
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     confmap_shape = (3, 128, 128) # (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
     iter_ = init_genConfmap
-    for i in range(train_cfg['win_size'] - 1):
+    for i in range(train_config['win_size'] - 1):
         while iter_.next is not None:
             iter_ = iter_.next
         iter_.next = ConfmapStack(confmap_shape)
@@ -694,17 +696,28 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
     total_count = 0
     load_tic = time.time()
     sequences = []
-    for iter, data_dict in enumerate(dataloader):
+    for iter, data in enumerate(dataloader):
         load_time = time.time() - load_tic
-        data = data_dict['RA'].to(device).float()
-        
-        seq_name = data_dict['seq_name']
+        for key in data:
+            if isinstance(data[key], str) or isinstance(data[key], list):
+                continue
+            data[key] = data[key].to(device).float()
+        inputs = data['RA'].to(device).float()
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
+
+        if eval_type == "val":
+            data.pop('RA')
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.size(0)
+
+        seq_name = data['seq_name']
         if seq_name not in sequences:
             sequences.append(seq_name)
         
         # Currently only support batch_size set to 1 for val evaluation
-        start_frame_id = data_dict['start_frame'].item()
-        end_frame_id = data_dict['end_frame'].item()
+        start_frame_id = data['start_frame'].item()
+        end_frame_id = data['end_frame'].item()
 
         tic = time.time()
         with torch.set_grad_enabled(False):
@@ -727,51 +740,27 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
 
         process_tic = time.time()
         save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
-        for i in range(train_cfg['train_stride']): # test_stride
+        for i in range(train_config['train_stride']): # test_stride
             total_count += 1
-            res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+            res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             cur_frame_id = start_frame_id + i
             write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
-            # confmap_pred_0 = init_genConfmap.confmap
-            # res_final_0 = res_final
-            # if image_paths is not None:
-            #     img_path = image_paths[i]
-            #     radar_input = chirp_amp(data.numpy()[0, :, i, :, :], radar_configs['data_type'])
-            #     fig_name = os.path.join(test_res_dir, seq_name, 'rod_viz', '%010d.jpg' % (cur_frame_id))
-            #     if confmap_gt is not None:
-            #         confmap_gt_0 = confmap_gt[0, :, i, :, :]
-            #         visualize_test_img(fig_name, img_path, radar_input, confmap_pred_0, confmap_gt_0, res_final_0,
-            #                             dataset, sybl=sybl)
-            #     else:
-            #         visualize_test_img_wo_gt(fig_name, img_path, radar_input, confmap_pred_0, res_final_0,
-            #                                     dataset, sybl=sybl)
             init_genConfmap = init_genConfmap.next
 
         if iter == len(dataloader) - 1:
-            offset = train_cfg['train_stride'] # test_stride
+            offset = train_config['train_stride'] # test_stride
             cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
-                res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+                res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
-                # confmap_pred_0 = init_genConfmap.confmap
-                # res_final_0 = res_final
-                # if image_paths is not None:
-                #     img_path = image_paths[offset]
-                #     radar_input = chirp_amp(data.numpy()[0, :, offset, :, :], radar_configs['data_type'])
-                #     fig_name = os.path.join(test_res_dir, seq_name, 'rod_viz', '%010d.jpg' % (cur_frame_id))
-                #     if confmap_gt is not None:
-                #         confmap_gt_0 = confmap_gt[0, :, offset, :, :]
-                #         visualize_test_img(fig_name, img_path, radar_input, confmap_pred_0, confmap_gt_0,
-                #                             res_final_0,
-                #                             dataset, sybl=sybl)
-                #     else:
-                #         visualize_test_img_wo_gt(fig_name, img_path, radar_input, confmap_pred_0, res_final_0,
-                #                                     dataset, sybl=sybl)
                 init_genConfmap = init_genConfmap.next
                 offset += 1
                 cur_frame_id += 1
-        print(f"Sample {iter}/{len(dataloader)} finished")
+        if eval_type == "val":
+            kbar.update(i, values=[("loss", loss.item())])
+        else:
+            kbar.update(i)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
@@ -806,10 +795,14 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, device):
     eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
     print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+
+    result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
-def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, device):
+def RECORD_CRUW_evaluation(net, dataloader, train_cfg, features, save_dir, eval_type, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -820,12 +813,14 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, device):
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
     net.eval()
+    running_loss = 0.0
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+
     sequences = []
     for iter, data_dict in enumerate(dataloader):
-        print(f"Sample {iter}")
-        
         ra_maps = data_dict['RA'].to(device).float()
         confmap_gts = data_dict['gt_confmaps'].float()
+
         image_paths = data_dict['image_paths']
         seq_name = data_dict['seq_name']
         if seq_name not in sequences:
@@ -983,7 +978,7 @@ class Evaluator:
         self.confusion_matrix = np.zeros((self.num_class,) * 2)
 
 
-def RECORD_CARRADA_evaluation(net, dataloader, features, train_cfg, device):
+def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
     metrics = Evaluator(net.n_class) # number of classes
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
@@ -999,7 +994,7 @@ def RECORD_CARRADA_evaluation(net, dataloader, features, train_cfg, device):
         with torch.set_grad_enabled(False):
             outputs = net(input)
 
-        loss = net.get_loss(outputs, data, train_cfg)
+        loss = net.get_loss(outputs, data, train_config)
         running_loss += loss.item() * input.size(0)
         metrics.add_batch(torch.argmax(data['mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
         kbar.update(iter)
@@ -1011,7 +1006,7 @@ def RECORD_CARRADA_evaluation(net, dataloader, features, train_cfg, device):
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':metrics_dict['miou']}
    
 
-def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, device):
+def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, features, output_dir, eval_type, device):
     net.eval()
     rd_metrics = Evaluator(4) # number of classes
     ra_metrics = Evaluator(4) # number of classes
@@ -1168,7 +1163,7 @@ def mAP(predictions, gts, input_size, ap_each_class, tp_iou_threshold=0.5, mode=
     return mean_ap, ap_each_class
 
 
-def RADDet_evaluation(net, dataloader, train_config, device):
+def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
     n_class = net.n_class
 
@@ -1445,7 +1440,7 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     return ap_dict
 
 
-def DAROD_evaluation(net, dataloader, train_config, device, iou_thresholds=[0.5]):
+def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, iou_thresholds=[0.5]):
     net.eval()
     n_class = net.n_class
 
@@ -1508,7 +1503,7 @@ def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid,
     return evalImgs
 
 
-def RAMP_CNN_evaluation(net, dataloader, train_cfg, device):
+def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_type, device):
 
     net.eval()
     n_class = net.n_class
@@ -1645,7 +1640,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, device):
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
 
-def RadarCrossAttention_evaluation(net, loader, device, thresh=2):
+def RadarCrossAttention_evaluation(net, loader, train_config, features, output_dir, eval_type, device, thresh=2):
     net.eval()
 
     cls = dict()
