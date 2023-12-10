@@ -33,10 +33,10 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
             if isinstance(data[key], str) or isinstance(data[key], list):
                 continue
             data[key] = data[key].to(device).float()
-        inputs = data['RD'].to(device).float()
+        inputs = data['RD']
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-
+    
         data.pop('RD')
         loss = net.get_loss(outputs, data, train_config)
         running_loss += loss.item() * inputs.size(0)
@@ -81,7 +81,7 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
         out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
         
         labels_obj = data['box_label']
-        label_freespace = data['seg_label'].numpy().copy()
+        label_freespace = data['seg_label'].detach().cpu().numpy().copy()
             
         for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels_obj,label_freespace):
             predictions['prediction']['objects'].append( np.asarray(decode(pred_obj,0.05)))
@@ -94,7 +94,7 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
             kbar.update(i, values=[("loss", loss.item())])
         else:
             kbar.update(i)
-        
+  
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
 
     mIoU = []
@@ -112,7 +112,7 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
     print('------- Freespace Scores ------------')
     print('  mIoU',mIoU*100,'%')
 
-    result = {'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score], 'mIoU': [mIoU*100]}
+    result = {'mAP': mAP, 'mAR': mAR, 'F1_score': F1_score, 'mIoU': mIoU}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(loader.dataset)})
     return result
@@ -126,8 +126,8 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     RangeError = []
     AngleError = []
 
-    for threshold in np.arange(0.1,0.96,0.1):
-        print(f"begin the iteration of threshold = {threshold}")
+    for threshold in np.arange(0.2,0.96,0.1):
+        print(f"Eval on threshold = {threshold}")
         iou_threshold.append(threshold)
 
         TP = 0
