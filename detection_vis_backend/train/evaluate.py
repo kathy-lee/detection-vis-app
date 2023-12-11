@@ -127,7 +127,7 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     AngleError = []
 
     for threshold in np.arange(0.2,0.96,0.1):
-        print(f"Eval on threshold = {threshold}")
+        print(f"\nEvaluation with threshold = {threshold}")
         iou_threshold.append(threshold)
 
         TP = 0
@@ -497,15 +497,16 @@ def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, 
 
     gt_dets = read_gt_txt(gt_path, n_frame, n_class, classes)
     sub_dets = read_rodnet_res(res_path, n_frame, n_class, classes, rng_grid, agl_grid)
+    if sub_dets:
+        olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
+                    for imgId in range(n_frame)
+                    for catId in range(3)}
 
-    olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
-                for imgId in range(n_frame)
-                for catId in range(3)}
-
-    evalImgs = [evaluate_img(gt_dets, sub_dets, imgId, catId, olss_all, olsThrs, recThrs, classes)
-                for imgId in range(n_frame)
-                for catId in range(3)]
-
+        evalImgs = [evaluate_img(gt_dets, sub_dets, imgId, catId, olss_all, olsThrs, recThrs, classes)
+                    for imgId in range(n_frame)
+                    for catId in range(3)]
+    else:
+        evalImgs = None
     return evalImgs
 
 
@@ -674,8 +675,8 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
     radar_cfg = sensor_cfg['radar_cfg']
-    n_class = 3 # dataset.object_cfg.n_class
-    classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
+    n_class = 3 
+    classes = ["pedestrian", "cyclist", "car"]  
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
@@ -698,55 +699,53 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
     sequences = []
     for iter, data in enumerate(dataloader):
         load_time = time.time() - load_tic
+
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
-        inputs = data['RA'].to(device).float()
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+                data[key] = data[key].to(device).float()
+        
+        inputs = data['RA']
+        tic = time.time()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
+        
+        if hasattr(net, 'stacked_num'):
+            confmap_pred = outputs[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
+        else:
+            confmap_pred = outputs.cpu().detach().numpy()
+
+        infer_time = time.time() - tic
+        total_time += infer_time
 
         if eval_type == "val":
             data.pop('RA')
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * inputs.size(0)
-
-        seq_name = data['seq_name']
+        
+        seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
-        
+            save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
         # Currently only support batch_size set to 1 for val evaluation
         start_frame_id = data['start_frame'].item()
         end_frame_id = data['end_frame'].item()
-
-        tic = time.time()
-        with torch.set_grad_enabled(False):
-            confmap_pred = net(data)
-
-        if hasattr(net, 'stacked_num'):
-            confmap_pred = confmap_pred[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
-        else:
-            confmap_pred = confmap_pred.cpu().detach().numpy()
-
-        infer_time = time.time() - tic
-        total_time += infer_time
-
+        
         iter_ = init_genConfmap
         for i in range(confmap_pred.shape[2]):
             if iter_.next is None and i != confmap_pred.shape[2] - 1:
                 iter_.next = ConfmapStack(confmap_shape)
             iter_.append(confmap_pred[0, :, i, :, :])
             iter_ = iter_.next
-
+        
         process_tic = time.time()
-        save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
+        
         for i in range(train_config['train_stride']): # test_stride
             total_count += 1
             res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             cur_frame_id = start_frame_id + i
             write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
             init_genConfmap = init_genConfmap.next
-
+        
         if iter == len(dataloader) - 1:
             offset = train_config['train_stride'] # test_stride
             cur_frame_id = start_frame_id + offset
@@ -757,10 +756,11 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
                 init_genConfmap = init_genConfmap.next
                 offset += 1
                 cur_frame_id += 1
+        
         if eval_type == "val":
-            kbar.update(i, values=[("loss", loss.item())])
+            kbar.update(iter, values=[("loss", loss.item())])
         else:
-            kbar.update(i)
+            kbar.update(iter)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
@@ -770,7 +770,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
                 (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
-    print("ave time: %f" % (total_time / total_count))
+    print("Ave infer time: %f" % (total_time / total_count))
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
@@ -785,24 +785,29 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
         
-        eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+        if evalImgs:
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+            print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            n_frames_all += n_frame
+            evalImgs_all.extend(evalImgs)
+        else:
+            print(f"{seq_name}_rod_res.txt is empty.")
+            
+    if evalImgs_all:    
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+        print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
+    else:
+        result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
 
-        n_frames_all += n_frame
-        evalImgs_all.extend(evalImgs)
-
-    eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
-    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
-
-    result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
     return result
 
 
-def RECORD_CRUW_evaluation(net, dataloader, train_cfg, features, save_dir, eval_type, device):
+def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -817,40 +822,40 @@ def RECORD_CRUW_evaluation(net, dataloader, train_cfg, features, save_dir, eval_
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
 
     sequences = []
-    for iter, data_dict in enumerate(dataloader):
-        ra_maps = data_dict['RA'].to(device).float()
-        confmap_gts = data_dict['gt_confmaps'].float()
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+                data[key] = data[key].to(device).float()
 
-        image_paths = data_dict['image_paths']
-        seq_name = data_dict['seq_name']
+        inputs = data['RA']
+        image_paths = data['image_paths']
+        seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
-        save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+            save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
 
-        if confmap_gts is not None:
-            start_frame_name = image_paths[0][0].split('/')[-1].split('.')[0]
-            frame_name = image_paths[0][-1].split('/')[-1].split('.')[0]
-            frame_id = int(frame_name)
-        else:
-            start_frame_name = image_paths[0][0][0].split('/')[-1].split('.')[0].split('_')[0]
-            frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
-            frame_id = int(frame_name)
-
-        if frame_id == train_cfg['win_size']-1:
+        frame_id = data['end_frame']
+        if frame_id == train_config['win_size']-1:
             for tmp_frame_id in range(frame_id):
-                print("Eval frame", tmp_frame_id)
-                tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
+                #print("Eval frame", tmp_frame_id)
+                tmp_ra_maps = inputs[:, :, :tmp_frame_id+1]
                 with torch.set_grad_enabled(False):
-                    confmap_pred = net(tmp_ra_maps)
-                res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+                    confmap_pred = net(tmp_ra_maps) 
+                res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
-
+        
         with torch.set_grad_enabled(False):
-            confmap_pred = net(ra_maps)
-            
-        # Write results
-        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+            confmap_pred = net(inputs)
+        if eval_type == "val":
+            loss = net.get_loss(confmap_pred, data, train_config)
+            running_loss += loss.item() * inputs.size(0)
+        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
+
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
     print(f'record_res.txt file(s) for {sequences} created')
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
@@ -858,12 +863,6 @@ def RECORD_CRUW_evaluation(net, dataloader, train_cfg, features, save_dir, eval_
     n_frames_all = 0
     for seq_name in sequences:
         res_path = os.path.join(save_dir, seq_name + '_record_res.txt')
-        # with open(res_path, 'r') as f:
-        #     content = f.read().strip()
-        # if not content:
-        #     print(f"No objects detected in {seq_name}.")
-        #     continue
-
         gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
 
@@ -871,17 +870,26 @@ def RECORD_CRUW_evaluation(net, dataloader, train_cfg, features, save_dir, eval_
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
 
-        eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
-        stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+        if evalImgs:
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+            print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            n_frames_all += n_frame
+            evalImgs_all.extend(evalImgs)
+        else:
+            print(f"{seq_name}_rod_res.txt is empty.")
 
-        n_frames_all += n_frame
-        evalImgs_all.extend(evalImgs)
-        
-    eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
-    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+    if evalImgs_all:    
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
+        stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+        print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
+    else:
+        result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
+
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
 class Evaluator:
@@ -1765,3 +1773,22 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
         else:
             cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'],0)
     return cls
+
+
+
+RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
+RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
+dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
+eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
+eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
+for i in RODNet_subtypes:
+    eval_func_dict[i, "CRUW"] = RODNet_evaluation
+for i in RECORD_subtypes:
+    eval_func_dict[i, "CRUW"] = RECORD_CRUW_evaluation
+    eval_func_dict[i, "CARRADA"] = RECORD_CARRADA_evaluation
+eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
+eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
+eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
+eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
+eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation
