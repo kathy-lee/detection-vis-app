@@ -260,7 +260,7 @@ class RODNet_CDC(BaseNetwork):
             self.criterion = SmoothCELoss(config['losses']['alpha'])
 
     def get_loss(self, pred, label, config):
-        loss = self.criterion(pred, label['gt_confmaps'])
+        loss = self.criterion(pred, label['gt_mask'])
         return loss
 
 
@@ -297,7 +297,7 @@ class RODNet_CDCv2(BaseNetwork):
             self.criterion = SmoothCELoss(config['losses']['alpha'])
 
     def get_loss(self, pred, label, config):
-        loss = self.criterion(pred, label['gt_confmaps'])
+        loss = self.criterion(pred, label['gt_mask'])
         return loss
 
 
@@ -322,7 +322,7 @@ class RODNet_HG(BaseNetwork):
     def get_loss(self, pred, label, config):
         loss = 0.0
         for i in range(self.stacked_num):
-            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
             loss += loss_cur   
         return loss
 
@@ -348,7 +348,7 @@ class RODNet_HGwI(BaseNetwork):
     def get_loss(self, pred, label, config):
         loss = 0.0
         for i in range(self.stacked_num):
-            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
             loss += loss_cur   
         return loss
 
@@ -402,6 +402,7 @@ class RODNet_v2Base(BaseNetwork):
             self.with_mnet = True
         else:
             self.with_mnet = False
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         if self.with_mnet:
@@ -420,7 +421,7 @@ class RODNet_v2Base(BaseNetwork):
     def get_loss(self, pred, label, config):
         loss = 0.0
         for i in range(self.stacked_num):
-            loss_cur = self.criterion(pred[i], label['gt_confmaps'])
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
             loss += loss_cur   
         return loss
 
@@ -516,8 +517,8 @@ class RECORD(BaseNetwork):
         else:
             self.criterion = nn.CrossEntropyLoss()
         
-    def get_loss(self, pred, label, config):
-        loss = self.criterion(pred, label['mask'])
+    def get_loss(self, pred, target, config):
+        loss = self.criterion(pred,target['gt_mask'])
         return loss
     
 
@@ -563,7 +564,7 @@ class RECORDNoLstm(BaseNetwork):
             self.criterion = nn.CrossEntropyLoss()
         
     def get_loss(self, pred, label, param):
-        loss = self.criterion(pred, label['mask'])
+        loss = self.criterion(pred, label['gt_mask'])
         return loss
 
 

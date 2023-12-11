@@ -1643,12 +1643,12 @@ class CRUW(Dataset):
             #     obj_infos=obj_info,
             #     confmaps=confmap_gt,
             # )
-            data_dict.update({'obj_infos': obj_info, 'gt_confmaps': confmap_gt})
+            data_dict.update({'obj_infos': obj_info, 'gt_mask': confmap_gt})
         # else:
         #     data_dict['anno'] = None
 
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['gt_confmaps'] is not None: 
-            data_dict['gt_confmaps'] = data_dict['gt_confmaps'][:, -1]
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['gt_mask'] is not None: 
+            data_dict['gt_mask'] = data_dict['gt_mask'][:, -1]
         return data_dict
 
 
@@ -1848,7 +1848,7 @@ class CARRADA(Dataset):
                     feature_matrices.append(feature_matrix)
                 feature_matrix = np.dstack(feature_matrices)
                 feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
-                feature_frame = {'matrix': feature_matrix, 'mask': mask}
+                feature_frame = {'matrix': feature_matrix, 'gt_mask': mask}
                 # Apply the same transform to all representations
                 if np.random.uniform(0, 1) > 0.5:
                     is_vflip = True
@@ -1868,7 +1868,7 @@ class CARRADA(Dataset):
                         feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
                 # Apply normalization
                 feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-                frame = {self.features[0]: feature_frame['matrix'], 'mask': feature_frame['mask']}
+                frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
