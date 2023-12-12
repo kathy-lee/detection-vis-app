@@ -86,7 +86,7 @@ class FFTRadNet(BaseNetwork):
         
         return out
 
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['segmentation'] == 'BCEWithLogitsLoss':
             self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')  
         else:
@@ -251,7 +251,7 @@ class RODNet_CDC(BaseNetwork):
         x = self.cdc(x)
         return x
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -288,7 +288,7 @@ class RODNet_CDCv2(BaseNetwork):
         x = self.cdc(x)
         return x
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -311,7 +311,7 @@ class RODNet_HG(BaseNetwork):
         out = self.stacked_hourglass(x)
         return out
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -337,7 +337,7 @@ class RODNet_HGwI(BaseNetwork):
         out = self.stacked_hourglass(x)
         return out
 
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -410,7 +410,7 @@ class RODNet_v2Base(BaseNetwork):
         out = self.stacked_hourglass(x)
         return out
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -482,6 +482,7 @@ class RECORD(BaseNetwork):
         self.encoder = RecordEncoder(in_channels=in_channels, config=encoder_config, norm=norm)
         self.decoder = RecordDecoder(decoder_config, n_class=n_class)
         self.sigmoid = nn.Sigmoid()
+        self.n_class = n_class
 
     def forward(self, x):
         """
@@ -500,7 +501,7 @@ class RECORD(BaseNetwork):
         confmap_pred = self.decoder(st_features_lstm1, st_features_lstm2, st_features_backbone)
         return self.sigmoid(confmap_pred)
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -508,17 +509,23 @@ class RECORD(BaseNetwork):
         elif config['losses']['type'] == 'smooth_ce':
             self.criterion = SmoothCELoss(config['losses']['alpha'])
         elif config['losses']['type'] == 'wce':
-            self.criterion = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            self.criterion = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
         elif config['losses']['type'] == 'sdice':
             self.criterion = SoftDiceLoss()
         elif config['losses']['type'] == 'wce_w10sdice':
-            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
             self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+            self.criterion = self.criterion.to(device)
         else:
             self.criterion = nn.CrossEntropyLoss()
+        return
         
     def get_loss(self, pred, target, config):
-        loss = self.criterion(pred,target['gt_mask'])
+        if isinstance(self.criterion, nn.ModuleList):
+            losses = [loss_func(pred, torch.argmax(target['gt_mask'], axis=1)) for loss_func in self.criterion]
+            loss = torch.mean(torch.stack(losses))
+        else:
+            loss = self.criterion(pred, target['gt_mask'])
         return loss
     
 
@@ -535,6 +542,7 @@ class RECORDNoLstm(BaseNetwork):
         self.encoder = RecordEncoderNoLstm(config=encoder_config, in_channels=in_channels, norm=norm)
         self.decoder = RecordDecoder(config=decoder_config, n_class=n_class)
         self.sigmoid = nn.Sigmoid()
+        self.n_class = n_class
 
     def forward(self, x):
         """
@@ -546,7 +554,7 @@ class RECORDNoLstm(BaseNetwork):
         confmap_pred = self.decoder(x3, x2, x1)
         return self.sigmoid(confmap_pred)
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'bce':
             self.criterion = nn.BCELoss()
         elif config['losses']['type'] == 'mse':
@@ -560,11 +568,16 @@ class RECORDNoLstm(BaseNetwork):
         elif config['losses']['type'] == 'wce_w10sdice':
             ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight'])
             self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+            self.criterion = self.criterion.to(device)
         else:
             self.criterion = nn.CrossEntropyLoss()
         
-    def get_loss(self, pred, label, param):
-        loss = self.criterion(pred, label['gt_mask'])
+    def get_loss(self, pred, target, param):
+        if isinstance(self.criterion, nn.ModuleList):
+            losses = [loss_func(pred, torch.argmax(target['gt_mask'], axis=1)) for loss_func in self.criterion]
+            loss = torch.mean(torch.stack(losses))
+        else:
+            loss = self.criterion(pred, target['gt_mask'])
         return loss
 
 
@@ -671,7 +684,7 @@ class MVRECORD(nn.Module):
 
         return {"rd": pred_rd, "ra": pred_ra}
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'wce_w10sdice':
             ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight_rd'])
             self.rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
@@ -711,7 +724,7 @@ class RADDet(nn.Module):
         pred_raw, pred = boxDecoder(yolo_raw, self.input_size, self.anchor_boxes, self.n_class, self.yolohead_xyz_scales[0])
         return {'pred_raw': pred_raw, 'pred': pred}
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         return
 
     def get_loss(self, pred, target, config):
@@ -895,7 +908,7 @@ class DAROD(nn.Module):
         #     output = torch.clamp(output, min=0.0, max=1.0)
         return output
 
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         return
 
     def get_loss(self, pred, target, config):
@@ -931,7 +944,7 @@ class RAMP_CNN(nn.Module):
         output = {'confmap_pred': dets, 'confmap_pred2': dets2}
         return output
 
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         self.criterion = FocalLoss_Neg()
         self.criterion_cont = Cont_Loss(config['win_size'])
 
@@ -985,7 +998,7 @@ class RadarCrossAttention(nn.Module):
             x_orent = self.finalConv_orent(x) # (B,32,256,256) -> (B,2,64,64)
         return {"pred_mask": x_cls, "pred_center": x_center, "pred_orent": x_orent}
     
-    def init_lossfunc(self, config):
+    def init_lossfunc(self, config, device):
         cls_weight = torch.zeros([3, 256, 256]) + torch.tensor(config["losses"]["class_weight"]).view(-1, 1, 1)
         self.cls_criterion = FocalLoss_weight(cls_weight, alpha=2, beta=0)
         self.center_criterion = CenterLoss()
