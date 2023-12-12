@@ -823,7 +823,7 @@ class Flip:
         self.proba = proba
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         h_flip_proba = np.random.uniform(0, 1)
         if h_flip_proba < self.proba:
             matrix = np.flip(matrix, axis=1).copy()
@@ -832,7 +832,7 @@ class Flip:
         if v_flip_proba < self.proba:
             matrix = np.flip(matrix, axis=2).copy()
             mask = np.flip(mask, axis=2).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
 
 
 class HFlip:
@@ -844,13 +844,13 @@ class HFlip:
         pass
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         matrix = np.flip(matrix, axis=1).copy()
         if len(mask.shape) == 3:
             mask = np.flip(mask, axis=1).copy()
         elif len(mask.shape) == 4:
             mask = np.flip(mask, axis=2).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
 
 
 class VFlip:
@@ -862,13 +862,13 @@ class VFlip:
         pass
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         matrix = np.flip(matrix, axis=2).copy()
         if len(mask.shape) == 3:
             mask = np.flip(mask, axis=2).copy()
         elif len(mask.shape) == 4:
             mask = np.flip(mask, axis=3).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
     
 
 def get_transformations(transform_names, split='train', sizes=None):
