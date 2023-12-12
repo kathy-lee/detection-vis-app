@@ -142,6 +142,7 @@ def config_editor(model_cfg, train_cfg):
 
 
 def find_default_configs(dataset, feature, model):
+  # model config
   if model in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD"):
     with open(os.path.join('detection_vis_backend', 'networks', 'RECORD_model_config.json'), 'r') as file:
       data = json.load(file)
@@ -175,6 +176,7 @@ def find_default_configs(dataset, feature, model):
       data = json.load(file)
       model_cfg = data
   
+  # train config
   if model in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
     with open(os.path.join('detection_vis_backend', 'train', 'RODNet_train_config.json'), 'r') as file:
       data = json.load(file)
@@ -185,7 +187,10 @@ def find_default_configs(dataset, feature, model):
     if 'default' in data.keys():
       train_cfg = data['default'].copy()  
       if dataset in data.keys():
-        train_cfg.update(data[dataset])  
+        if feature[0] in data[dataset].keys():
+          train_cfg.update(data[dataset][feature[0]]) 
+        else:
+          train_cfg.update(data[dataset]) 
     else:
       train_cfg = data
   return model_cfg, train_cfg
