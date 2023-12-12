@@ -562,11 +562,11 @@ class RECORDNoLstm(BaseNetwork):
         elif config['losses']['type'] == 'smooth_ce':
             self.criterion = SmoothCELoss(config['losses']['alpha'])
         elif config['losses']['type'] == 'wce':
-            self.criterion = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            self.criterion = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
         elif config['losses']['type'] == 'sdice':
             self.criterion = SoftDiceLoss()
         elif config['losses']['type'] == 'wce_w10sdice':
-            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight'])
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
             self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
             self.criterion = self.criterion.to(device)
         else:
