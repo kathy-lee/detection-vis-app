@@ -686,13 +686,17 @@ class MVRECORD(nn.Module):
     
     def init_lossfunc(self, config, device):
         if config['losses']['type'] == 'wce_w10sdice':
-            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight_rd'])
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight_rd']))
             self.rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
         
-            ce_loss = nn.CrossEntropyLoss(weight=config['losses']['weight_ra'])
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight_ra']))
             self.ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])    
         else:
             raise ValueError()
+        self.rd_criterion = self.rd_criterion.to(device)
+        self.ra_criterion = self.ra_criterion.to(device)
+        return
+        
         
     def get_loss(self, pred, label, config):
         rd_losses = [c(pred['rd'], torch.argmax(label['rd_mask'], axis=1)) for c in self.rd_criterion]
