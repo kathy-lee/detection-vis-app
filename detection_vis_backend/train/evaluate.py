@@ -828,19 +828,18 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
                 data[key] = data[key].to(device).float()
 
         inputs = data['RA']
-        image_paths = data['image_paths']
+        
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
 
         frame_id = data['end_frame']
-        if frame_id == train_config['win_size']-1:
+        if frame_id == train_config['win_size']-1 and type(net).__name__ not in ('RECORDNoLstm', 'RECORDNoLstmMulti'):
             for tmp_frame_id in range(frame_id):
-                #print("Eval frame", tmp_frame_id)
                 tmp_ra_maps = inputs[:, :, :tmp_frame_id+1]
                 with torch.set_grad_enabled(False):
-                    confmap_pred = net(tmp_ra_maps) 
+                    confmap_pred = net(tmp_ra_maps)
                 res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
         
@@ -988,36 +987,39 @@ class Evaluator:
 
 def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
-    metrics = Evaluator(net.n_class) # number of classes
+    metrics = Evaluator(net.n_class) 
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
-        print(f"Sample No. {iter}") 
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
-    
-        input = data[features[0]]
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+                data[key] = data[key].to(device).float()
+        
+        inputs = data[features[0]]
         with torch.set_grad_enabled(False):
-            outputs = net(input)
-
-        loss = net.get_loss(outputs, data, train_config)
-        running_loss += loss.item() * input.size(0)
-        metrics.add_batch(torch.argmax(data['mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
+            outputs = net(inputs)
+        
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.size(0)
+        
+        metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
         kbar.update(iter)
 
     metrics_dict = get_metrics(metrics)
 
     mAP = sum(metrics_dict['prec_by_class']) / len(metrics_dict['prec_by_class'])
     mAR = sum(metrics_dict['recall_by_class']) / len(metrics_dict['recall_by_class'])
-    return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':metrics_dict['miou']}
+    result = {'mAP':mAP, 'mAR':mAR, 'mIoU': metrics_dict['miou']}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
    
 
 def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, features, output_dir, eval_type, device):
     net.eval()
-    rd_metrics = Evaluator(4) # number of classes
-    ra_metrics = Evaluator(4) # number of classes
+    rd_metrics = Evaluator(net.n_class) 
+    ra_metrics = Evaluator(net.n_class) 
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
     for iter, data in enumerate(dataloader):
@@ -1027,9 +1029,9 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, features, output_dir
                 continue
             data[key] = data[key].to(device).float()
         
-        input = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
+        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
         with torch.set_grad_enabled(False):
-            outputs = net(input)
+            outputs = net(inputs)
 
         loss = net.get_loss(outputs, data, train_cfg)
         running_loss += loss.item() * input[0].size(0)
