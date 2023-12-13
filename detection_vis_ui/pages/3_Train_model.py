@@ -146,7 +146,7 @@ def find_default_configs(dataset, feature, model):
   if model in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD"):
     with open(os.path.join('detection_vis_backend', 'networks', 'RECORD_model_config.json'), 'r') as file:
       data = json.load(file)
-    if model == "RECORD":
+    if model in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
       if len(feature) > 1:
         st.error('RECORD network supports only single feature as input', icon="🚨")
       if dataset in data[model].keys():
