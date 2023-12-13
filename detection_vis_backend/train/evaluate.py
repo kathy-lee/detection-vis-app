@@ -683,7 +683,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
-
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     confmap_shape = (3, 128, 128) # (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
@@ -701,7 +701,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         load_time = time.time() - load_tic
 
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
                 data[key] = data[key].to(device).float()
         
         inputs = data['RA']
@@ -720,7 +720,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         if eval_type == "val":
             data.pop('RA')
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * inputs.size(0)
+            running_loss += loss.item() * batch_size
         
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
@@ -820,11 +820,11 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
-
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     sequences = []
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
                 data[key] = data[key].to(device).float()
 
         inputs = data['RA']
@@ -847,7 +847,7 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
             confmap_pred = net(inputs)
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
-            running_loss += loss.item() * inputs.size(0)
+            running_loss += loss.item() * batch_size
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
 
@@ -990,9 +990,10 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
     metrics = Evaluator(net.n_class) 
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > train_config['dataloader'][eval_type]['batch_size']:
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
                 data[key] = data[key].to(device).float()
         
         inputs = data[features[0]]
@@ -1001,7 +1002,7 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
         
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * inputs.size(0)
+            running_loss += loss.item() * batch_size
         
         metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
         kbar.update(iter)
@@ -1016,25 +1017,25 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
     return  result
    
 
-def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, features, output_dir, eval_type, device):
+def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
-    rd_metrics = Evaluator(net.n_class) 
-    ra_metrics = Evaluator(net.n_class) 
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+    rd_metrics = Evaluator(net.n_class) 
+    ra_metrics = Evaluator(net.n_class) 
     for iter, data in enumerate(dataloader):
-        print(f"Sample No. {iter}")
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+                data[key] = data[key].to(device).float()
         
-        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
+        inputs = {feature: data[feature] for feature in features}
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
 
-        loss = net.get_loss(outputs, data, train_cfg)
-        running_loss += loss.item() * input[0].size(0)
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
 
         rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
         ra_metrics.add_batch(torch.argmax(data['ra_mask'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
@@ -1052,10 +1053,10 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_cfg, features, output_dir
             sum(metrics_dict['range_angle']['prec_by_class']) / len(metrics_dict['range_angle']['prec_by_class']) / 2 
     mAR = sum(metrics_dict['range_doppler']['recall_by_class']) / len(metrics_dict['range_doppler']['recall_by_class']) / 2 + \
             sum(metrics_dict['range_angle']['recall_by_class']) / len(metrics_dict['range_angle']['recall_by_class']) / 2
-    return {'loss': running_loss, 
-            'mAP': mAP, 
-            'mAR': mAR, 
-            'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 def iou2d(box_xywh_1, box_xywh_2):
