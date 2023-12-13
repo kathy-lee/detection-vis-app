@@ -1177,9 +1177,10 @@ def mAP(predictions, gts, input_size, ap_each_class, tp_iou_threshold=0.5, mode=
 def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
     n_class = net.n_class
-
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+
     mean_ap_test = 0.0
     ap_all_class_test = []
     ap_all_class = []
@@ -1188,16 +1189,16 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
     
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+                data[key] = data[key].to(device).float()
 
         inputs = data["RAD"]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
             
-        loss = net.get_loss(outputs, data, train_config)
-        running_loss += loss.item() * inputs.size(0)
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
 
         pred = outputs['pred'].detach().cpu().numpy()
         raw_boxes = data['boxes'].detach().cpu().numpy()
@@ -1213,18 +1214,18 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
                                     tp_iou_threshold=train_config["mAP_iou3d_threshold"])
             mean_ap_test += mean_ap
         kbar.update(iter)
+
     for ap_class_i in ap_all_class:
         if len(ap_class_i) == 0:
             class_ap = 0.
         else:
             class_ap = np.mean(ap_class_i)
         ap_all_class_test.append(class_ap)
-    mean_ap_test /= train_config['dataloader']['val']['batch_size'] * len(dataloader)
-    print("-------> ap: %.6f"%(mean_ap_test))
-    return {'loss': running_loss, 
-            'mAP': mean_ap_test, 
-            'mAR': 0.0, 
-            'mIoU': 0.0}
+    mean_ap_test /= batch_size * len(dataloader)
+    result = {'mAP': mean_ap_test, 'mAR': 0.0, 'mIoU': 0.0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 class RunningAverage():
