@@ -25,14 +25,7 @@
       }
     },
   
-    "win_size": 1,
-    "train_step": 1,
-    "train_stride": 4,
-    "test_step": 1,
-    "test_stride": 1,
-    "max_dets": 20,
-    "peak_thres": 0.3,
-    "ols_thres": 0.3
+    "win_size": 1
   },
 
   "CRUW": {
@@ -46,7 +39,14 @@
         "reverse": 0.5,
         "gaussian": 0.0
       }
-    }
+    },
+    "train_step": 1,
+    "train_stride": 4,
+    "test_step": 1,
+    "test_stride": 1,
+    "max_dets": 20,
+    "peak_thres": 0.3,
+    "ols_thres": 0.3
   },
 
   "CARRADA": {
