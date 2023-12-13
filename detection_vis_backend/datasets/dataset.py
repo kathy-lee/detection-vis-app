@@ -1784,7 +1784,7 @@ class CARRADA(Dataset):
         self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
         
         self.model_type = model_cfg['class']
-        if self.model_type in ('RECORD', 'MVRECORD') :
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD') :
             self.process_signal = True
             self.transformations = get_transformations(transform_names=train_cfg['transformations'])
             self.add_temp = True
@@ -1830,7 +1830,7 @@ class CARRADA(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
-        if self.model_type in ('RECORD', 'MVRECORD') :
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD') :
             frame_id = index + self.win_frames - 1
             init_frame_name = "{:06d}".format(frame_id)
             frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
@@ -1860,7 +1860,7 @@ class CARRADA(Dataset):
                     is_hflip = False
                 feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 # Expand one more dim
-                if self.add_temp and self.win_frames > 1:
+                if self.add_temp:
                     if isinstance(self.add_temp, bool):
                         feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
                     else:
@@ -1868,6 +1868,14 @@ class CARRADA(Dataset):
                         feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
                 # Apply normalization
                 feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
+                # Reshape 
+                if self.model_type == 'RECORDNoLstmMulti':
+                    c, t, h, w = feature_frame['matrix'].shape
+                    feature_frame['matrix'] = feature_frame['matrix'].reshape(c*t, h, w)
+                elif self.model_type == 'RECORDNoLstm':
+                    c, t, h, w = feature_frame['matrix'].shape
+                    assert t == 1
+                    feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
                 frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
             elif len(self.features) > 1:
                 rd_matrices = list()
