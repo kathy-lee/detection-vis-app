@@ -855,20 +855,19 @@ class RADIalRaw(Dataset):
 
         self.dicts = self.parse_recording(os.path.join(file_path, file_name).name)
         # for Each radar sample, find the clostest sample for each sensor
-        if(master is None):
+        if not master:
             # by default, we use the Radar as Matser sensor
-            if('radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts 
-               or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts):
+            if 'radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts:
                 print('Error: recording does not contains the 4 radar chips')
             
             keys =list(self.dicts.keys())
             self.keys = keys
             
-            if('gps' in self.dicts):
+            if 'gps' in self.dicts:
                 keys.remove('gps')
-            if('preview' in self.dicts):
+            if 'preview' in self.dicts:
                 keys.remove('preview')
-            if('None' in self.dicts):
+            if 'None' in self.dicts:
                 keys.remove('None')
             keys.remove('radar_ch0')
             keys.remove('radar_ch1')
@@ -893,7 +892,7 @@ class RADIalRaw(Dataset):
 
                 match['radar_ch3'] = i
 
-                if(len(idx0)==0 or len(idx1)==0 or len(idx2)==0):
+                if len(idx0)==0 or len(idx1)==0 or len(idx2)==0:
                     id_to_del.append(i)
                     nb_corrupted+=1
                     match['radar_ch0'] = -1
@@ -905,14 +904,14 @@ class RADIalRaw(Dataset):
                     match['radar_ch2'] = idx2[0]
 
                 
-                if(self.sync_mode=='timestamp'):
+                if self.sync_mode=='timestamp':
                     for k in keys:
-                        if(len(self.dicts[k]['timestamp'])>0):
+                        if len(self.dicts[k]['timestamp'])>0:
                             time_diff = np.abs(np.asarray(self.dicts[k]['timestamp']) - timestamp)
                             vmin = time_diff.min()
                             index_min = time_diff.argmin()
 
-                            if(vmin>tolerance):
+                            if vmin>tolerance:
                                 index_min=-1
                         else:
                             index_min=-1
@@ -924,7 +923,7 @@ class RADIalRaw(Dataset):
                         match[k] = index_min
                 else:
                     for k in keys:
-                        if(len(self.dicts[k]['timeofissue'])>0):
+                        if len(self.dicts[k]['timeofissue'])>0:
                             time_diff = np.abs(np.asarray(self.dicts[k]['timeofissue']) - timeofissue)
                             vmin = time_diff.min()
                             index_min = time_diff.argmin()
@@ -947,13 +946,11 @@ class RADIalRaw(Dataset):
             id_to_del = np.unique(np.asarray(id_to_del))
             id_total = np.arange(len(self.table))
             self.id_valid = np.setdiff1d(id_total, id_to_del)
-            if(not self.silent):
-            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
-            	print('Total corrupted frames: ',nb_corrupted/len(self.table)*100,'%')
             self.table = self.table[self.id_valid]
-
-
-        elif(master=='camera'):
+            if not silent:
+                print(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
+                print(f'Total corrupted frames: {nb_corrupted/len(self.table)*100:.2f}%')
+        elif master=='camera':
             # we discard the radar, and consider only camera, laser, can
             if('camera' not in self.dicts):
                 print('Error: recording does not contains camera')
@@ -1024,10 +1021,9 @@ class RADIalRaw(Dataset):
             id_to_del = np.unique(np.asarray(id_to_del))
             id_total = np.arange(len(self.table))
             id_to_keep = np.setdiff1d(id_total, id_to_del)
-            if(not self.silent):
-            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
             self.table = self.table[id_to_keep]
-
+            if not silent:
+                print(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
         else:
             print('Mode not supported')
             return
@@ -1551,6 +1547,8 @@ class CRUW(Dataset):
         # Load radar data
         try:
             data_id = index * self.stride
+            data_dict['start_frame'] = data_id
+            data_dict['end_frame'] = data_id + self.win_size * self.step - 1
             if self.model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
                 if isinstance(chirp_id, int):
                     radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
@@ -1611,9 +1609,6 @@ class CRUW(Dataset):
                 raise ValueError
             
             data_dict['RA'] = radar_npy_win
-            data_dict['start_frame'] = data_id
-            data_dict['end_frame'] = data_id + self.win_size * self.step - 1
-            #print(f"############################ {data_dict['start_frame']} - {data_dict['end_frame']}")
         except:
             # in case load npy fail
             data_dict['status'] = False
@@ -1923,7 +1918,7 @@ class CARRADA(Dataset):
 
                 rd_matrix = np.dstack(rd_matrices)
                 rd_matrix = np.rollaxis(rd_matrix, axis=-1)
-                rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
+                rd_frame = {'matrix': rd_matrix, 'gt_mask': rd_mask}
                 rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1935,7 +1930,7 @@ class CARRADA(Dataset):
 
                 ra_matrix = np.dstack(ra_matrices)
                 ra_matrix = np.rollaxis(ra_matrix, axis=-1)
-                ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
+                ra_frame = {'matrix': ra_matrix, 'gt_mask': ra_mask}
                 ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1948,7 +1943,7 @@ class CARRADA(Dataset):
                 ad_matrix = np.dstack(ad_matrices)
                 ad_matrix = np.rollaxis(ad_matrix, axis=-1)
                 # Fill fake mask just to apply transform
-                ad_frame = {'matrix': ad_matrix, 'mask': rd_mask.copy()}
+                ad_frame = {'matrix': ad_matrix, 'gt_mask': rd_mask.copy()}
                 ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1961,20 +1956,22 @@ class CARRADA(Dataset):
                 rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
                 ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
                 ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
-                frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
-                        'RA': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
+                frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['gt_mask'],
+                        'RA': ra_frame['matrix'], 'ra_mask': ra_frame['gt_mask'],
                         'AD': ad_frame['matrix']}
                 
             # Get ground truth boxes and labels
-            gt_boxes = []
-            gt_labels = []
-            if self.annos[self.seq_name][init_frame_name]:
-                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                    #obj_anno['range_doppler']['dense']
-                    gt_boxes.append(obj_anno[featurestr]['box'])
-                    gt_labels.append(obj_anno[featurestr]['label'])
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
+            # gt_boxes = []
+            # gt_labels = []
+            # if self.annos[self.seq_name][init_frame_name]:
+            #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+            #         #obj_anno['range_doppler']['dense']
+            #         gt_boxes.append(obj_anno[featurestr]['box'])
+            #         gt_labels.append(obj_anno[featurestr]['label'])
+            # frame.update({'label': gt_labels, 'boxes': gt_boxes})
+
+            # camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+            # frame.update({'image_path': camera_path})
         elif self.model_type == 'RadarCrossAttention':
             print(f"\nItem {index}:")
             raw_index = self.indexmapping[index]
