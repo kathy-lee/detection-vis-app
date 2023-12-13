@@ -38,6 +38,14 @@
     "losses": {
       "type": "bce"
     },
+    "preprocess": {
+      "normalize": false,
+      "aug": {
+        "mirror": 0.5,
+        "reverse": 0.5,
+        "gaussian": 0.0
+      }
+    },
     "win_size": 12,
     "train_step": 1,
     "train_stride": 4,
@@ -54,7 +62,7 @@
         "type": "wce_w10sdice",
         "weight": [0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]
       },
-      "win_size": 5,
+      "win_size": 1,
       "transformations": ["hflip", "vflip"],
       "norm_type": "tvt"
     },
@@ -64,7 +72,7 @@
         "type": "wce_w10sdice",
         "weight": [0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]
       },
-      "win_size": 5,
+      "win_size": 1,
       "transformations": ["hflip", "vflip"],
       "norm_type": "tvt"
     }
