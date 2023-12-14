@@ -43,10 +43,11 @@ def FFTRadNet_collate(batch):
     else:
         return {'RD': rd, 'encoded_label': encoded_label, 'box_label': box_label}
 
+
 def DAROD_collate(batch):
     # raw labels from CARRADA dataset: 1,2,3
     # raw labels from RADDet dataset: 1,2,3,4,5,6
-    radar = [torch.tensor(item['radar'].copy()) for item in batch]
+    radar = [torch.tensor(item['RD'].copy()) for item in batch]
     gt_labels = [torch.tensor(item['label']) for item in batch]
     [ item.update({'boxes': np.array(item['boxes'])}) for item in batch ]
     gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
@@ -61,7 +62,8 @@ def DAROD_collate(batch):
         padded_bboxes[idx, :box.shape[0]] = box
         padded_labels[idx, :label.shape[0]] = label
     # print(f"padding: {gt_labels} -> {padded_labels}")
-    return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
+    return {'RD': radar, 'label': padded_labels, 'boxes': padded_bboxes}
+
 
 def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
@@ -104,8 +106,8 @@ def default_collate(batch):
         # transposed = zip(*batch)
         # return [cr_collate(samples) for samples in transposed]
         return batch
-
-    raise TypeError(default_collate_err_msg_format.format(elem_type))
+    else:
+        raise TypeError(default_collate_err_msg_format.format(elem_type))
 
 
 def decode(map,threshold):
