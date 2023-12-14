@@ -1455,12 +1455,12 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
 def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, iou_thresholds=[0.5]):
     net.eval()
     n_class = net.n_class
-
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+
     n_class = n_class - 1 # Ignore 0 class which is BG
     tp_dict = dict()
-    val_loss = RunningAverage()
     for class_id in range(n_class):
         tp_dict[class_id] = {
             "tp": [[] for _ in range(len(iou_thresholds))],
@@ -1468,40 +1468,38 @@ def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_t
             "scores": [[] for _ in range(len(iou_thresholds))],
             "total_gt": 0
         }
-    with torch.set_grad_enabled(False):
-        for iter, data in enumerate(dataloader):
-            for key in data:
-                if isinstance(data[key], str) or isinstance(data[key], list):
-                    continue
+    
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
-            
-            inputs = data['RD']
+        
+        inputs = data['RD']
+        with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            # loss
+        
+        if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            val_loss(loss)
-            print("Get loss, begin evaluation")
-            if outputs["decoder_output"] is not None:
-                pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
-                # print(f"gt_labels:{gt_labels}")
-                # print(f"pred_labels:{pred_labels}")
-                pred_labels = pred_labels - 1
-                gt_labels = gt_labels - 1
-                for batch_id in range(pred_boxes.shape[0]):
-                    tp_dict = accumulate_tp_fp(pred_boxes.cpu().numpy()[batch_id], pred_labels.cpu().numpy()[batch_id],
-                                                    pred_scores.cpu().numpy()[batch_id], data['gt_boxes'].cpu().numpy()[batch_id],
-                                                    data['gt_labels'].cpu().numpy()[batch_id], tp_dict,
-                                                    iou_thresholds=iou_thresholds)
-            kbar.update(iter)
+            running_loss += loss.item() * batch_size
 
-    print("******************* Eval metrics******************")
+        if outputs["decoder_output"] is not None:
+            pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
+            pred_labels = pred_labels - 1
+            gt_labels = data['label'] - 1
+            for batch_id in range(pred_boxes.shape[0]):
+                tp_dict = accumulate_tp_fp(pred_boxes.cpu().numpy()[batch_id], pred_labels.cpu().numpy()[batch_id],
+                                                pred_scores.cpu().numpy()[batch_id], data['boxes'].cpu().numpy()[batch_id],
+                                                gt_labels.cpu().numpy()[batch_id], tp_dict,
+                                                iou_thresholds=iou_thresholds)
+        kbar.update(iter)
+
     ap_dict = AP(tp_dict, n_class, iou_thresholds)
-    # Added
-    running_loss = val_loss.total
     mAP = np.mean(ap_dict["mean"]["AP"])
     mAR = np.mean(ap_dict["mean"]["recall"])
-    print("****************** Eval ended **********************")
-    return {'loss': running_loss.cpu(), 'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs):
