@@ -123,8 +123,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     else:
                         samples_info.append([file['parse'], file['name'], file['id'], i])
                     counter += 1
-                    # if skip_empty_label and len(dataset_inst[i]['label']) == 0:
-                    #     continue
+                    if skip_empty_label and len(dataset_inst[i]['label']) == 0:
+                        continue
                     valid_ids.append(counter-1) 
             logger.debug(f"concat {len(datafiles)} dataset(s).")
             dataset = ConcatDataset(dataset_inst_list)
