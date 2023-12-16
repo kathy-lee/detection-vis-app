@@ -1656,7 +1656,10 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
     eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
     logger.info("AP_total: {:.4f} | AR_total: {:.4f}".format(stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+    result = {'mAP': stats[0], 'mAR': stats[1], 'mIoU': 0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
 def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, thresh=2):
