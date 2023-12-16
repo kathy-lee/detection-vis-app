@@ -2654,14 +2654,22 @@ class UWCR(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
-        labels = pd.read_csv(self.label_filenames[idx]).values.tolist() 
+        filename = self.label_filenames[idx]
+        try:
+            labels = pd.read_csv(filename)
+        except pd.errors.EmptyDataError:
+            return []
+
         gt = []
-        if labels:
-            for obj in labels:
-                category = self.label_map[obj[1]]
-                center_x, center_y, width, length = obj[2:]
-                if feature_name == "RA": 
-                    gt.append([center_x - width/2, center_y - length/2, center_x + width/2, center_y + length/2, category])
+        for _, obj in labels.iterrows():
+            category = self.label_map[obj[1]]
+            center_x, center_y, width, length = obj[2:]
+
+            if feature_name == "RA":
+                bbox = [center_x - width / 2, center_y - length / 2, 
+                        center_x + width / 2, center_y + length / 2, 
+                        category]
+                gt.append(bbox)
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
