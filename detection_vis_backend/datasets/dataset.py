@@ -2726,8 +2726,8 @@ class UWCR(Dataset):
                 for obj in labels:
                     category = self.label_map[int(obj[1])]
                     # class_id = self.class_ids[category]
-                    x = int(float(obj[2]))
-                    y = int(float(obj[3]))
+                    x = obj[2]
+                    y = obj[3]
                     distance = math.sqrt(x ** 2 + y ** 2)
                     angle = math.degrees(math.atan(x / y))  # in degree
                     if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
