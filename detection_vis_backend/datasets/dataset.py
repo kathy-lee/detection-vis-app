@@ -25,6 +25,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 from mmwave import dsp
 from mmwave.dsp.utils import Window
+from loguru import logger
 
 
 from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map
@@ -1779,7 +1780,7 @@ class CARRADA(Dataset):
         self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
         
         self.model_type = model_cfg['class']
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD') :
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             self.process_signal = True
             self.transformations = get_transformations(transform_names=train_cfg['transformations'])
             self.add_temp = True
@@ -1825,7 +1826,8 @@ class CARRADA(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD') :
+        logger.debug(f"\nData item index: {index}")
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             frame_id = index + self.win_frames - 1
             init_frame_name = "{:06d}".format(frame_id)
             frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
@@ -1854,24 +1856,35 @@ class CARRADA(Dataset):
                 else:
                     is_hflip = False
                 feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                # Expand one more dim
-                if self.add_temp:
-                    if isinstance(self.add_temp, bool):
-                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
-                    else:
-                        assert isinstance(self.add_temp, int)
-                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
-                # Apply normalization
-                feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-                # Reshape 
-                if self.model_type == 'RECORDNoLstmMulti':
-                    c, t, h, w = feature_frame['matrix'].shape
-                    feature_frame['matrix'] = feature_frame['matrix'].reshape(c*t, h, w)
-                elif self.model_type == 'RECORDNoLstm':
-                    c, t, h, w = feature_frame['matrix'].shape
-                    assert t == 1
-                    feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
-                frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
+                
+                if  self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
+                    # Expand one more dim
+                    if self.add_temp:
+                        if isinstance(self.add_temp, bool):
+                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
+                        else:
+                            assert isinstance(self.add_temp, int)
+                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
+                    # Apply normalization
+                    feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
+                    if self.model_type == 'RECORDNoLstmMulti':
+                        c, t, h, w = feature_frame['matrix'].shape
+                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c*t, h, w)
+                    elif self.model_type == 'RECORDNoLstm':
+                        c, t, h, w = feature_frame['matrix'].shape
+                        assert t == 1
+                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
+                    frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
+                else:
+                    # Get ground truth boxes and labels for DAROD network
+                    gt_boxes = []
+                    gt_labels = []
+                    if self.annos[self.seq_name][init_frame_name]:
+                        for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                            #obj_anno['range_doppler']['dense']
+                            gt_boxes.append(obj_anno[featurestr]['box'])
+                            gt_labels.append(obj_anno[featurestr]['label'])
+                    frame = {self.features[0]: feature_frame['matrix'], 'label': gt_labels, 'boxes': gt_boxes}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
@@ -1959,21 +1972,10 @@ class CARRADA(Dataset):
                 frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['gt_mask'],
                         'RA': ra_frame['matrix'], 'ra_mask': ra_frame['gt_mask'],
                         'AD': ad_frame['matrix']}
-                
-            # Get ground truth boxes and labels
-            # gt_boxes = []
-            # gt_labels = []
-            # if self.annos[self.seq_name][init_frame_name]:
-            #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-            #         #obj_anno['range_doppler']['dense']
-            #         gt_boxes.append(obj_anno[featurestr]['box'])
-            #         gt_labels.append(obj_anno[featurestr]['label'])
-            # frame.update({'label': gt_labels, 'boxes': gt_boxes})
 
             # camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
             # frame.update({'image_path': camera_path})
         elif self.model_type == 'RadarCrossAttention':
-            print(f"\nItem {index}:")
             raw_index = self.indexmapping[index]
             frame = {'image_path': self.image_filenames[raw_index]}
             ra_map = np.zeros((self.win_frames, 256, 256))
@@ -2016,7 +2018,7 @@ class CARRADA(Dataset):
             
             for key,value in frame.items():
                 if key != 'image_path':
-                    print(f"{key}: {value.shape}")
+                    logger.debug(f"{key}: {value.shape}")
         else:
             raise ValueError(f"CARRADA dataset doesn't support the model type({self.model_type}) training/inference.")
         return frame
@@ -2154,7 +2156,7 @@ class RADDetDataset(Dataset):
 
         if model_cfg["class"] == "RADDet":
             self.model_type = "RADDet"
-            self.anchor_boxes = np.array(train_cfg["anchor_boxes"])
+            self.anchor_boxes = np.array(model_cfg["anchor_boxes"])
             self.headoutput_shape = [3,16,16,4,78]
             self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
         else:
@@ -2514,7 +2516,6 @@ class UWCR(Dataset):
                 self.label_filenames = self.label_filenames[:id_min - id_max + 1]
 
         self.frame_sync = len(self.image_filenames) 
-        print(f"Parsing {file_name}: {self.frame_sync} sync frames({id_max} - {id_min})")
         with open(self.config, 'r') as f:
             self.radar_cfg = json.load(f)
         self.n_angle = 128
@@ -2687,6 +2688,7 @@ class UWCR(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
+        logger.info(f"Data item index: {index}")
         data_id = index * self.stride
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
@@ -2753,7 +2755,8 @@ class UWCR(Dataset):
             confmap_gt = confmap_gt[:self.n_class]
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
-            assert np.shape(obj_info)[0] == self.win_size
+        
+        assert len(obj_info) == self.win_size
         data_dict = {'RA': radar_npy_win_ra, 'RD': radar_npy_win_rv, 'AD': radar_npy_win_va, \
                      'confmap_gt': confmap_gt, 'gt_label': obj_info, \
                      'seq_name': self.seq_name,  'start_frame': data_id, 'end_frame': data_id + self.win_size * self.step - 1}
