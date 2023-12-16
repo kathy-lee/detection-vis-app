@@ -14,6 +14,7 @@ from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 from copy import deepcopy
+from loguru import logger
 
 
 from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
@@ -1513,10 +1514,13 @@ def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid,
     return evalImgs
 
 
-def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_type, device):
+def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
 
     net.eval()
     n_class = net.n_class
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     classes = ["pedestrian", "cyclist", "car"] 
@@ -1528,7 +1532,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
     confmap_shape = (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
     iter_ = init_genConfmap
-    for i in range(train_cfg['win_size'] - 1):
+    for i in range(train_config['win_size'] - 1):
         while iter_.next is not None:
             iter_ = iter_.next
         iter_.next = ConfmapStack(confmap_shape)
@@ -1544,13 +1548,15 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
     id_res = 1
     for iter, data in enumerate(dataloader):
         # get gt info
-        for i in range(train_cfg['train_stride']):
+        for i in range(train_config['train_stride']):
             if data['gt_label'][0][i]:
                 for obj in data['gt_label'][0][i]:
                     ridx, aidx, category = obj
                     rng = rng_grid[ridx]
                     agl = agl_grid[aidx]
                     classid = get_class_id(category, classes)
+                    if classid == -1000: 
+                        continue
                     gt_obj = {'id': id_gt, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
                                     'classid': classid, 'score': 1.0}
                     gt_objs[iter, classid].append(gt_obj)
@@ -1559,9 +1565,8 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
 
         load_time = time.time() - load_tic
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
         
         inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
                 
@@ -1575,9 +1580,13 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
         
         tic = time.time()
         with torch.set_grad_enabled(False):
-            output = net(inputs)
+            outputs = net(inputs)
         
-        confmap_pred = output['confmap_pred'][-1].cpu().detach().numpy()  
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+
+        confmap_pred = outputs['confmap_pred'][-1].cpu().detach().numpy()  
         confmap_pred = np.expand_dims(confmap_pred, axis=0)
         infer_time = time.time() - tic
         total_time += infer_time
@@ -1591,9 +1600,9 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
 
         process_tic = time.time()
         # save_path = os.path.join(save_dir, seq_name + '_rampcnn_res.txt')
-        for i in range(train_cfg['train_stride']): # test_stride
+        for i in range(train_config['train_stride']): # test_stride
             total_count += 1
-            res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+            res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             # cur_frame_id = start_frame_id + i
             # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
             for obj in res_final:
@@ -1613,7 +1622,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
             # cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
-                res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+                res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
                 # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
                 for obj in res_final:
                     class_id, ridx, aidx, conf = obj
@@ -1628,7 +1637,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
                 init_genConfmap = init_genConfmap.next
                 # offset += 1
                 # cur_frame_id += 1
-        print(f"Sample {iter}/{len(dataloader)} finished")
+        kbar.update(iter)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
@@ -1638,7 +1647,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
         #         (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
-    print("ave time: %f" % (total_time / total_count))
+    logger.info("Average Infer time: {:.4f} s".format(total_time / total_count))
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
@@ -1646,12 +1655,15 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, features, output_dir, eval_t
     evalImgs = evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
     eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("AP_total: %.4f | AR_total: %.4f" % (stats[0] * 100, stats[1] * 100))
+    logger.info("AP_total: {:.4f} | AR_total: {:.4f}".format(stats[0] * 100, stats[1] * 100))
     return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
 
 
-def RadarCrossAttention_evaluation(net, loader, train_config, features, output_dir, eval_type, device, thresh=2):
+def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, thresh=2):
     net.eval()
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
 
     cls = dict()
     temp_dict = {'grd_no':0,'Conf':[],'O_P':[],'O_T':[],'TP':[],'P':[],'R':[],'AP':[],'asc':{'gt_r':[],'gt_a':[],'pd_r':[],'pd_a':[]}}
@@ -1661,15 +1673,18 @@ def RadarCrossAttention_evaluation(net, loader, train_config, features, output_d
 
     prev_size = 0
 
-    for idx, data in enumerate(loader):
+    for idx, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
         
         inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
         with torch.set_grad_enabled(False):
-            output = net(inputs)
+            outputs = net(inputs)
+
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
 
         if data['RA'].shape[0] != prev_size:
             mask, peak_cls = create_default(data["gt_mask"].size(), kernel_window=(3,5))
@@ -1678,15 +1693,15 @@ def RadarCrossAttention_evaluation(net, loader, train_config, features, output_d
         
         prev_size = data['RA'].shape[0]
 
-        pred_map = torch.sigmoid(output["pred_mask"])
-        pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
+        pred_map = torch.sigmoid(outputs["pred_mask"])
+        pred_c = 8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
 
-        print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
+        # pred_c shape: torch.Size([16, 2, 256, 256])
         cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                tr_o=data["gt_orent_map"], pred_o=output["pred_orent"], cls=cls,
+                                tr_o=data["gt_orent_map"], pred_o=outputs["pred_orent"], cls=cls,
                                 thresh=thresh, device=device)
-        print(f"item {idx} finished")
+        kbar.update(iter)
 
     for idx in range(len(cls)):
         categ = cls[f"{idx}"]
@@ -1792,5 +1807,6 @@ for i in RECORD_subtypes:
 eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
 eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
 eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
+eval_func_dict["DAROD", "CARRADA"] = DAROD_evaluation
 eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
 eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation
