@@ -70,7 +70,7 @@ class CrossAttention(nn.Module):
 class FocalLoss_weight(nn.Module):
     def __init__(self,weights,alpha,beta):
         super(FocalLoss_weight,self).__init__()
-        self.weights = weights
+        self.register_buffer('weights', weights)
         self.alpha = alpha
         self.beta = beta
 
@@ -78,7 +78,6 @@ class FocalLoss_weight(nn.Module):
         BCE_loss = F.binary_cross_entropy_with_logits(input, target, reduction='none')
         pt = torch.exp(-BCE_loss) # prevents nans when probability 0
         F_loss = self.weights * (1-pt)**self.alpha * BCE_loss
-        
         return F_loss.sum()
 
 class CenterLoss(nn.Module):
@@ -86,13 +85,11 @@ class CenterLoss(nn.Module):
         super(CenterLoss,self).__init__()
     
     def forward(self,pred_map,target_map):
-
         target_map= target_map.flatten()
         idx = torch.nonzero(target_map)
         target_map = ((target_map/8)+0.5)
         pred_map = pred_map.flatten()
         c_loss = F.binary_cross_entropy_with_logits(pred_map[idx], target_map[idx], reduction='none')
-        #c_loss = F.binary_cross_entropy_with_logits(pred_map[idx], target_map[idx], reduction='none')
         return c_loss.sum()
 
 class L2Loss(nn.Module):
