@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.modules.container import Sequential
 from torchvision.transforms.transforms import Sequence
 from abc import abstractmethod
+from loguru import logger
 
 
 # import sys
@@ -1007,6 +1008,10 @@ class RadarCrossAttention(nn.Module):
         self.cls_criterion = FocalLoss_weight(cls_weight, alpha=2, beta=0)
         self.center_criterion = CenterLoss()
         self.orent_criterion = L2Loss()
+
+        self.cls_criterion = self.cls_criterion.to(device)
+        self.center_criterion = self.center_criterion.to(device)
+        self.orent_criterion = self.orent_criterion.to(device)
         return
 
     def get_loss(self, pred, target, config):
