@@ -10,6 +10,7 @@ import cv2
 import polarTransform
 import torch.nn as nn
 
+from loguru import logger
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
@@ -133,7 +134,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             # input = (torch.tensor(data['RD']).unsqueeze(0).to(device).float(), 
             #          torch.tensor(data['RA']).unsqueeze(0).to(device).float(), 
             #          torch.tensor(data['AD']).unsqueeze(0).to(device).float())
-            input = {feature: data[feature].unsqueeze(0).to(device).float() for feature in parameters["features"]}
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
             confmap_pred_ra = output['ra'].detach().cpu().numpy()
             confmap_pred_rd = output['rd'].detach().cpu().numpy()
@@ -184,7 +185,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = {"RD": pred_objs}
         elif model_type == "RAMP_CNN":
             #input = (data['RA'].to(device).float(), data['RD'].to(device).float(), data['AD'].to(device).float())
-            input = {feature: data[feature].unsqueeze(0).to(device).float() for feature in parameters["features"]}
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
             confmap_pred = output['confmap_pred'].cpu().detach().numpy() 
             pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
@@ -200,25 +201,28 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = {"RA": pred_objs.tolist()}
         elif model_type == "RadarCrossAttention":
             #input = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
-            input = {feature: data[feature].unsqueeze(0).to(device).float() for feature in parameters["features"]}
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
-            pred_map = torch.sigmoid(output["pred_mask"])
+            pred_map = torch.sigmoid(output["pred_mask"]).detach().cpu()
             pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
-            pred_o = output["pred_orent"]
-            mask, peak_cls = create_default(pred_map.size(), kernel_window=(3,5))
+            pred_c = pred_c.detach().cpu().numpy()
+            pred_o = output["pred_orent"].detach().cpu().numpy()
+            mask, peak_cls = create_default(pred_map.shape, kernel_window=(3,5))
             pred_intent, pred_idx = peaks_detect(pred_map, mask, peak_cls, heat_thresh=0.6)
-            pred_idx= distribute(pred_idx,device)
+            pred_idx= distribute(pred_idx)
             pred_idx = update_peaks(pred_c, pred_idx)
             pred_idx, pred_intent= association(pred_intent, pred_idx, device)
+            logger.debug(pred_idx)
+
             ra_objs = []
             for cnt, cord in enumerate(pred_idx):
                 p_cls, p_row, p_col = int(cord[1]), cord[2], cord[3]
                 orientation = orent(pred_o[p_row,::], int(p_row//4), int(p_col//4), pred=True)
                 ra_objs.append([p_row, p_col, p_cls, pred_intent[cnt], orientation]) # [row_id, col_id, cls_id, confidence, heading]
-                print(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
+                logger.debug(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
                     Range: {50*p_row/256}, Angle(deg): {p_col*57.29*2/256 - 57.29},\
                     Heading: {orientation}")  
-            pred_objs = {"RA": ra_objs.tolist()}
+            pred_objs = {"RA": ra_objs}
         else:
             raise ValueError(f"Inference of the chosen model type {model_type} is not supported")
 
