@@ -231,7 +231,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             plt.gca().add_patch(rect)
             plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
       
-      if "RA" in pred_objs.keys():
+      if "RA" in pred_objs.keys() and len(pred_objs["RA"]) != 0:
         if len(pred_objs["RA"][0]) == 4:
           classes = ["pedestrian", "cyclist", "car"]
           for obj in pred_objs["RA"]:

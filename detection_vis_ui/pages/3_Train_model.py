@@ -245,7 +245,7 @@ if train_mode == train_modes[0]:
         res = response.json()
         st.session_state.model_chosen = res["model_name"]
         # show evaluation result
-        st.write("Model Evaluation")
+        st.write("Model Evaluation Result:")
         st.write("Val dataset")
         val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
         st.table(val_eval)
@@ -303,7 +303,7 @@ if train_mode == train_modes[1]:
         res = response.json()
         st.session_state.model_chosen = res["model_name"]
         # show evaluation result
-        st.write("Model Evaluation")
+        st.write("Model Evaluation Result:")
         st.write("Val dataset")
         val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
         st.table(val_eval)
