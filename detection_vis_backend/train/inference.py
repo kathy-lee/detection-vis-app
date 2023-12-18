@@ -188,7 +188,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
             confmap_pred = output['confmap_pred'].cpu().detach().numpy() 
-            pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            pred_objs = post_process_single_frame(confmap_pred[0,:,0,:,:], parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
             # filter invalid predictions
             mask = pred_objs[:, 0] != -1 
             pred_objs = pred_objs[mask]
