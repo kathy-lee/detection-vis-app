@@ -1826,7 +1826,7 @@ class CARRADA(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
-        logger.debug(f"\nData item index: {index}")
+        logger.debug(f"Data item index: {index}")
         if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             frame_id = index + self.win_frames - 1
             init_frame_name = "{:06d}".format(frame_id)
@@ -2554,7 +2554,10 @@ class UWCR(Dataset):
         for i in range(data.shape[1]):
             for j in range(data.shape[2]):
                 win_data[:, i, j] = np.multiply(data[:, i, j], hanning_win)
-        rd = np.fft.fft(win_data, self.n_range, axis=0)
+        rd = np.fft.fft(win_data, self.n_range, axis=0) # (128, 8, 255)
+        
+        if for_visualize:
+            rd = np.abs(rd[:, 0, :])
         return rd
 
     def get_RV_VA_slice(self, idx=None, for_visualize=False):
@@ -2614,18 +2617,23 @@ class UWCR(Dataset):
 
         fft_data_raw = np.fft.fft(win_data, self.n_angle, axis=1)
         fft3d_data_cmplx = np.fft.fftshift(fft_data_raw, axes=1)
-        filter_static =  False
-        keep_complex = False
-        if keep_complex:
-            fft3d_data = fft3d_data_cmplx
+
+        if for_visualize:
+            ra = np.abs(fft3d_data_cmplx[:, :, 0])
         else:
-            fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
-            fft_data_imag = np.expand_dims(fft3d_data_cmplx.imag, axis=3)
-            # output format [range, angle, chirps, real/imag] : (128, 128, 255, 2)
-            fft3d_data = np.float32(np.concatenate((fft_data_real, fft_data_imag), axis=3))
-        if filter_static:
-            fft3d_data = fft3d_data - np.mean(fft3d_data, axis=2, keepdims=True)
-        return fft3d_data
+            filter_static =  False
+            keep_complex = False
+            if keep_complex:
+                ra = fft3d_data_cmplx
+            else:
+                fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
+                fft_data_imag = np.expand_dims(fft3d_data_cmplx.imag, axis=3)
+                # output format [range, angle, chirps, real/imag] : (128, 128, 255, 2)
+                ra = np.float32(np.concatenate((fft_data_real, fft_data_imag), axis=3))
+            
+            if filter_static:
+                ra = ra - np.mean(ra, axis=2, keepdims=True)
+        return ra
 
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
