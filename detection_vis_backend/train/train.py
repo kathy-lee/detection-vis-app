@@ -383,7 +383,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 for feature in features:
                     data.pop(feature)
                 loss = net.get_loss(outputs, data, train_config)
-                logger.debug('get loss')
+                logger.info(f"Train sample {i} loss: {loss}")
                 loss.backward()
                 optimizer.step()
                 running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
@@ -439,9 +439,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         
         df_val_eval.to_csv(val_eval_path, index=False)
 
-        logger.info(f'=========== Evaluation of Test data ===========')
+        logger.info(f'=========== Evaluation on Test data ===========')
         if callable(eval_func_dict[model_type, dataset_type]):
             eval = eval_func_dict[model_type, dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
+            logger.info('Evaluation on Test data finished.')
         else:
             raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
         
