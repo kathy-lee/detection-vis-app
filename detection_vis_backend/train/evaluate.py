@@ -64,7 +64,7 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
 
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
-    for i, data in enumerate(loader):
+    for iter, data in enumerate(loader):
         for key in data:
             if isinstance(data[key], str) or isinstance(data[key], list):
                 continue
@@ -74,9 +74,9 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
             outputs = net(inputs)
 
         if eval_type == "val":
-            data.pop('RD')
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * inputs.size(0)
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         out_obj = outputs['Detection'].detach().cpu().numpy().copy()
         out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
@@ -92,9 +92,9 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
             predictions['label']['freespace'].append(true_map)   
 
         if eval_type == "val":
-            kbar.update(i, values=[("loss", loss.item())])
+            kbar.update(iter, values=[("loss", loss.item())])
         else:
-            kbar.update(i)
+            kbar.update(iter)
   
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
 
@@ -719,9 +719,9 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         total_time += infer_time
 
         if eval_type == "val":
-            data.pop('RA')
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
         
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
@@ -846,9 +846,12 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
         
         with torch.set_grad_enabled(False):
             confmap_pred = net(inputs)
+
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
 
@@ -1004,9 +1007,13 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
         
         metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
-        kbar.update(iter)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     metrics_dict = get_metrics(metrics)
 
@@ -1037,10 +1044,14 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
         ra_metrics.add_batch(torch.argmax(data['ra_mask'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
-        kbar.update(iter)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     metrics_dict = dict()
     metrics_dict['range_doppler'] = get_metrics(rd_metrics)
@@ -1200,6 +1211,7 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         pred = outputs['pred'].detach().cpu().numpy()
         raw_boxes = data['boxes'].detach().cpu().numpy()
@@ -1214,7 +1226,11 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
                                     net.input_size, ap_all_class, \
                                     tp_iou_threshold=train_config["mAP_iou3d_threshold"])
             mean_ap_test += mean_ap
-        kbar.update(iter)
+
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     for ap_class_i in ap_all_class:
         if len(ap_class_i) == 0:
@@ -1482,6 +1498,7 @@ def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_t
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         if outputs["decoder_output"] is not None:
             pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
@@ -1492,7 +1509,10 @@ def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_t
                                                 pred_scores.cpu().numpy()[batch_id], data['boxes'].cpu().numpy()[batch_id],
                                                 gt_labels.cpu().numpy()[batch_id], tp_dict,
                                                 iou_thresholds=iou_thresholds)
-        kbar.update(iter)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     ap_dict = AP(tp_dict, n_class, iou_thresholds)
     mAP = np.mean(ap_dict["mean"]["AP"])
@@ -1585,6 +1605,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         confmap_pred = outputs['confmap_pred'][-1].cpu().detach().numpy()  
         confmap_pred = np.expand_dims(confmap_pred, axis=0)
@@ -1637,7 +1658,10 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                 init_genConfmap = init_genConfmap.next
                 # offset += 1
                 # cur_frame_id += 1
-        kbar.update(iter)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
@@ -1676,7 +1700,7 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
 
     prev_size = 0
 
-    for idx, data in enumerate(dataloader):
+    for iter, data in enumerate(dataloader):
         for key in data:
             if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
@@ -1688,6 +1712,7 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
             running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         if data['RA'].shape[0] != prev_size:
             mask, peak_cls = create_default(data["gt_mask"].size(), kernel_window=(3,5))
@@ -1704,7 +1729,11 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
                                 tr_o=data["gt_orent_map"], pred_o=outputs["pred_orent"], cls=cls,
                                 thresh=thresh, device=device)
-        kbar.update(iter)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+    logger.info("Val data loop finished.")
 
     for idx in range(len(cls)):
         categ = cls[f"{idx}"]
@@ -1722,10 +1751,14 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         categ['AP'] = np.trapz(P,R)
         prec = np.sum(categ['TP'])
         rec =  len(categ['TP'])
-        print(idx, 'AP:',categ['AP'],'P:' f"{prec/rec}" , 'R:',f"{prec/GT}", 'GT:'f" {GT}")
-        #print('Heading Accuracy', cls[f"{idx}"]['O_T'],'\n',cls[f"{idx}"]['O_P'])
+        logger.info(f"{idx} | AP: {categ['AP']}, P: {prec / rec}, R: {prec / GT}, GT: {GT}, Heading Accuracy: {cls[f'{idx}']['O_T']}, {cls[f'{idx}']['O_P']}")
         cls[f"{idx}"] = categ
-    return {'loss':0, 'mAP':0, 'mAR':0, 'mIoU':0}
+    
+    mAP = (cls['0']['AP'] + cls['1']['AP'] + cls['2']['AP']) / 3
+    result = {'mAP': mAP, 'mAR': 0, 'mIoU': 0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
 def metrics_center(grd_map, pred_map, pred_c, mask, 
