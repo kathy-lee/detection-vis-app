@@ -31,9 +31,9 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
     
     for i, data in enumerate(loader):
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+
         inputs = data['RD']
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
@@ -66,9 +66,9 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
     for iter, data in enumerate(loader):
         for key in data:
-            if isinstance(data[key], str) or isinstance(data[key], list):
-                continue
-            data[key] = data[key].to(device).float()
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        
         inputs = data['RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
@@ -702,7 +702,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         load_time = time.time() - load_tic
 
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+            if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
         
         inputs = data['RA']
@@ -824,18 +824,21 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
     batch_size = train_config['dataloader'][eval_type]['batch_size']
     sequences = []
     for iter, data in enumerate(dataloader):
-        for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
-                data[key] = data[key].to(device).float()
-
-        inputs = data['RA']
-        
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
 
-        frame_id = data['end_frame']
+        for key in data:
+            logger.debug(f"data contains key: {key}")
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+                logger.debug(f"Put {key} feature to GPU: {data[key]}")
+
+        inputs = data['RA']
+        logger.debug('get input data')
+
+        frame_id = int(data['end_frame'].item())
         if frame_id == train_config['win_size']-1 and type(net).__name__ not in ('RECORDNoLstm', 'RECORDNoLstmMulti'):
             for tmp_frame_id in range(frame_id):
                 tmp_ra_maps = inputs[:, :, :tmp_frame_id+1]
@@ -846,20 +849,21 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
         
         with torch.set_grad_enabled(False):
             confmap_pred = net(inputs)
+        logger.debug('get network output')
+        
+        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
+        write_dets_results_single_frame(res_final, frame_id, save_path, classes)
 
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
             running_loss += loss.item() * batch_size
             logger.info(f"Val sample {iter} loss: {loss}")
 
-        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
-        write_dets_results_single_frame(res_final, frame_id, save_path, classes)
-
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
             kbar.update(iter)
-    print(f'record_res.txt file(s) for {sequences} created')
+    logger.info(f'record_res.txt file(s) for {sequences} created')
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
@@ -876,16 +880,16 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
         if evalImgs:
             eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
             stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-            print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
             n_frames_all += n_frame
             evalImgs_all.extend(evalImgs)
         else:
-            print(f"{seq_name}_rod_res.txt is empty.")
+            logger.info(f"{seq_name}_rod_res.txt is empty.")
 
     if evalImgs_all:    
         eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
         result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
     else:
         result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
@@ -997,7 +1001,7 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
     batch_size = train_config['dataloader'][eval_type]['batch_size']
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+            if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
         
         inputs = data[features[0]]
@@ -1034,7 +1038,7 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
     ra_metrics = Evaluator(net.n_class) 
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+            if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
         
         inputs = {feature: data[feature] for feature in features}
@@ -1201,7 +1205,7 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
     
     for iter, data in enumerate(dataloader):
         for key in data:
-            if isinstance(data[key], torch.Tensor) and data[key].numel() > batch_size:
+            if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
 
         inputs = data["RAD"]
