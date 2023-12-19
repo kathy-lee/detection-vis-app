@@ -28,7 +28,7 @@ from mmwave.dsp.utils import Window
 from loguru import logger
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -1613,10 +1613,8 @@ class CRUW(Dataset):
         except:
             # in case load npy fail
             data_dict['status'] = False
-            if not os.path.exists('./tmp'):
-                os.makedirs('./tmp')
             log_name = 'loadnpyfail-' + time.strftime("%Y%m%d-%H%M%S") + '.txt'
-            with open(os.path.join('./tmp', log_name), 'w') as f_log:
+            with open(os.path.join(self.feature_path, log_name), 'w') as f_log:
                 f_log.write('npy path: ' + self.radar_paths[frameid][chirp_id] + \
                             '\nframe indices: %d:%d:%d' % (data_id, data_id + self.win_size * self.step, self.step))
             return data_dict
@@ -2530,6 +2528,8 @@ class UWCR(Dataset):
                         5: 'bus',
                         7: 'truck',
                         80: 'cyclist'}
+        self.rng_grid = confmap2ra(self.radar_cfg, name='range')
+        self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
         return 
 
     def get_image(self, idx=None, for_visualize=False): 
@@ -2664,19 +2664,32 @@ class UWCR(Dataset):
     def get_label(self, feature_name, idx=None):
         filename = self.label_filenames[idx]
         try:
-            labels = pd.read_csv(filename)
+            labels = pd.read_csv(filename, header=None).values.tolist()
         except pd.errors.EmptyDataError:
             return []
-
+        
         gt = []
-        for _, obj in labels.iterrows():
-            category = self.label_map[obj[1]]
-            center_x, center_y, width, length = obj[2:]
-
-            if feature_name == "RA":
-                bbox = [center_x - width / 2, center_y - length / 2, 
-                        center_x + width / 2, center_y + length / 2, 
-                        category]
+        if feature_name == "RA":
+            logger.debug(filename)
+            logger.debug(labels)
+            for obj in labels:
+                category = self.label_map[obj[1]]
+                center_x, center_y, width, length = obj[2:]
+                # convert gt obj to range-angle 
+                distance = math.sqrt(center_x ** 2 + center_y ** 2)
+                angle = math.degrees(math.atan(center_x / center_y))  # in degree
+                logger.info(f"{distance}m, {angle}deg, {category}")
+                if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
+                    continue
+                if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
+                    continue
+                rng_idx, agl_idx = ra2idx(distance, math.radians(angle), self.rng_grid, self.agl_grid)
+            
+                # bbox = [center_x - width / 2, center_y - length / 2, 
+                #         center_x + width / 2, center_y + length / 2, 
+                #         category]
+                bbox = [int(rng_idx), int(agl_idx), category]
+                logger.debug(bbox)
                 gt.append(bbox)
         return gt
     
@@ -2695,8 +2708,6 @@ class UWCR(Dataset):
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
-        self.rng_grid = confmap2ra(self.radar_cfg, name='range')
-        self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
         self.noise_channel = False
         return 
 
