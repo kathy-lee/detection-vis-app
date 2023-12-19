@@ -4,7 +4,6 @@ import os
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import logging
 import cv2
 import polarTransform
 import re
@@ -14,6 +13,7 @@ import math
 
 from shapely.geometry import Polygon
 from typing import Optional
+from loguru import logger
 
 
 # def FFTRadNet_collate(batch):
@@ -61,7 +61,7 @@ def DAROD_collate(batch):
     for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
         padded_bboxes[idx, :box.shape[0]] = box
         padded_labels[idx, :label.shape[0]] = label
-    # print(f"padding: {gt_labels} -> {padded_labels}")
+    logger.debug(f"padding: {gt_labels} -> {padded_labels}")
     return {'RD': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 
@@ -262,7 +262,7 @@ def get_ols_btw_objects(obj1, obj2):
     }
 
     if obj1['class_id'] != obj2['class_id']:
-        print('Error: Computing OLS between different classes!')
+        logger.error('Error: Computing OLS between different classes!')
         raise TypeError("OLS can only be compute between objects with same class.  ")
     if obj1['score'] < obj2['score']:
         raise TypeError("Confidence score of obj1 should not be smaller than obj2. "
@@ -614,7 +614,6 @@ def update_peaks(pred_cen, pred_idx):
         cord[2] += int(pred_cen[bat,0,r_id,a_id])
         cord[3] += int(pred_cen[bat,1,r_id,a_id])
         pred_idx[cnt]= cord
-        #print(int(8*pred_cen[bat,0,r_id,a_id]))
     return pred_idx
 
 def association(intensity, index, device="cpu"):
@@ -628,21 +627,16 @@ def association(intensity, index, device="cpu"):
         out_idx = torch.cat((out_idx, index[idx_list[0]]))
         p1_row , p1_col = index[idx_list[0]][2],index[idx_list[0]][3]
         frame_1, cls_1 = index[idx_list[0]][0],index[idx_list[0]][1]
-        #print(p1_row,p1_col)
         x1,y1 = pol2cord(p1_row,p1_col)
-        #print(x1,y1)
         idx_list = idx_list[1:]
 
         count = 0
         while len(idx_list)!=0 and count != len(idx_list):
             frame_2, cls_2 = index[idx_list[count]][0],index[idx_list[count]][1]
-            #if frame_2==frame_1 and cls_1==cls_2:
             if frame_2 == frame_1:
                 p2_row , p2_col = index[idx_list[count]][2],index[idx_list[count]][3]
                 x2,y2 = pol2cord(p2_row,p2_col)
-                #print(x2,y2)
                 dist = distance(x1,y1,x2,y2)
-                #print(dist)
             
                 if dist < 2:
                    idx_list = torch.cat([idx_list[:count], idx_list[count+1:]])
@@ -684,7 +678,6 @@ def orent(orent_map, r, a, velo=0, pred=False):
         if velo>0:
             if delta<90 and delta>-90:pass
             else:
-                #print(v,angle,prj_angle)
                 angle +=180
         else:
             if delta<90 and delta>-90: 

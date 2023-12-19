@@ -24,9 +24,6 @@ class Encode(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self,x):
-        # print(x.dtype)
-        # for name, param in self.named_parameters():
-        #     print(name, param.dtype)
         x = self.relu(self.bn1a(self.conv1a(x)))  # (B, 1, 256, 256) -> (B, 64,  256, 256)
         x = self.relu(self.bn1b(self.conv1b(x)))  # (B, 64, 256, 256) -> (B, 64, 128, 128)
         x = self.relu(self.bn2a(self.conv2a(x)))  # (B, 64, 128, 128) -> (B, 128, 128, 128)

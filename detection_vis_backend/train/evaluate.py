@@ -110,8 +110,8 @@ def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_
         mIoU.append(iou)
 
     mIoU = np.asarray(mIoU).mean()
-    print('------- Freespace Scores ------------')
-    print('  mIoU',mIoU*100,'%')
+    logger.info('------- Freespace Scores ------------')
+    logger.info(f'  mIoU: {mIoU*100} %')
 
     result = {'mAP': mAP, 'mAR': mAR, 'F1_score': F1_score, 'mIoU': mIoU}
     if eval_type == 'val':
@@ -128,7 +128,7 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     AngleError = []
 
     for threshold in np.arange(0.2,0.96,0.1):
-        print(f"\nEvaluation with threshold = {threshold}")
+        logger.info(f"\nEvaluation with threshold = {threshold}")
         iou_threshold.append(threshold)
 
         TP = 0
@@ -205,14 +205,14 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     perfs['recall']=recall
 
     F1_score = (np.mean(precision)*np.mean(recall))/((np.mean(precision) + np.mean(recall))/2)
-    print('------- Detection Scores ------------')
-    print('  mAP:',np.mean(perfs['precision']))
-    print('  mAR:',np.mean(perfs['recall']))
-    print('  F1 score:',F1_score)
+    logger.info('------- Detection Scores ------------')
+    logger.info(f"  mAP: {np.mean(perfs['precision'])}")
+    logger.info(f"  mAR: {np.mean(perfs['recall'])}")
+    logger.info(f"  F1 score: {F1_score}")
 
-    print('------- Regression Errors------------')
-    print('  Range Error:',np.mean(RangeError),'m')
-    print('  Angle Error:',np.mean(AngleError),'degree')
+    logger.info('------- Regression Errors------------')
+    logger.info(f"  Range Error: {np.mean(RangeError)} m")
+    logger.info(f"  Angle Error: {np.mean(AngleError)} degree")
 
     mAP = np.mean(perfs['precision'])
     mAR = np.mean(perfs['recall'])
@@ -441,15 +441,14 @@ def read_rodnet_res(filename, n_frame, n_class, classes, rng_grid, agl_grid):
     return dts
 
 
-def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, classes, log=False):
+def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, classes):
     gts = gts_dict[imgId, catId]
     dts = dts_dict[imgId, catId]
     if len(gts) == 0 and len(dts) == 0:
         return None
 
-    if log:
-        olss_flatten = np.ravel(olss_dict[imgId, catId])
-        print("Frame %d: %10s %s" % (imgId, classes[catId], list(olss_flatten)))
+    olss_flatten = np.ravel(olss_dict[imgId, catId])
+    logger.debug("Frame %d: %10s %s" % (imgId, classes[catId], list(olss_flatten)))
 
     dtind = np.argsort([-d['score'] for d in dts], kind='mergesort')
     dts = [dts[i] for i in dtind]
@@ -527,7 +526,7 @@ def compute_ols_dts_gts(gts_dict, dts_dict, imgId, catId):
     return olss
 
 
-def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=True):
+def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes):
     T = len(olsThrs)
     R = len(recThrs)
     K = n_class
@@ -554,8 +553,7 @@ def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=True):
         ng = gtm.shape[1]  # number of ground truth
         n_objects[classid] = ng
 
-        if log:
-            print("%10s: %4d dets, %4d gts" % (classes[classid], dtm.shape[1], gtm.shape[1]))
+        logger.debug("%10s: %4d dets, %4d gts" % (classes[classid], dtm.shape[1], gtm.shape[1]))
 
         tps = np.array(dtm, dtype=bool)
         fps = np.logical_not(dtm)
@@ -767,11 +765,11 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
             init_genConfmap = ConfmapStack(confmap_shape)
 
         proc_time = time.time() - process_tic
-        print("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
+        logger.info("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
                 (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
-    print("Ave infer time: %f" % (total_time / total_count))
+    logger.info("Ave infer time: %f" % (total_time / total_count))
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
@@ -789,16 +787,16 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         if evalImgs:
             eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
             stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-            print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
             n_frames_all += n_frame
             evalImgs_all.extend(evalImgs)
         else:
-            print(f"{seq_name}_rod_res.txt is empty.")
+            logger.info(f"{seq_name}_rod_res.txt is empty.")
             
     if evalImgs_all:    
         eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
         result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
     else:
         result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
@@ -1305,8 +1303,6 @@ def accumulate_tp_fp(pred_boxes, pred_labels, pred_scores, gt_boxes, gt_classes,
             tp_dict[pred_label]["scores"][iou_idx].append(pred_score)
             tp_dict[pred_label]["tp"][iou_idx].append(0)
             tp_dict[pred_label]["fp"][iou_idx].append(0)
-            #print(tp_dict[pred_label]["tp"][iou_idx])
-            #print(tp_dict[pred_label]["fp"][iou_idx])
             if pred_label == gt_label and iou[max_idx_iou] >= iou_thresholds[iou_idx] and \
                     list(gt_box) not in detected_gts[iou_idx]:
                 tp_dict[pred_label]["tp"][iou_idx][-1] = 1
@@ -1440,7 +1436,7 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     for class_id in range(n_classes):
         tp, fp, scores, total_gt = tp_dict[class_id]["tp"], tp_dict[class_id]["fp"], tp_dict[class_id]["scores"], \
             tp_dict[class_id]["total_gt"]
-        print(f"class {class_id}: {total_gt}")
+        logger.debug(f"class {class_id}: {total_gt}")
         # Added begins
         if total_gt == 0:
             continue
@@ -1459,7 +1455,7 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
                 = compute_ap_class(tp[iou_idx], fp[iou_idx], scores[iou_idx], total_gt)
             ap_dict[class_id]["F1"][iou_idx] = compute_f1(ap_dict[class_id]["precision"][iou_idx],
                                                           ap_dict[class_id]["recall"][iou_idx])
-    print(valid_class_ids)
+    logger.debug(valid_class_ids)
     ap_dict["mean"] = {
         "AP": [np.mean([ap_dict[class_id]["AP"][iou_th] for class_id in valid_class_ids])
                for iou_th in range(len(ap_dict[valid_class_ids[0]]["AP"]))],
@@ -1671,7 +1667,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
             init_genConfmap = ConfmapStack(confmap_shape)
 
         # proc_time = time.time() - process_tic
-        # print("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
+        # logger.info("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
         #         (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
@@ -1806,7 +1802,6 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
                 dist = torch.cat([dist,torch.Tensor([100]).to(device=device)]) # dummy distance
 
         if len(dist)!=0:
-            #print(f"{dist}\n")
             if torch.min(dist) < dist_thresh:
                 min_idx = torch.argmin(dist)
                 t_r = int(grd_idx[min_idx][2])

@@ -1,5 +1,4 @@
 import numpy as np
-import logging
 import math
 import scipy
 import matplotlib.pyplot as plt
@@ -7,9 +6,8 @@ import matplotlib.pyplot as plt
 
 from skimage import transform
 from torchvision import transforms
+from loguru import logger
 
-
-logger = logging.getLogger()
 
 def reshape_frame(data, samples_per_chirp, n_receivers, n_tdm, n_chirps_per_frame):
   _data = data.reshape(-1, 8)
@@ -518,7 +516,7 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
         else:
             raise TypeError
         if class_name not in classes:
-            print("not recognized class: %s" % class_name)
+            logger.warning("not recognized class: %s" % class_name)
             continue
         class_id = get_class_id(class_name, classes)
         sigma = 2 * np.arctan(confmap_length[class_name] / (2 * range_grid[rng_idx])) * confmap_sigmas[class_name]
@@ -574,7 +572,7 @@ def visualize_confmap(confmap, pps=[]):
             plt.imshow(confmap_noise, origin='lower', aspect='auto')
             plt.show()
     else:
-        print("Warning: wrong shape of confmap!")
+        logger.warning("Warning: wrong shape of confmap!")
         return
     plt.imshow(confmap_viz, origin='lower', aspect='auto')
     for pp in pps:

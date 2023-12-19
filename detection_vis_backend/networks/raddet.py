@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from loguru import logger
+
 from detection_vis_backend.train.utils import iou3d
 
 
@@ -109,11 +111,11 @@ class BasicResidualBlock(nn.Module):
 
     def forward(self, x):
         out1 = self.conv1(x)
-        #print(f"1st conv passed. input:{x.shape}, output: {out1.shape}")
+        logger.debug(f"1st conv passed. input: {x.shape}, output: {out1.shape}")
         out2 = self.conv2(out1)
-        #print(f"2nd conv passed. output:{out2.shape}")
+        logger.debug(f"2nd conv passed. output:{out2.shape}")
         out3 = self.conv3(out2)
-        #print(f"3rd conv passed. output:{out3.shape}")
+        logger.debug(f"3rd conv passed. output:{out3.shape}")
 
         # Decide which path to take for the shortcut
         if any(val != 1 for val in self.strides) or self.channel_expansion != 1:
@@ -158,7 +160,7 @@ class RepeatBlock(nn.Module):
         
     def forward(self, x):
         x = self.blocks(x)
-        #print(f"repeat block passed. output shape: {x.shape}")
+        logger.debug(f"Blocks module passed with output shape: {x.shape}")
         if self.feature_maps_downsample:
             x = self.maxpool(x)
         return x
@@ -196,11 +198,11 @@ class RadarResNet3D(nn.Module):
             x = block(x)
             if i > len(self.block_repeat_times) - 4:
                 feature_stages.append(x)
-            #print(f"block {i} passed. output shape : {x.shape}")
+            logger.debug(f"block {i} gives output shape : {x.shape}")
 
         # NOTE: since we are doing one-level output, only last level is used
         features = feature_stages[-1]
-        #print(f"RadarResNet3D passed....feature output: {features.shape}")
+        logger.debug(f"RadarResNet3D gives output shape: {features.shape}")
         return features
     
 
@@ -236,13 +238,13 @@ class YoloHead(nn.Module):
         
         # First convolution
         conv = self.conv1(feature_map)
-        #print(f"1st conv in YoloHead passed. Output: {conv.shape}")
+        logger.debug(f"The 1st conv in YoloHead gives output with shape: {conv.shape}")
         # Second convolution
         conv = self.conv2(conv)
-        #print(f"2nd conv in YoloHead passed. Output: {conv.shape}")
+        logger.debug(f"The 2nd conv in YoloHead gives output with shape: {conv.shape}")
         # Reshape operation
         output = conv.view(final_output_reshape)
-        #print(f"final output : {output.shape}")
+        logger.debug(f"YoloHead final gives output with shape: {output.shape}")
         return output
 
 

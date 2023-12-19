@@ -1,6 +1,5 @@
 import rosbag
 import os
-import logging
 import struct
 import cv2
 import imageio
@@ -43,12 +42,12 @@ class DatasetFactory:
 
     def get_instance(self, class_name, id):
         if id in self.instance_dict:
-            # logging.error(f"#####################{class_name} instance created already, directly return {id}")
+            # logger.debug(f"{class_name} instance created already, directly return {id}")
             return self.instance_dict[id]
         
         class_obj = globals()[class_name]()
         self.instance_dict[id] = class_obj
-        # logging.error(f"#######################{class_name} instance not created yet, will create from file {id}")
+        # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
         return class_obj
 
 # class DatasetFactory:
@@ -89,7 +88,7 @@ class RaDICaL(Dataset):
         try:
             bag = rosbag.Bag(file)
         except rosbag.ROSBagException:
-            print(f"No file found at {file}")
+            logger.error(f"No file found at {file}")
         topics_dict = bag.get_type_and_topic_info()[1]
 
         feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
@@ -179,7 +178,7 @@ class RaDICaL(Dataset):
                             idx_closest = time_diff.index(min(time_diff))
                             index[f] = idx_closest
                     self.sync_indices.append(index)
-        logging.error(f"sync incdices = {len(self.sync_indices)}")
+        logger.debug(f"sync incdices = {len(self.sync_indices)}")
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
@@ -226,15 +225,15 @@ class RaDICaL(Dataset):
             'image': self.get_image,
             'depth_image': self.get_depthimage,
         }
-        logging.error(f"total frames: {len(self.sync_indices)}")
+        logger.info(f"total frames: {len(self.sync_indices)}")
         # for idx in range(len(self.sync_indices)):
         #     lst = []
         #     for f in features:
         #         feature_data = function_dict[f](idx)
-        #         #logging.error(f"raw {f}: {feature_data.shape}")
+        #         #logger.info(f"raw {f}: {feature_data.shape}")
                 
         #         if f == 'RD': 
-        #             #logging.error('RD begin->')
+        #             #logging.debug('RD begin->')
         #             feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
         #             feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
         #             feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
@@ -343,7 +342,7 @@ class RaDICaL(Dataset):
                                 2)  # Line thickness
 
                 writer.append_data(frame)
-                logging.error(idx)
+                logger.debug(idx)
 ####
         return output_path
 
@@ -859,7 +858,7 @@ class RADIalRaw(Dataset):
         if not master:
             # by default, we use the Radar as Matser sensor
             if 'radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts:
-                print('Error: recording does not contains the 4 radar chips')
+                logger.error('Error: recording does not contains the 4 radar chips')
             
             keys =list(self.dicts.keys())
             self.keys = keys
@@ -879,7 +878,7 @@ class RADIalRaw(Dataset):
             
             # Check the length of all radar recordings!
             NbSample = len(self.dicts['radar_ch3']['timestamp'])
-            print(f"NbSample: ")
+            logger.info(f"NbSample count: {NbSample}")
             # Sequence is radar_ch3 radar_ch0 radar_ch2 radar_ch1
             for i in range(NbSample):
                 timestamp = self.dicts['radar_ch3']['timestamp'][i]
@@ -949,12 +948,12 @@ class RADIalRaw(Dataset):
             self.id_valid = np.setdiff1d(id_total, id_to_del)
             self.table = self.table[self.id_valid]
             if not silent:
-                print(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
-                print(f'Total corrupted frames: {nb_corrupted/len(self.table)*100:.2f}%')
+                logger.info(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
+                logger.info(f'Total corrupted frames: {nb_corrupted/len(self.table)*100:.2f}%')
         elif master=='camera':
             # we discard the radar, and consider only camera, laser, can
             if('camera' not in self.dicts):
-                print('Error: recording does not contains camera')
+                logger.error('Error: recording does not contains camera')
             
             keys =list(self.dicts.keys())
 
@@ -1024,9 +1023,9 @@ class RADIalRaw(Dataset):
             id_to_keep = np.setdiff1d(id_total, id_to_del)
             self.table = self.table[id_to_keep]
             if not silent:
-                print(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
+                logger.info(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
         else:
-            print('Mode not supported')
+            logger.error('Mode not supported')
             return
 
 
@@ -1128,16 +1127,16 @@ class RADIalRaw(Dataset):
         
         if(self.device =='cuda'):
             # if(self.lib=='CuPy'):
-            #     print('CuPy on GPU will be used to execute the processing')
+            #     logger.info('CuPy on GPU will be used to execute the processing')
             #     cp.cuda.Device(0).use()
             #     self.CalibMat = cp.array(self.CalibMat,dtype='complex64')
             #     self.window = cp.array(self.AoA_mat['H'][0])
             # else:
-            print('PyTorch on GPU will be used to execute the processing')
+            logger.info('PyTorch on GPU will be used to execute the processing')
             self.CalibMat = torch.from_numpy(self.CalibMat).to('cuda')
             self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')   
         else:
-            print('CPU will be used to execute the processing')
+            logger.info('CPU will be used to execute the processing')
             self.window = self.AoA_mat['H'][0]
             
         # Build hamming window table to reduce side lobs
@@ -1351,7 +1350,7 @@ class CRUW(Dataset):
         self.feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
         self.feature_path.mkdir(parents=True, exist_ok=True)
         self.pkl_path = os.path.join(self.feature_path, self.seq_name + '.pkl')
-        print("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
+        logger.info("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
         overwrite = False
         # if overwrite:
         #     if os.path.exists(os.path.join(data_dir, split)):
@@ -1359,7 +1358,7 @@ class CRUW(Dataset):
         #     os.makedirs(os.path.join(data_dir, split))
         try:
             if not overwrite and os.path.exists(self.pkl_path):
-                print("%s already exists, skip" % self.pkl_path)
+                logger.info("%s already exists, skip" % self.pkl_path)
                 return
 
             image_dir = os.path.join(self.root_path, 'TRAIN_CAM_0', self.seq_name, camera_configs['image_folder'])
@@ -1419,7 +1418,7 @@ class CRUW(Dataset):
             pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             # end frames loop
         except Exception as e:
-            print("Error while preparing %s: %s" % (self.seq_name, e))
+            logger.error("Error while preparing %s: %s" % (self.seq_name, e))
         return 
     
     def get_image(self, idx=None, for_visualize=False): 
@@ -1807,7 +1806,7 @@ class CARRADA(Dataset):
                     if new_frame != last_frame + 1:
                         intervals.append(last_frame+4)
                         intervals.append(new_frame)
-            print(intervals)
+            
             seq_intervals = []
             self.indexmapping = []
             self.datasamples_length = 0
@@ -2121,14 +2120,12 @@ class RADDetDataset(Dataset):
                 y_c, x_c, h, w = (bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5])
                 y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
                 gt.append([x1, y1, x2, y2, cls])
-                print("####################### RD label ######################")
-                print([x1, y1, x2, y2, cls])
+                logger.debug(f"RD label: [{x1}, {y1}, {x2}, {y2}, {cls}]")
             elif feature_name == "RA":
                 y_c, x_c, h, w = (bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4])
                 y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
                 gt.append([x1, y1, x2, y2, cls])
-                print("####################### RA label ######################")
-                print([x1, y1, x2, y2, cls])
+                logger.debug(f"RA label: [{x1}, {y1}, {x2}, {y2}, {cls}]")
             #cart_box = np.array([cart_box])   
         return gt
     
@@ -2715,7 +2712,7 @@ class UWCR(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
-        logger.info(f"Data item index: {index}")
+        logger.debug(f"Data item index: {index}")
         data_id = index * self.stride
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)

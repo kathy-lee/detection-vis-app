@@ -235,10 +235,10 @@ def display_inference_FFTRadNet(image, input, model_outputs, obj_labels, train_c
     # Model outputs
     pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
     out_seg = torch.sigmoid(model_outputs['Segmentation']).detach().cpu().numpy().copy()[0,0]
-    print(f"pred_obj before decode: {pred_obj.shape}")
+    logger.debug(f"pred_obj before decode: {pred_obj.shape}")
     # Decode the output detection map
     pred_obj = decode(pred_obj,0.05)
-    print(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
+    logger.debug(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
     pred_obj = np.asarray(pred_obj)
 
     # process prediction: polar to cartesian, NMS...

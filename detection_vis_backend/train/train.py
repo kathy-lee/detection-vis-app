@@ -6,7 +6,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.nn as nn
 import os
-import logging
 import json
 import pandas as pd
 
@@ -388,7 +387,6 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 optimizer.step()
                 running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
                 kbar.update(iter, values=[("loss", loss.item())])
-                #print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
                 global_step += 1
 
             scheduler.step()
@@ -475,7 +473,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 #         with open('modelflow_info.txt', 'w') as f:
 #             f.write(f"RUN_ID: {current.run_id}\n")
 
-#         logging.info("Training begins.")
+#         logger.info("Training begins.")
 #         print("########################### Training begins #############################")
 #         self.datafiles = json.loads(self.datafiles_str)
 #         self.features = json.loads(self.features_str)

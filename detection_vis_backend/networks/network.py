@@ -1,6 +1,3 @@
-import os
-import logging
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -721,10 +718,10 @@ class RADDet(nn.Module):
         
     def forward(self, x):
         features = self.backbone_stage(x)
-        #print(f"backstone_stage passed. output feature shape: {features.shape}")        
+        logger.debug(f"backstone_stage gives output shape: {features.shape}")        
         yolo_raw = self.yolohead(features)
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
-        #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
+        logger.debug(f"YoloHead gives  output shape: {yolo_raw.shape}")
 
         pred_raw, pred = boxDecoder(yolo_raw, self.input_size, self.anchor_boxes, self.n_class, self.yolohead_xyz_scales[0])
         return {'pred_raw': pred_raw, 'pred': pred}
@@ -809,30 +806,28 @@ class DAROD(nn.Module):
         return 
 
     def forward(self, input):
-        # print("---------------network------------------")
-        # print(f"input: {input.shape}")
+        logger.debug(f"Network input: {input.shape}")
         x = self.block1(input)
-        #print(f"after block1: {x.shape}")
+        logger.debug(f"block1 module outputs: {x.shape}")
         x = self.block2(x)
-        #print(f"after block2: {x.shape}")
+        logger.debug(f"block2 module outputs: {x.shape}")
         x = self.block3(x)
-        #print(f"after block3: {x.shape}")
+        logger.debug(f"block3 module outputs: {x.shape}")
 
         rpn_out = F.relu(self.rpn_conv(x))
         rpn_cls_pred = self.rpn_cls_output(rpn_out)
         rpn_delta_pred = self.rpn_reg_output(rpn_out)
-        #print(f"rpn_out: {rpn_out.shape}")
-        #print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        #print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        logger.debug(f"rpn_conv module outputs rpn_out: {rpn_out.shape}")
+        logger.debug(f"rpn_cls_output module outputs rpn_cls_pred: {rpn_cls_pred.shape}")
+        logger.debug(f"rpn_reg_output module outputs rpn_delta_pred: {rpn_delta_pred.shape}")
 
         # if step == "rpn":
         #     return rpn_cls_pred, rpn_delta_pred
 
         roi_bboxes_out, roi_bboxes_scores = self.roi_bbox(rpn_delta_pred, rpn_cls_pred)
-        #print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        #print(f"roi_bboxes_scores: {roi_bboxes_scores.shape}")
+        logger.debug(f"roi_bbox module outputs roi_bboxes_out: {roi_bboxes_out.shape} and roi_bboxes_scores: {roi_bboxes_scores.shape}")
         roi_pooled_out = self.roi_pooled(x, roi_bboxes_out)
-        #print(f"roi_pooled_out: {roi_pooled_out.shape}")
+        logger.debug(f"roi_pooled module outputs roi_pooled_out: {roi_pooled_out.shape}")
 
         output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
         features = self.radar_features(roi_bboxes_out, roi_bboxes_scores)
@@ -855,13 +850,12 @@ class DAROD(nn.Module):
 
         rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
         rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
-        # print(f"Network output:")
-        # print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        # print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
-        # print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
-        # print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
-        # print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        # print("---------------network------------------")
+        logger.debug(f"Network final outputs:")
+        logger.debug(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        logger.debug(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        logger.debug(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
+        logger.debug(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
+        logger.debug(f"roi_bboxes_out: {roi_bboxes_out.shape}\n")
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 

@@ -132,11 +132,9 @@ class RoIBBox(nn.Module):
         pre_roi_bboxes = pre_roi_bboxes.view(batch_size, pre_nms_topn, 1, 4)
         pre_roi_labels = pre_roi_labels.view(batch_size, pre_nms_topn, 1)
         # Assuming the custom utility function is adapted for PyTorch
-        #print(f"RoIBBox before nms: {pre_roi_bboxes.shape}, {pre_roi_labels.shape}")
         roi_bboxes, roi_scores, _, _ = non_max_suppression(pre_roi_bboxes, pre_roi_labels,
                                                             max_output_size_per_class=post_nms_topn, max_total_size=post_nms_topn,
                                                             iou_threshold=nms_iou_threshold)
-        #print(f"RoIBBox after nms: {roi_bboxes.shape}, {roi_scores.shape}")
         return roi_bboxes.detach(), roi_scores.detach()
 
 
@@ -445,28 +443,25 @@ class Decoder(nn.Module):
         """
         roi_bboxes, pred_deltas, pred_label_probs = inputs
         batch_size = pred_deltas.shape[0]
-        #
+        
         pred_deltas = pred_deltas.view(batch_size, -1, self.total_labels, 4)
         variances = torch.tensor(self.variances).to(pred_deltas.device)
         pred_deltas *= variances.unsqueeze(0).unsqueeze(1)
-        #
+        
         expanded_roi_bboxes = roi_bboxes.unsqueeze(-2).expand(-1, -1, self.total_labels, -1)
         pred_bboxes = get_bboxes_from_deltas(expanded_roi_bboxes, pred_deltas)
         pred_bboxes = torch.clamp(pred_bboxes, min=0.0, max=1.0)
-        #
+        
         pred_labels_map = pred_label_probs.argmax(dim=-1, keepdim=True)
         pred_labels = torch.where(pred_labels_map != 0, pred_label_probs, torch.zeros_like(pred_label_probs))
-        #
-        #print(f"Decoder before nms: {pred_bboxes.shape}, {pred_labels.shape}")
-        #print(self.iou_threshold, self.max_total_size, self.score_threshold)
+        
         final_bboxes, final_scores, final_labels, _ = non_max_suppression(
             pred_bboxes, pred_labels,
             iou_threshold=self.iou_threshold,
             max_output_size_per_class=self.max_total_size,
             max_total_size=self.max_total_size,
             score_threshold=self.score_threshold)
-        #print(f"Decoder after nms: {final_bboxes.shape}, {final_scores.shape}")
-        #
+        
         return final_bboxes.detach(), final_labels.detach(), final_scores.detach()
 
 
