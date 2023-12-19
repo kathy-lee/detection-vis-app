@@ -365,7 +365,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             net.train()
             running_loss = 0.0
 
-            for i, data in enumerate(train_loader):
+            for iter, data in enumerate(train_loader):
                 for key in data:
                     if isinstance(data[key], torch.Tensor):
                         data[key] = data[key].to(device).float()
@@ -383,11 +383,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 for feature in features:
                     data.pop(feature)
                 loss = net.get_loss(outputs, data, train_config)
-                logger.info(f"Train sample {i} loss: {loss}")
+                logger.info(f"Train sample {iter} loss: {loss}")
                 loss.backward()
                 optimizer.step()
                 running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
-                kbar.update(i, values=[("loss", loss.item())])
+                kbar.update(iter, values=[("loss", loss.item())])
                 #print(f'Step {i+1}/{len(train_loader)} - loss: {loss.item()}')
                 global_step += 1
 
