@@ -15,4 +15,3 @@ scipy
 scikit-learn
 torchvision
 pkbar
-metaflow

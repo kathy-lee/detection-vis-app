@@ -1,22 +1,22 @@
-import os
-import logging
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.container import Sequential
 from torchvision.transforms.transforms import Sequence
+from abc import abstractmethod
+from loguru import logger
+
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
-from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock
-from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet
-from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm
-from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead
-from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D
-from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep 
-from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode
+from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock, FocalLoss
+from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, SmoothCELoss
+from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss
+from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead, boxDecoder, lossYolo
+from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D, calculate_rpn_actual_outputs, roi_delta, darod_loss
+from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
+from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 
 class NetworkFactory:
     _instances = {}
@@ -39,7 +39,21 @@ class NetworkFactory:
     
 
 
-class FFTRadNet(nn.Module):
+
+class BaseNetwork(nn.Module):
+    def __init__(self):
+        super(BaseNetwork, self).__init__()
+
+    @abstractmethod
+    def init_lossfunc(self, config):
+        pass
+
+    @abstractmethod
+    def get_loss(self, pred, label, config):
+        pass
+
+
+class FFTRadNet(BaseNetwork):
     def __init__(self,mimo_layer,channels,blocks,regression_layer = 2, detection_head=True,segmentation_head=True):
         super(FFTRadNet, self).__init__()
     
@@ -55,8 +69,7 @@ class FFTRadNet(nn.Module):
         if(self.segmentation_head):
             self.freespace = nn.Sequential(BasicBlock(256,128),BasicBlock(128,64),nn.Conv2d(64, 1, kernel_size=1))
 
-    def forward(self,x):
-                       
+    def forward(self,x):       
         out = {'Detection':[],'Segmentation':[]}
         
         features= self.FPN(x)
@@ -70,6 +83,51 @@ class FFTRadNet(nn.Module):
             out['Segmentation'] = self.freespace(Y)
         
         return out
+
+    def init_lossfunc(self, config, device):
+        if config['losses']['segmentation'] == 'BCEWithLogitsLoss':
+            self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')  
+        else:
+            self.criterion_seg = nn.BCELoss()
+        
+        if config['losses']['classification'] == 'FocalLoss':
+            self.criterion_classif = FocalLoss(gamma=2)
+        else:
+            self.criterion_classif = nn.BCELoss(reduction='sum')
+
+        if(config['losses']['regression']=='SmoothL1Loss'):
+            self.criterion_reg = nn.SmoothL1Loss(reduction='sum')
+        else:
+            self.criterion_reg = nn.L1Loss(reduction='sum')
+        return
+    
+    def get_loss(self, pred, target, config):
+        # loss of classification
+        classif_pred = pred['Detection'][:, 0,:, :].contiguous().flatten()
+        classif_label = target['encoded_label'][:, 0,:, :].contiguous().flatten()
+        loss_classif = self.criterion_classif(classif_pred, classif_label)
+
+        # loss of regression
+        T = target['encoded_label'][:,1:]
+        P = pred['Detection'][:,1:]
+        M = target['encoded_label'][:,0].unsqueeze(1)
+        loss_reg = self.criterion_reg(P*M,T)
+        NbPts = M.sum()
+        if NbPts > 0 :
+            loss_reg/=NbPts
+
+        # loss of segmentation
+        if pred['Segmentation'] != []:
+            seg_pred = pred['Segmentation'].contiguous().flatten()
+            seg_label = target['seg_label'].contiguous().flatten()   
+            loss_seg = self.criterion_seg(seg_pred, seg_label)
+            loss_seg *= pred['Segmentation'].size(0)
+        else:
+            loss_seg = 0
+
+        losses = [loss_classif, loss_reg, loss_seg]
+        losses = sum([weight * loss_item for loss_item, weight in zip(losses, config['losses']['weight'])])
+        return losses
 
 
 # class RODNet(nn.Module):
@@ -182,7 +240,7 @@ class FFTRadNet(nn.Module):
 #         return out
     
 
-class RODNet_CDC(nn.Module):
+class RODNet_CDC(BaseNetwork):
     def __init__(self, in_channels, n_class):
         super(RODNet_CDC, self).__init__()
         self.cdc = RadarVanilla(in_channels, n_class, use_mse_loss=False)
@@ -190,9 +248,21 @@ class RODNet_CDC(nn.Module):
     def forward(self, x):
         x = self.cdc(x)
         return x
+    
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = self.criterion(pred, label['gt_mask'])
+        return loss
 
 
-class RODNet_CDCv2(nn.Module):
+class RODNet_CDCv2(BaseNetwork):
     def __init__(self, in_channels, n_class, mnet_cfg=None, dcn=True):
         super(RODNet_CDCv2, self).__init__()
         self.dcn = dcn
@@ -215,24 +285,70 @@ class RODNet_CDCv2(nn.Module):
             x = self.mnet(x)
         x = self.cdc(x)
         return x
+    
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
 
-class RODNet_HG(nn.Module):
+    def get_loss(self, pred, label, config):
+        loss = self.criterion(pred, label['gt_mask'])
+        return loss
+
+
+class RODNet_HG(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=2):
         super(RODNet_HG, self).__init__()
         self.stacked_hourglass = RadarStackedHourglass_HG(in_channels, n_class, stacked_num=stacked_num)
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         out = self.stacked_hourglass(x)
         return out
+    
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
 
-class RODNet_HGwI(nn.Module):
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
+            loss += loss_cur   
+        return loss
+
+
+class RODNet_HGwI(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=1):
         super(RODNet_HGwI, self).__init__()
         self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels, n_class, stacked_num=stacked_num)
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         out = self.stacked_hourglass(x)
         return out
+
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
+            loss += loss_cur   
+        return loss
 
 ## If only consider all subtypes of RODNet paper/project, the following declaration way is more compact. 
 ## If also consider to include all subtypes in RadarFormer paper/project, choose the declaration way below. 
@@ -269,7 +385,7 @@ class RODNet_HGwI(nn.Module):
 #         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn, hourglass_type)
 
 
-class RODNet_v2Base(nn.Module):
+class RODNet_v2Base(BaseNetwork):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super(RODNet_v2Base, self).__init__()
         self.dcn = dcn
@@ -284,6 +400,7 @@ class RODNet_v2Base(nn.Module):
             self.with_mnet = True
         else:
             self.with_mnet = False
+        self.stacked_num = stacked_num
 
     def forward(self, x):
         if self.with_mnet:
@@ -291,15 +408,33 @@ class RODNet_v2Base(nn.Module):
         out = self.stacked_hourglass(x)
         return out
     
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+
+    def get_loss(self, pred, label, config):
+        loss = 0.0
+        for i in range(self.stacked_num):
+            loss_cur = self.criterion(pred[i], label['gt_mask'])
+            loss += loss_cur   
+        return loss
+
+
 class RODNet_HGv2(RODNet_v2Base):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn)
         self.stacked_hourglass = RadarStackedHourglass_HG(in_channels if mnet_cfg is None else mnet_cfg[1], n_class, stacked_num=stacked_num, conv_op=self.conv_op)
 
+
 class RODNet_HGwIv2(RODNet_v2Base):
     def __init__(self, in_channels, n_class, stacked_num=2, mnet_cfg=None, dcn=True, hourglass_type=None):
         super().__init__(in_channels, n_class, stacked_num, mnet_cfg, dcn)
         self.stacked_hourglass = RadarStackedHourglass_HGwI(in_channels if mnet_cfg is None else mnet_cfg[1], n_class, stacked_num=stacked_num, conv_op=self.conv_op)
+
 
 # #Subtypes from RadarFormer: 'hrformer2d', 'unetr_2d', 'unetr_2d_res_final', 'maxvit2'
 # class RadarFormer_hrformer2d(RODNet_v2Base):
@@ -330,7 +465,7 @@ class RODNet_HGwIv2(RODNet_v2Base):
 #                                                                 num_layers = num_layers, receptive_field = receptive_field, out_head = out_head)
 
 
-class RECORD(nn.Module):
+class RECORD(BaseNetwork):
     def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
         """
         RECurrent Online object detectOR (RECORD) model class
@@ -345,6 +480,7 @@ class RECORD(nn.Module):
         self.encoder = RecordEncoder(in_channels=in_channels, config=encoder_config, norm=norm)
         self.decoder = RecordDecoder(decoder_config, n_class=n_class)
         self.sigmoid = nn.Sigmoid()
+        self.n_class = n_class
 
     def forward(self, x):
         """
@@ -363,9 +499,36 @@ class RECORD(nn.Module):
         confmap_pred = self.decoder(st_features_lstm1, st_features_lstm2, st_features_backbone)
         return self.sigmoid(confmap_pred)
     
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+        elif config['losses']['type'] == 'wce':
+            self.criterion = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
+        elif config['losses']['type'] == 'sdice':
+            self.criterion = SoftDiceLoss()
+        elif config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
+            self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+            self.criterion = self.criterion.to(device)
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+        return
+        
+    def get_loss(self, pred, target, config):
+        if isinstance(self.criterion, nn.ModuleList):
+            losses = [loss_func(pred, torch.argmax(target['gt_mask'], axis=1)) for loss_func in self.criterion]
+            loss = torch.mean(torch.stack(losses))
+        else:
+            loss = self.criterion(pred, target['gt_mask'])
+        return loss
+    
 
-class RECORDNoLstm(nn.Module):
-    def __init__(self, encoder_config, decoder_config,  in_channels=8, norm='layer', n_class=3):
+class RECORDNoLstm(BaseNetwork):
+    def __init__(self, encoder_config, decoder_config, in_channels=8, norm='layer', n_class=3):
         """
         RECurrent Online object detectOR (RECORD) model class for online inference
         @param config: configuration file of the model
@@ -377,6 +540,7 @@ class RECORDNoLstm(nn.Module):
         self.encoder = RecordEncoderNoLstm(config=encoder_config, in_channels=in_channels, norm=norm)
         self.decoder = RecordDecoder(config=decoder_config, n_class=n_class)
         self.sigmoid = nn.Sigmoid()
+        self.n_class = n_class
 
     def forward(self, x):
         """
@@ -387,6 +551,32 @@ class RECORDNoLstm(nn.Module):
         x3, x2, x1 = self.encoder(x)
         confmap_pred = self.decoder(x3, x2, x1)
         return self.sigmoid(confmap_pred)
+    
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'bce':
+            self.criterion = nn.BCELoss()
+        elif config['losses']['type'] == 'mse':
+            self.criterion = nn.SmoothL1Loss()
+        elif config['losses']['type'] == 'smooth_ce':
+            self.criterion = SmoothCELoss(config['losses']['alpha'])
+        elif config['losses']['type'] == 'wce':
+            self.criterion = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
+        elif config['losses']['type'] == 'sdice':
+            self.criterion = SoftDiceLoss()
+        elif config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight']))
+            self.criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])
+            self.criterion = self.criterion.to(device)
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+        
+    def get_loss(self, pred, target, param):
+        if isinstance(self.criterion, nn.ModuleList):
+            losses = [loss_func(pred, torch.argmax(target['gt_mask'], axis=1)) for loss_func in self.criterion]
+            loss = torch.mean(torch.stack(losses))
+        else:
+            loss = self.criterion(pred, target['gt_mask'])
+        return loss
 
 
 class RECORDNoLstmMulti(RECORDNoLstm):
@@ -438,7 +628,7 @@ class MVRECORD(nn.Module):
         self.rd_decoder = RecordDecoder(config=decoder_rd_config, n_class=self.n_class)
         self.ra_decoder = RecordDecoder(config=decoder_ra_config, n_class=self.n_class)
 
-    def forward(self, inputs):
+    def forward(self, input):
         """
         Forward pass MV-RECORD model
         @param x_rd: RD input tensor with shape (B, C, T, H, W) where T is the number of timesteps
@@ -446,7 +636,7 @@ class MVRECORD(nn.Module):
         @param x_ad: AD input tensor with shape (B, C, T, H, W) where T is the number of timesteps
         @return: RD and RA segmentation masks of the last time step with shape (B, n_class, H, W)
         """
-        x_rd, x_ra, x_ad = inputs
+        x_rd, x_ra, x_ad = input['RD'], input['RA'], input['AD']
         win_size = x_rd.shape[2]
         # Backbone
         for t in range(win_size):
@@ -492,21 +682,57 @@ class MVRECORD(nn.Module):
 
         return {"rd": pred_rd, "ra": pred_ra}
     
+    def init_lossfunc(self, config, device):
+        if config['losses']['type'] == 'wce_w10sdice':
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight_rd']))
+            self.rd_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])     
+        
+            ce_loss = nn.CrossEntropyLoss(weight=torch.tensor(config['losses']['weight_ra']))
+            self.ra_criterion = nn.ModuleList([ce_loss, SoftDiceLoss(global_weight=10.)])    
+        else:
+            raise ValueError()
+        self.rd_criterion = self.rd_criterion.to(device)
+        self.ra_criterion = self.ra_criterion.to(device)
+        return
+        
+        
+    def get_loss(self, pred, label, config):
+        rd_losses = [c(pred['rd'], torch.argmax(label['rd_mask'], axis=1)) for c in self.rd_criterion]
+        rd_loss = torch.mean(torch.stack(rd_losses))
+        ra_losses = [c(pred['ra'], torch.argmax(label['ra_mask'], axis=1)) for c in self.ra_criterion]
+        ra_loss = torch.mean(torch.stack(ra_losses))
+        loss = torch.mean(rd_loss + ra_loss)
+        return loss
+    
 
 class RADDet(nn.Module):
-    def __init__(self, input_channels, n_class, num_anchors_layer):
+    def __init__(self, input_channels, n_class, input_size, anchor_boxes, yolohead_xyz_scales):
         super(RADDet, self).__init__()
 
         self.backbone_stage = RadarResNet3D(input_channels)
-        self.yolohead = YoloHead(num_anchors_layer, n_class, 256, 4) 
+        self.yolohead = YoloHead(len(anchor_boxes), n_class, 256, 4) 
+        self.n_class = n_class
+        self.input_size = input_size
+        self.anchor_boxes = anchor_boxes
+        self.yolohead_xyz_scales = yolohead_xyz_scales
         
     def forward(self, x):
         features = self.backbone_stage(x)
-        #print(f"backstone_stage passed. output feature shape: {features.shape}")        
+        logger.debug(f"backstone_stage gives output shape: {features.shape}")        
         yolo_raw = self.yolohead(features)
         yolo_raw = yolo_raw.permute(0, 3, 4, 1, 2)
-        #print(f"YoloHead passed. output shape: {yolo_raw.shape}")
-        return yolo_raw
+        logger.debug(f"YoloHead gives  output shape: {yolo_raw.shape}")
+
+        pred_raw, pred = boxDecoder(yolo_raw, self.input_size, self.anchor_boxes, self.n_class, self.yolohead_xyz_scales[0])
+        return {'pred_raw': pred_raw, 'pred': pred}
+    
+    def init_lossfunc(self, config, device):
+        return
+
+    def get_loss(self, pred, target, config):
+        box_loss, conf_loss, category_loss = lossYolo(pred['pred_raw'], pred['pred'], target['label'], target['boxes'][..., :6], self.input_size, config['focal_loss_iou_threshold'])
+        loss = 1e-1 * box_loss + conf_loss + category_loss
+        return loss    
     
 
 class DAROD(nn.Module):
@@ -525,6 +751,7 @@ class DAROD(nn.Module):
         self.range_res = range_res
         self.doppler_res = doppler_res
         self.anchors = self.anchors_generation()
+        self.n_class = n_class
 
         if self.use_bn:
             block_norm = "group_norm"  # By default for this model
@@ -579,30 +806,28 @@ class DAROD(nn.Module):
         return 
 
     def forward(self, input):
-        # print("---------------network------------------")
-        # print(f"input: {input.shape}")
+        logger.debug(f"Network input: {input.shape}")
         x = self.block1(input)
-        #print(f"after block1: {x.shape}")
+        logger.debug(f"block1 module outputs: {x.shape}")
         x = self.block2(x)
-        #print(f"after block2: {x.shape}")
+        logger.debug(f"block2 module outputs: {x.shape}")
         x = self.block3(x)
-        #print(f"after block3: {x.shape}")
+        logger.debug(f"block3 module outputs: {x.shape}")
 
         rpn_out = F.relu(self.rpn_conv(x))
         rpn_cls_pred = self.rpn_cls_output(rpn_out)
         rpn_delta_pred = self.rpn_reg_output(rpn_out)
-        #print(f"rpn_out: {rpn_out.shape}")
-        #print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        #print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        logger.debug(f"rpn_conv module outputs rpn_out: {rpn_out.shape}")
+        logger.debug(f"rpn_cls_output module outputs rpn_cls_pred: {rpn_cls_pred.shape}")
+        logger.debug(f"rpn_reg_output module outputs rpn_delta_pred: {rpn_delta_pred.shape}")
 
         # if step == "rpn":
         #     return rpn_cls_pred, rpn_delta_pred
 
         roi_bboxes_out, roi_bboxes_scores = self.roi_bbox(rpn_delta_pred, rpn_cls_pred)
-        #print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        #print(f"roi_bboxes_scores: {roi_bboxes_scores.shape}")
+        logger.debug(f"roi_bbox module outputs roi_bboxes_out: {roi_bboxes_out.shape} and roi_bboxes_scores: {roi_bboxes_scores.shape}")
         roi_pooled_out = self.roi_pooled(x, roi_bboxes_out)
-        #print(f"roi_pooled_out: {roi_pooled_out.shape}")
+        logger.debug(f"roi_pooled module outputs roi_pooled_out: {roi_pooled_out.shape}")
 
         output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
         features = self.radar_features(roi_bboxes_out, roi_bboxes_scores)
@@ -625,17 +850,15 @@ class DAROD(nn.Module):
 
         rpn_cls_pred = rpn_cls_pred.permute(0, 2, 3, 1)
         rpn_delta_pred = rpn_delta_pred.permute(0, 2, 3, 1)
-        # print(f"Network output:")
-        # print(f"rpn_cls_pred: {rpn_cls_pred.shape}")
-        # print(f"rpn_delta_pred: {rpn_delta_pred.shape}")
-        # print(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
-        # print(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
-        # print(f"roi_bboxes_out: {roi_bboxes_out.shape}")
-        # print("---------------network------------------")
+        logger.debug(f"Network final outputs:")
+        logger.debug(f"rpn_cls_pred: {rpn_cls_pred.shape}")
+        logger.debug(f"rpn_delta_pred: {rpn_delta_pred.shape}")
+        logger.debug(f"frcnn_cls_pred: {frcnn_cls_pred.shape}")
+        logger.debug(f"frcnn_reg_pred: {frcnn_reg_pred.shape}")
+        logger.debug(f"roi_bboxes_out: {roi_bboxes_out.shape}\n")
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 
-    
     def anchors_generation(self,):
         """
         Generating anchors boxes with different shapes centered on
@@ -684,6 +907,16 @@ class DAROD(nn.Module):
         #     output = torch.clamp(output, min=0.0, max=1.0)
         return output
 
+    def init_lossfunc(self, config, device):
+        return
+
+    def get_loss(self, pred, target, config):
+        bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(self.anchors, target['boxes'], target['label'], self.rpn_cfg, self.feature_map_shape, config["seed"])
+        frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(pred["roi_bboxes_out"], target['boxes'], target['label'], self.n_class, self.fastrcnn_cfg, config["seed"])
+        rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(pred, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
+        loss = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss 
+        return loss
+    
 
 class RAMP_CNN(nn.Module):
     def __init__(self, n_class, win_size, ramap_rsize, ramap_asize):
@@ -695,9 +928,10 @@ class RAMP_CNN(nn.Module):
         self.c3d_encode_va = RODEncode_VA()
         self.c3d_decode_va = RODDecode_VA(win_size, ramap_rsize, ramap_asize)
         self.fuse_fea = Fuse_fea_new_rep(n_class, ramap_rsize, ramap_asize)
+        self.n_class = n_class
 
     def forward(self, x):
-        x_ra, x_rv, x_va = x
+        x_ra, x_rv, x_va = x['RA'], x['RD'], x['AD']
         x_ra = self.c3d_encode_ra(x_ra)
         feas_ra = self.c3d_decode_ra(x_ra)  # (B, 32, W/2, 128, 128)
         x_rv = self.c3d_encode_rv(x_rv)
@@ -708,6 +942,17 @@ class RAMP_CNN(nn.Module):
         dets2 = self.fuse_fea(torch.zeros_like(feas_ra), feas_rv, feas_va) # (B, 3, W/2, 128, 128)
         output = {'confmap_pred': dets, 'confmap_pred2': dets2}
         return output
+
+    def init_lossfunc(self, config, device):
+        self.criterion = FocalLoss_Neg()
+        self.criterion_cont = Cont_Loss(config['win_size'])
+
+    def get_loss(self, pred, target, config):
+        loss_cur = self.criterion(pred['confmap_pred'], target['confmap_gt'])
+        loss_cur2 = self.criterion(pred['confmap_pred2'], target['confmap_gt'])
+        loss_cont = self.criterion_cont(pred['confmap_pred'], target['confmap_gt'])
+        loss = loss_cur + loss_cont + loss_cur2 * 0.5
+        return loss
 
 
 class RadarCrossAttention(nn.Module):
@@ -734,16 +979,15 @@ class RadarCrossAttention(nn.Module):
         )
 
     def forward(self, input):
-        ra, rd, ad = input
+        ra, rd, ad = input['RA'], input['RD'], input['AD']
         ra_e = self.raencode(ra) # (B,1,256,256)-> (B,256,32,32)
         rd_e = self.rdencode(rd) # (B,1,256,64)-> (B,256,32,8)
         ad_e = self.adencode(ad)# (B,1,64,256)-> (B,256,8,32)
 
         ca = self.attention(ra_e=ra_e, rd_e=rd_e, ad_e=ad_e)
-
         x = self.decode(ca)
-
         x_cls = self.finalConv_cls(x) # (B,32,256,256) -> (B,3,256,256)
+
         x_center = 0
         x_orent = 0
         if self.center_offset:
@@ -752,3 +996,22 @@ class RadarCrossAttention(nn.Module):
         if self.orientation:
             x_orent = self.finalConv_orent(x) # (B,32,256,256) -> (B,2,64,64)
         return {"pred_mask": x_cls, "pred_center": x_center, "pred_orent": x_orent}
+    
+    def init_lossfunc(self, config, device):
+        cls_weight = torch.zeros([3, 256, 256]) + torch.tensor(config["losses"]["class_weight"]).view(-1, 1, 1)
+        self.cls_criterion = FocalLoss_weight(cls_weight, alpha=2, beta=0)
+        self.center_criterion = CenterLoss()
+        self.orent_criterion = L2Loss()
+
+        self.cls_criterion = self.cls_criterion.to(device)
+        self.center_criterion = self.center_criterion.to(device)
+        self.orent_criterion = self.orent_criterion.to(device)
+        return
+
+    def get_loss(self, pred, target, config):
+        loss =  config['losses']['weight'][0] * self.cls_criterion(pred["pred_mask"], target["gt_mask"])
+        if self.center_offset:
+            loss += config['losses']['weight'][1] * self.center_criterion(pred["pred_center"], target["gt_center_map"])
+        if self.orientation:
+            loss += config['losses']['weight'][2] * self.orent_criterion(pred["pred_orent"], target["gt_orent_map"]) 
+        return loss    

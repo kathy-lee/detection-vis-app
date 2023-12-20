@@ -201,7 +201,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             # plt.gca().add_patch(rect)
             # plt.text(new_x, new_y - 2, '%s' % obj[4], c='y')
 
-      if "RD" in pred_objs.keys():
+      if "RD" in pred_objs.keys() and len(pred_objs["RD"]) != 0:
         if len(pred_objs["RD"][0]) == 5:
           for obj in pred_objs["RD"]:
             rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
@@ -231,7 +231,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             plt.gca().add_patch(rect)
             plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
       
-      if "RA" in pred_objs.keys():
+      if "RA" in pred_objs.keys() and len(pred_objs["RA"]) != 0:
         if len(pred_objs["RA"][0]) == 4:
           classes = ["pedestrian", "cyclist", "car"]
           for obj in pred_objs["RA"]:
@@ -276,7 +276,7 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='r', facecolor='none')
             plt.gca().add_patch(rect)
       
-      if "image" in pred_objs.keys():
+      if "image" in pred_objs.keys() and len(pred_objs["image"]) != 0:
         for obj in pred_objs["image"]:
           rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
           plt.gca().add_patch(rect)

@@ -1,10 +1,9 @@
 {
     "seed":3,
     "losses": {
-        "detection_loss": "PixorLoss",
         "classification": "FocalLoss",
         "regression": "smoothL1Loss",
-        "segmentation_loss": "BCEWithLogitsLoss",
+        "segmentation": "BCEWithLogitsLoss",
         "weight": [1,100,100]
     },
     "lr_scheduler": {
@@ -29,8 +28,8 @@
             "num_workers": 4
     	},
         "val": {
-            "batch_size": 1,
-            "num_workers": 1
+            "batch_size": 4,
+            "num_workers": 4
         },
         "test": {
             "batch_size": 1,

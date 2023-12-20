@@ -132,11 +132,9 @@ class RoIBBox(nn.Module):
         pre_roi_bboxes = pre_roi_bboxes.view(batch_size, pre_nms_topn, 1, 4)
         pre_roi_labels = pre_roi_labels.view(batch_size, pre_nms_topn, 1)
         # Assuming the custom utility function is adapted for PyTorch
-        #print(f"RoIBBox before nms: {pre_roi_bboxes.shape}, {pre_roi_labels.shape}")
         roi_bboxes, roi_scores, _, _ = non_max_suppression(pre_roi_bboxes, pre_roi_labels,
                                                             max_output_size_per_class=post_nms_topn, max_total_size=post_nms_topn,
                                                             iou_threshold=nms_iou_threshold)
-        #print(f"RoIBBox after nms: {roi_bboxes.shape}, {roi_scores.shape}")
         return roi_bboxes.detach(), roi_scores.detach()
 
 
@@ -445,39 +443,36 @@ class Decoder(nn.Module):
         """
         roi_bboxes, pred_deltas, pred_label_probs = inputs
         batch_size = pred_deltas.shape[0]
-        #
+        
         pred_deltas = pred_deltas.view(batch_size, -1, self.total_labels, 4)
         variances = torch.tensor(self.variances).to(pred_deltas.device)
         pred_deltas *= variances.unsqueeze(0).unsqueeze(1)
-        #
+        
         expanded_roi_bboxes = roi_bboxes.unsqueeze(-2).expand(-1, -1, self.total_labels, -1)
         pred_bboxes = get_bboxes_from_deltas(expanded_roi_bboxes, pred_deltas)
         pred_bboxes = torch.clamp(pred_bboxes, min=0.0, max=1.0)
-        #
+        
         pred_labels_map = pred_label_probs.argmax(dim=-1, keepdim=True)
         pred_labels = torch.where(pred_labels_map != 0, pred_label_probs, torch.zeros_like(pred_label_probs))
-        #
-        #print(f"Decoder before nms: {pred_bboxes.shape}, {pred_labels.shape}")
-        #print(self.iou_threshold, self.max_total_size, self.score_threshold)
+        
         final_bboxes, final_scores, final_labels, _ = non_max_suppression(
             pred_bboxes, pred_labels,
             iou_threshold=self.iou_threshold,
             max_output_size_per_class=self.max_total_size,
             max_total_size=self.max_total_size,
             score_threshold=self.score_threshold)
-        #print(f"Decoder after nms: {final_bboxes.shape}, {final_scores.shape}")
-        #
+        
         return final_bboxes.detach(), final_labels.detach(), final_scores.detach()
 
 
-def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
-    total_labels = model_config["n_class"]
-    total_pos_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] / 3)
-    total_neg_bboxes = int(model_config["fastrcnn"]["frcnn_boxes"] * 2 / 3)
+def roi_delta(roi_bboxes, gt_boxes, gt_labels, n_class, fastrcnn_cfg, seed):
+    total_labels = n_class
+    total_pos_bboxes = int(fastrcnn_cfg["frcnn_boxes"] / 3)
+    total_neg_bboxes = int(fastrcnn_cfg["frcnn_boxes"] * 2 / 3)
     device = roi_bboxes.device
-    variances = torch.tensor(model_config["fastrcnn"]["variances_boxes"]).to(device)
-    adaptive_ratio = model_config["fastrcnn"]["adaptive_ratio"]
-    positive_th = model_config["fastrcnn"]["positive_th"]
+    variances = torch.tensor(fastrcnn_cfg["variances_boxes"]).to(device)
+    adaptive_ratio = fastrcnn_cfg["adaptive_ratio"]
+    positive_th = fastrcnn_cfg["positive_th"]
 
     batch_size, total_bboxes = roi_bboxes.size(0), roi_bboxes.size(1)
     # Calculate iou values between each bbox and ground truth boxes
@@ -506,9 +501,9 @@ def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
     roi_bbox_deltas = scatter_indices * roi_bbox_deltas.unsqueeze(-2)
     roi_bbox_deltas = roi_bbox_deltas.reshape(batch_size, total_bboxes * total_labels, 4)
 
-    if model_config["fastrcnn"]["reg_loss"] == "sl1":
+    if fastrcnn_cfg["reg_loss"] == "sl1":
         return roi_bbox_deltas.detach(), roi_bbox_labels.detach()
-    elif model_config["fastrcnn"]["reg_loss"] == "giou":
+    elif fastrcnn_cfg["reg_loss"] == "giou":
         expanded_roi_boxes = scatter_indices * roi_bboxes.unsqueeze(-2)
         expanded_roi_boxes = expanded_roi_boxes.reshape(batch_size, total_bboxes * total_labels, 4)
 
@@ -520,7 +515,7 @@ def roi_delta(roi_bboxes, gt_boxes, gt_labels, model_config, seed):
         raise ValueError("Unsupported loss type.")
 
 
-def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
+def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, rpn_cfg, feature_map_shape, seed):
     """
     Generating one step data for training or inference. Batch operations supported.
     :param anchors: (total_anchors, [y1, x1, y2, x2]) these values in normalized format between [0, 1]
@@ -533,13 +528,13 @@ def calculate_rpn_actual_outputs(anchors, gt_boxes, gt_labels, config, seed):
     
     batch_size = gt_boxes.size(0)
     device = gt_boxes.device
-    anchor_count = config["rpn"]["anchor_count"]
-    total_pos_bboxes = int(config["rpn"]["rpn_boxes"] / 2)
-    total_neg_bboxes = int(config["rpn"]["rpn_boxes"] / 2)
-    variances = torch.tensor(config["rpn"]["variances"]).to(device)
-    adaptive_ratio = config["rpn"]["adaptive_ratio"]
-    postive_th = config["rpn"]["positive_th"]
-    output_height, output_width = config["feature_map_shape"]
+    anchor_count = rpn_cfg["anchor_count"]
+    total_pos_bboxes = int(rpn_cfg["rpn_boxes"] / 2)
+    total_neg_bboxes = int(rpn_cfg["rpn_boxes"] / 2)
+    variances = torch.tensor(rpn_cfg["variances"]).to(device)
+    adaptive_ratio = rpn_cfg["adaptive_ratio"]
+    postive_th = rpn_cfg["positive_th"]
+    output_height, output_width = feature_map_shape
     anchors = anchors.to(device)
 
     iou_map = generate_iou_map(anchors, gt_boxes) 

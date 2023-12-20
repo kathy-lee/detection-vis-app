@@ -4,7 +4,6 @@ import os
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import logging
 import cv2
 import polarTransform
 import re
@@ -14,26 +13,41 @@ import math
 
 from shapely.geometry import Polygon
 from typing import Optional
+from loguru import logger
 
+
+# def FFTRadNet_collate(batch):
+#     images = []
+#     FFTs = []
+#     segmaps = []
+#     labels = []
+#     encoded_label = []
+
+#     for radar_FFT, segmap, out_label, box_labels in batch:
+#         FFTs.append(torch.tensor(radar_FFT))
+#         segmaps.append(torch.tensor(segmap))
+#         encoded_label.append(torch.tensor(out_label))
+#         labels.append(torch.from_numpy(box_labels))    
+#     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels
 
 def FFTRadNet_collate(batch):
-    images = []
-    FFTs = []
-    segmaps = []
-    labels = []
-    encoded_label = []
+    rd = [torch.tensor(item['RD']) for item in batch]
+    rd = torch.stack(rd, 0)
+    encoded_label = [torch.tensor(item['encoded_label']) for item in batch]
+    encoded_label = torch.stack(encoded_label, 0)
+    box_label = [torch.from_numpy(item['box_label']) for item in batch]
+    if 'seg_label' in batch[0]:
+        seg_label = [torch.tensor(item['seg_label']) for item in batch]
+        seg_label = torch.stack(seg_label, 0)
+        return {'RD': rd, 'encoded_label': encoded_label, 'box_label': box_label, 'seg_label': seg_label}
+    else:
+        return {'RD': rd, 'encoded_label': encoded_label, 'box_label': box_label}
 
-    for radar_FFT, segmap, out_label, box_labels in batch:
-        FFTs.append(torch.tensor(radar_FFT))
-        segmaps.append(torch.tensor(segmap))
-        encoded_label.append(torch.tensor(out_label))
-        labels.append(torch.from_numpy(box_labels))    
-    return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels
 
 def DAROD_collate(batch):
     # raw labels from CARRADA dataset: 1,2,3
     # raw labels from RADDet dataset: 1,2,3,4,5,6
-    radar = [torch.tensor(item['radar'].copy()) for item in batch]
+    radar = [torch.tensor(item['RD'].copy()) for item in batch]
     gt_labels = [torch.tensor(item['label']) for item in batch]
     [ item.update({'boxes': np.array(item['boxes'])}) for item in batch ]
     gt_boxes = [torch.tensor(item['boxes'].reshape(item['boxes'].shape[0], -1)) for item in batch]
@@ -47,8 +61,9 @@ def DAROD_collate(batch):
     for idx, (box, label) in enumerate(zip(gt_boxes, gt_labels)):
         padded_bboxes[idx, :box.shape[0]] = box
         padded_labels[idx, :label.shape[0]] = label
-    # print(f"padding: {gt_labels} -> {padded_labels}")
-    return {'radar': radar, 'label': padded_labels, 'boxes': padded_bboxes}
+    logger.debug(f"padding: {gt_labels} -> {padded_labels}")
+    return {'RD': radar, 'label': padded_labels, 'boxes': padded_bboxes}
+
 
 def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
@@ -91,8 +106,8 @@ def default_collate(batch):
         # transposed = zip(*batch)
         # return [cr_collate(samples) for samples in transposed]
         return batch
-
-    raise TypeError(default_collate_err_msg_format.format(elem_type))
+    else:
+        raise TypeError(default_collate_err_msg_format.format(elem_type))
 
 
 def decode(map,threshold):
@@ -134,80 +149,6 @@ def decode(map,threshold):
             coordinates.append([R,A,C])
        
         return coordinates
-
-
-class FocalLoss(nn.Module):
-    """
-    Focal loss class. Stabilize training by reducing the weight of easily classified background sample and focussing
-    on difficult foreground detections.
-    """
-
-    def __init__(self, gamma=0, size_average=False):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.size_average = size_average
-
-    def forward(self, prediction, target):
-
-        # get class probability
-        pt = torch.where(target == 1.0, prediction, 1-prediction)
-
-        # compute focal loss
-        loss = -1 * (1-pt)**self.gamma * torch.log(pt+1e-6)
-
-        if self.size_average:
-            return loss.mean()
-        else:
-            return loss.sum()
-
-
-
-def pixor_loss(batch_predictions, batch_labels,param):
-
-    #########################
-    #  classification loss  #
-    #########################
-    classification_prediction = batch_predictions[:, 0,:, :].contiguous().flatten()
-    classification_label = batch_labels[:, 0,:, :].contiguous().flatten()
-
-    if(param['classification']=='FocalLoss'):
-        focal_loss = FocalLoss(gamma=2)
-        classification_loss = focal_loss(classification_prediction, classification_label)
-    else:
-        classification_loss = F.binary_cross_entropy(classification_prediction.double(), classification_label.double(),reduction='sum')
-
-    
-    #####################
-    #  Regression loss  #
-    #####################
-
-    regression_prediction = batch_predictions.permute([0, 2, 3, 1])[:, :, :, :-1]
-    regression_prediction = regression_prediction.contiguous().view([regression_prediction.size(0)*
-                        regression_prediction.size(1)*regression_prediction.size(2), regression_prediction.size(3)])
-    regression_label = batch_labels.permute([0, 2, 3, 1])[:, :, :, :-1]
-    regression_label = regression_label.contiguous().view([regression_label.size(0)*regression_label.size(1)*
-                                                           regression_label.size(2), regression_label.size(3)])
-
-    positive_mask = torch.nonzero(torch.sum(torch.abs(regression_label), dim=1))
-    pos_regression_label = regression_label[positive_mask.squeeze(), :]
-    pos_regression_prediction = regression_prediction[positive_mask.squeeze(), :]
-
-
-    T = batch_labels[:,1:]
-    P = batch_predictions[:,1:]
-    M = batch_labels[:,0].unsqueeze(1)
-
-    if(param['regression']=='SmoothL1Loss'):
-        reg_loss_fct = nn.SmoothL1Loss(reduction='sum')
-    else:
-        reg_loss_fct = nn.L1Loss(reduction='sum')
-    
-    regression_loss = reg_loss_fct(P*M,T)
-    NbPts = M.sum()
-    if(NbPts>0):
-        regression_loss/=NbPts
-
-    return classification_loss,regression_loss
 
 
 def RA_to_cartesian_box(data):
@@ -321,7 +262,7 @@ def get_ols_btw_objects(obj1, obj2):
     }
 
     if obj1['class_id'] != obj2['class_id']:
-        print('Error: Computing OLS between different classes!')
+        logger.error('Error: Computing OLS between different classes!')
         raise TypeError("OLS can only be compute between objects with same class.  ")
     if obj1['score'] < obj2['score']:
         raise TypeError("Confidence score of obj1 should not be smaller than obj2. "
@@ -353,6 +294,7 @@ def get_class_name(class_id, classes):
     else:
         raise ValueError("Class ID is not defined")
     return class_name
+
 
 def lnms(obj_dicts_in_class, train_cfg):
     """
@@ -468,72 +410,6 @@ def worldToImage(x,y,z):
     v = int(min(max(0,imgpts[0][0][1]),ImageHeight-1))
     return u, v
 
-class SmoothCELoss(nn.Module):
-    """
-    Smooth cross entropy loss
-    SCE = SmoothL1Loss() + BCELoss()
-    By default reduction is mean. 
-    """
-    def __init__(self, alpha):
-        super().__init__()
-        self.smooth_l1 = nn.SmoothL1Loss()
-        self.bce = nn.BCELoss()
-        self.alpha = alpha
-    
-    def forward(self, input, target):
-        return self.alpha * self.bce(input, target) + (1-self.alpha) * self.smooth_l1(input, target)
-
-
-def one_hot(labels: torch.Tensor,
-            num_classes: int,
-            device: Optional[torch.device] = None,
-            dtype: Optional[torch.dtype] = None,
-            eps: Optional[float] = 1e-6) -> torch.Tensor:
-    r"""Converts an integer label x-D tensor to a one-hot (x+1)-D tensor.
-
-    Args:
-        labels (torch.Tensor) : tensor with labels of shape :math:`(N, *)`,
-                                where N is batch size. Each value is an integer
-                                representing correct classification.
-        num_classes (int): number of classes in labels.
-        device (Optional[torch.device]): the desired device of returned tensor.
-         Default: if None, uses the current device for the default tensor type
-         (see torch.set_default_tensor_type()). device will be the CPU for CPU
-         tensor types and the current CUDA device for CUDA tensor types.
-        dtype (Optional[torch.dtype]): the desired data type of returned
-         tensor. Default: if None, infers data type from values.
-
-    Returns:
-        torch.Tensor: the labels in one hot tensor of shape :math:`(N, C, *)`,
-
-    Examples::
-        >>> labels = torch.LongTensor([[[0, 1], [2, 0]]])
-        >>> one_hot(labels, num_classes=3)
-        tensor([[[[1.0000e+00, 1.0000e-06],
-                  [1.0000e-06, 1.0000e+00]],
-        <BLANKLINE>
-                 [[1.0000e-06, 1.0000e+00],
-                  [1.0000e-06, 1.0000e-06]],
-        <BLANKLINE>
-                 [[1.0000e-06, 1.0000e-06],
-                  [1.0000e+00, 1.0000e-06]]]])
-
-    """
-    if not torch.is_tensor(labels):
-        raise TypeError("Input labels type is not a torch.Tensor. Got {}"
-                        .format(type(labels)))
-    if not labels.dtype == torch.int64:
-        raise ValueError(
-            "labels must be of the same dtype torch.int64. Got: {}" .format(
-                labels.dtype))
-    if num_classes < 1:
-        raise ValueError("The number of classes must be bigger than one."
-                         " Got: {}".format(num_classes))
-    shape = labels.shape
-    one_hot = torch.zeros(shape[0], num_classes, *shape[1:],
-                          device=device, dtype=dtype)
-    return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
-
 
 def custom_one_hot(labels, num_classes):
     r"""
@@ -552,93 +428,6 @@ def custom_one_hot(labels, num_classes):
         one_hot = one_hot[..., :-1]
     
     return one_hot
-
-
-def soft_dice_loss(input: torch.Tensor, target: torch.Tensor, eps: float = 1e-8,
-                   global_weight: float = 1.) -> torch.Tensor:
-    r"""Function that computes Sørensen-Dice Coefficient loss.
-    Arthur: add ^2 for soft formulation
-
-    See :class:`~kornia.losses.DiceLoss` for details.
-    """
-    if not torch.is_tensor(input):
-        raise TypeError("Input type is not a torch.Tensor. Got {}"
-                        .format(type(input)))
-
-    if not len(input.shape) == 4:
-        raise ValueError("Invalid input shape, we expect BxNxHxW. Got: {}"
-                         .format(input.shape))
-
-    if not input.shape[-2:] == target.shape[-2:]:
-        raise ValueError("input and target shapes must be the same. Got: {} and {}"
-                         .format(input.shape, input.shape))
-
-    if not input.device == target.device:
-        raise ValueError(
-            "input and target must be in the same device. Got: {} and {}" .format(
-                input.device, target.device))
-
-    # compute softmax over the classes axis
-    input_soft: torch.Tensor = F.softmax(input, dim=1)
-
-    # create the labels one hot tensor
-    target_one_hot: torch.Tensor = one_hot(target, num_classes=input.shape[1], device=input.device, dtype=input.dtype)
-
-    # compute the actual dice score
-    dims = (1, 2, 3)
-    intersection = torch.sum(input_soft * target_one_hot, dims)
-    cardinality = torch.sum(torch.pow(input_soft, 2) + torch.pow(target_one_hot, 2), dims)
-
-    dice_score = 2. * intersection / (cardinality + eps)
-    return global_weight*torch.mean(-dice_score + 1.)
-
-
-class SoftDiceLoss(nn.Module):
-    r"""Criterion that computes Sørensen-Dice Coefficient loss.
-    Arthur: add ^2 for soft formulation
-
-    According to [1], we compute the Sørensen-Dice Coefficient as follows:
-
-    .. math::
-
-        \text{Dice}(x, class) = \frac{2 |X| \cap |Y|}{|X| + |Y|}
-
-    where:
-       - :math:`X` expects to be the scores of each class.
-       - :math:`Y` expects to be the one-hot tensor with the class labels.
-
-    the loss, is finally computed as:
-
-    .. math::
-
-        \text{loss}(x, class) = 1 - \text{Dice}(x, class)
-
-    [1] https://en.wikipedia.org/wiki/S%C3%B8rensen%E2%80%93Dice_coefficient
-
-    Shape:
-        - Input: :math:`(N, C, H, W)` where C = number of classes.
-        - Target: :math:`(N, H, W)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
-
-    Examples:
-        >>> N = 5  # num_classes
-        >>> loss = DiceLoss()
-        >>> input = torch.randn(1, N, 3, 5, requires_grad=True)
-        >>> target = torch.empty(1, 3, 5, dtype=torch.long).random_(N)
-        >>> output = loss(input, target)
-        >>> output.backward()
-    """
-
-    def __init__(self, global_weight: float = 1.) -> None:
-        super(SoftDiceLoss, self).__init__()
-        self.eps: float = 1e-6
-        self.global_weight = global_weight
-
-    def forward(  # type: ignore
-            self,
-            input: torch.Tensor,
-            target: torch.Tensor) -> torch.Tensor:
-        return soft_dice_loss(input, target, self.eps, self.global_weight)
     
 
 def get_metrics(metrics):
@@ -663,60 +452,6 @@ def get_metrics(metrics):
     metrics_values['dice'] = dice
     metrics_values['dice_by_class'] = dice_by_class.tolist()
     return metrics_values
-
-
-def boxDecoder(yolohead_output, input_size, anchors_layer, num_class, scale=1., device='cuda:0'):
-    """ Decoder output from yolo head to boxes """ 
-
-    grid_size = yolohead_output.shape[1:4]
-    num_anchors_layer = len(anchors_layer)
-    grid_strides = torch.tensor(input_size, dtype=torch.float32).to(device) / torch.tensor(grid_size, dtype=torch.float32).to(device)
-    reshape_size = [yolohead_output.shape[0]] + list(grid_size) + [num_anchors_layer, 7+num_class]
-    pred_raw = yolohead_output.view(reshape_size)  
-    raw_xyz, raw_whd, raw_conf, raw_prob = torch.split(pred_raw, (3,3,1,num_class), dim=-1)
-
-    xyz_grid = torch.meshgrid(torch.arange(grid_size[0]).to(device), 
-                              torch.arange(grid_size[1]).to(device),
-                              torch.arange(grid_size[2]).to(device), indexing="ij") # Added indexing style
-    xyz_grid = torch.unsqueeze(torch.stack(xyz_grid, dim=-1).to(device), dim=3)
-    xyz_grid = xyz_grid.permute(1, 0, 2, 3, 4)
-    xyz_grid = xyz_grid.unsqueeze(0).repeat(yolohead_output.size(0), 1, 1, 1, num_anchors_layer, 1)
-
-    pred_xyz = ((torch.sigmoid(raw_xyz) * scale) - 0.5 * (scale - 1) + xyz_grid) * grid_strides
-
-    # Clipping values 
-    raw_whd = torch.clamp(raw_whd, 1e-12, 1e12)
-    
-    pred_whd = torch.exp(raw_whd) * torch.tensor(anchors_layer, dtype=torch.float32).to(device)
-    pred_xyzwhd = torch.cat([pred_xyz, pred_whd], dim=-1)
-
-    pred_conf = torch.sigmoid(raw_conf)
-    pred_prob = torch.sigmoid(raw_prob)
-    
-    return pred_raw, torch.cat([pred_xyzwhd, pred_conf, pred_prob], dim=-1)
-
-
-def extractYoloInfo(yolo_output_format_data):
-    """ Extract box, objectness, class from yolo output format data """
-    box = yolo_output_format_data[..., :6]
-    conf = yolo_output_format_data[..., 6:7]
-    category = yolo_output_format_data[..., 7:]
-    return box, conf, category
-
-
-def yolo1Loss(pred_box, gt_box, gt_conf, input_size, if_box_loss_scale=True):
-    """ loss function for box regression (based on YOLOV1) """
-    assert pred_box.shape == gt_box.shape
-    if if_box_loss_scale:
-        scale = 2.0 - 1.0 * gt_box[..., 3:4] * gt_box[..., 4:5] * gt_box[..., 5:6] /\
-                                    (input_size[0] * input_size[1] * input_size[2])
-    else:
-        scale = 1.0
-        
-    # YOLOv1 original loss function
-    giou_loss = gt_conf * scale * ((pred_box[..., :3] - gt_box[..., :3]).pow(2) + \
-                    (pred_box[..., 3:].sqrt() - gt_box[..., 3:].sqrt()).pow(2))
-    return giou_loss
 
 
 def iou3d(box_xyzwhd_1, box_xyzwhd_2, input_size):
@@ -786,57 +521,6 @@ def iou3d_np(box_xyzwhd_1, box_xyzwhd_2, input_size):
     return iou
 
 
-def focalLoss(raw_conf, pred_conf, gt_conf, pred_box, raw_boxes, input_size, iou_loss_threshold=0.5):
-    """ Calculate focal loss for objectness """
-    iou = iou3d(pred_box.unsqueeze(-2), raw_boxes.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1), input_size)
-    max_iou, _ = iou.max(dim=-1)
-    max_iou = max_iou.unsqueeze(-1)
-
-    gt_conf_negative = (1.0 - gt_conf) * (max_iou < iou_loss_threshold).float()
-    conf_focal = (gt_conf - pred_conf).pow(2)
-    alpha = 0.01
-
-    focal_loss = conf_focal * (
-        gt_conf * F.binary_cross_entropy_with_logits(raw_conf, gt_conf, reduction='none')
-        +
-        alpha * gt_conf_negative * F.binary_cross_entropy_with_logits(raw_conf, gt_conf, reduction='none')
-    )
-    return focal_loss
-
-
-def categoryLoss(raw_category, pred_category, gt_category, gt_conf):
-    """ Category Cross Entropy loss """
-    category_loss = gt_conf * F.binary_cross_entropy_with_logits(input=raw_category, target=gt_category)
-    return category_loss
-
-
-def lossYolo(pred_raw, pred, label, raw_boxes, input_size, focal_loss_iou_threshold):
-    """ Calculate loss function of YOLO HEAD 
-    Args:
-        feature_stages      ->      3 different feature stages after YOLO HEAD
-                                    with shape [None, r, a, d, num_anchors, 7+num_class]
-        gt_stages           ->      3 different ground truth stages 
-                                    with shape [None, r, a, d, num_anchors, 7+num_class]"""
-    assert len(raw_boxes.shape) == 3
-    input_size = torch.tensor(input_size).float()
-    assert pred_raw.shape == label.shape
-    assert pred_raw.shape[0] == len(raw_boxes)
-    assert pred.shape == label.shape
-    assert pred.shape[0] == len(raw_boxes)
-    raw_box, raw_conf, raw_category = extractYoloInfo(pred_raw)
-    pred_box, pred_conf, pred_category = extractYoloInfo(pred)
-    gt_box, gt_conf, gt_category = extractYoloInfo(label)
-    giou_loss = yolo1Loss(pred_box, gt_box, gt_conf, input_size, \
-                            if_box_loss_scale=False)
-    focal_loss = focalLoss(raw_conf, pred_conf, gt_conf, pred_box, raw_boxes, \
-                            input_size, focal_loss_iou_threshold)
-    category_loss = categoryLoss(raw_category, pred_category, gt_category, gt_conf)
-    giou_total_loss = torch.mean(torch.sum(giou_loss, dim=[1, 2, 3, 4]))
-    conf_total_loss = torch.mean(torch.sum(focal_loss, dim=[1, 2, 3, 4]))
-    category_total_loss = torch.mean(torch.sum(category_loss, dim=[1, 2, 3, 4]))
-    return giou_total_loss, conf_total_loss, category_total_loss
-
-
 def yoloheadToPredictions(yolohead_output, conf_threshold=0.5):
     """ Transfer YOLO HEAD output to [:, 8], where 8 means
     [x, y, z, w, h, d, score, class_index]"""
@@ -884,118 +568,6 @@ def nms(bboxes, iou_threshold, input_size, sigma=0.3, method='nms'):
         else:
             best_bboxes = np.zeros([0, 8])
     return best_bboxes
-
-
-class Cont_Loss(nn.Module):
-    '''nn.Module warpper for focal loss'''
-    def __init__(self, win_size):
-        super(Cont_Loss, self).__init__()
-        self.win_size = win_size
-        self.MSE_loss = nn.MSELoss()
-
-    def forward(self, out, target):
-        loss = 0
-        for i in range(out.shape[0]):
-            batch_loss = 0
-            for j in range(self.win_size):
-                if j % 2 == 0:
-                    batch_loss = batch_loss + self.MSE_loss(out[i, :, j, :, :], target[i, :, j + 1, :, :])
-            loss = loss + batch_loss/(self.win_size/2)
-            # loss = loss + batch_loss
-        return loss
-
-
-def _neg_loss(pred, gt):
-    ''' Modified focal loss. Exactly the same as CornerNet.
-        Runs faster and costs a little bit more memory
-    Arguments:
-        pred (batch x c x h x w)
-        gt_regr (batch x c x h x w)
-    '''
-    balance_cof = 4
-    # focal_inds = pred.gt(1.4013e-45) * pred.lt(1-1.4013e-45)
-    pred = torch.clamp(pred, 1.4013e-45, 1)
-    fos = torch.sum(gt, 1)
-    pos_inds = gt.eq(1).float()
-    neg_inds = gt.lt(1).float()
-    fos_inds = torch.unsqueeze(fos.gt(0).float(), 1)
-    fos_inds = fos_inds.expand(-1, 3, -1, -1, -1)
-    neg_inds = neg_inds + (balance_cof - 1) * fos_inds * gt.eq(0)
-
-    neg_weights = torch.pow(1 - gt, 4)
-    loss = 0
-    # pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds * focal_inds
-    # neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds * focal_inds
-    pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds * balance_cof
-    neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
-
-    num_pos  = pos_inds.float().sum()
-    pos_loss = pos_loss.sum()
-    neg_loss = neg_loss.sum()
-
-    if num_pos == 0:
-        loss = loss - neg_loss
-    else:
-        loss = loss - (pos_loss + neg_loss) / num_pos
-    return loss
-
-class FocalLoss_Neg(nn.Module):
-    '''nn.Module warpper for focal loss'''
-    def __init__(self):
-        super(FocalLoss_Neg, self).__init__()
-        self.neg_loss = _neg_loss
-
-    def forward(self, out, target):
-        return self.neg_loss(out, target)
-
-
-class FocalLoss_weight(nn.Module):
-    def __init__(self,weights,alpha,beta):
-        super(FocalLoss_weight,self).__init__()
-        self.weights = weights
-        self.alpha = alpha
-        self.beta = beta
-
-    def forward(self,input,target):
-        BCE_loss = F.binary_cross_entropy_with_logits(input, target, reduction='none')
-        pt = torch.exp(-BCE_loss) # prevents nans when probability 0
-        F_loss = self.weights * (1-pt)**self.alpha * BCE_loss
-        
-        return F_loss.sum()
-
-class CenterLoss(nn.Module):
-    def __init__(self):
-        super(CenterLoss,self).__init__()
-    
-    def forward(self,pred_map,target_map):
-
-        target_map= target_map.flatten()
-        idx = torch.nonzero(target_map)
-        target_map = ((target_map/8)+0.5)
-        pred_map = pred_map.flatten()
-        c_loss = F.binary_cross_entropy_with_logits(pred_map[idx], target_map[idx], reduction='none')
-        #c_loss = F.binary_cross_entropy_with_logits(pred_map[idx], target_map[idx], reduction='none')
-        return c_loss.sum()
-
-class L2Loss(nn.Module):
-    def __init__(self):
-        super(L2Loss,self).__init__()
-   
-    def forward(self,pred_o,target_o):
-        ep = 1e-10
-        target_s= target_o[:,0,::].flatten() # sine 
-        target_c= target_o[:,1,::].flatten() # cosine
-
-        idx = torch.nonzero(target_c)
-
-        
-        pred_s= pred_o[:,0,::].flatten()
-        pred_c= pred_o[:,1,::].flatten()
-
-        loss = (F.mse_loss(pred_s[idx],target_s[idx],reduction='sum')
-                +F.mse_loss(pred_c[idx],target_c[idx],reduction='sum'))
-
-        return loss.sum()
     
 
 def create_default(map_shape, kernel_window):
@@ -1042,7 +614,6 @@ def update_peaks(pred_cen, pred_idx):
         cord[2] += int(pred_cen[bat,0,r_id,a_id])
         cord[3] += int(pred_cen[bat,1,r_id,a_id])
         pred_idx[cnt]= cord
-        #print(int(8*pred_cen[bat,0,r_id,a_id]))
     return pred_idx
 
 def association(intensity, index, device="cpu"):
@@ -1056,21 +627,16 @@ def association(intensity, index, device="cpu"):
         out_idx = torch.cat((out_idx, index[idx_list[0]]))
         p1_row , p1_col = index[idx_list[0]][2],index[idx_list[0]][3]
         frame_1, cls_1 = index[idx_list[0]][0],index[idx_list[0]][1]
-        #print(p1_row,p1_col)
         x1,y1 = pol2cord(p1_row,p1_col)
-        #print(x1,y1)
         idx_list = idx_list[1:]
 
         count = 0
         while len(idx_list)!=0 and count != len(idx_list):
             frame_2, cls_2 = index[idx_list[count]][0],index[idx_list[count]][1]
-            #if frame_2==frame_1 and cls_1==cls_2:
             if frame_2 == frame_1:
                 p2_row , p2_col = index[idx_list[count]][2],index[idx_list[count]][3]
                 x2,y2 = pol2cord(p2_row,p2_col)
-                #print(x2,y2)
                 dist = distance(x1,y1,x2,y2)
-                #print(dist)
             
                 if dist < 2:
                    idx_list = torch.cat([idx_list[:count], idx_list[count+1:]])
@@ -1080,7 +646,12 @@ def association(intensity, index, device="cpu"):
                 count += 1
     out_idx = torch.reshape(out_idx,(len(out_idx)//4,4))
     return out_idx,out_intent
-    
+
+def distance(x1,y1,x2,y2):
+    dx = x1-x2
+    dy = y1-y2
+    return torch.sqrt(dx**2 + dy**2)
+   
 def pol2cord(rng_idx, agl_idx):
     range_array = torch.linspace(50,0,steps=256)
     w = torch.linspace(-1,1,steps=256) # angular range from -1 radian to 1 radian
@@ -1107,7 +678,6 @@ def orent(orent_map, r, a, velo=0, pred=False):
         if velo>0:
             if delta<90 and delta>-90:pass
             else:
-                #print(v,angle,prj_angle)
                 angle +=180
         else:
             if delta<90 and delta>-90: 

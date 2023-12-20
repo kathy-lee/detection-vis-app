@@ -1,6 +1,7 @@
 {
     "seed":3,
-    "losses": "wce_w10sdice",
+    "losses": {
+    },
     "lr_scheduler": {
         "type": "exp",
         "gamma": 0.9

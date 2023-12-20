@@ -1,3 +1,5 @@
+from loguru import logger
+
 try:
     # from detection_vis_backend.networks.ops.dcn.deform_conv_2d import DeformConv2D, DeformConvPack2D
     # from detection_vis_backend.networks.ops.dcn.deform_conv_2d import ModulatedDeformConv2D, ModulatedDeformConvPack2D
@@ -9,4 +11,4 @@ try:
     # from .deform_pool_3d import ModulatedDeformRoIPoolingPack3D
     
 except:
-    print("Warning: DCN modules are not correctly imported!")
+    logger.warning("Warning: DCN modules are not correctly imported!")

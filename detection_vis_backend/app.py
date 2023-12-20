@@ -1,6 +1,5 @@
 import uuid
 import os
-import logging
 import uvicorn
 import paramiko
 import subprocess
@@ -18,6 +17,7 @@ from sqlalchemy.orm import Session
 from metaflow import Flow
 from metaflow.exception import MetaflowException
 from pathlib import Path
+from loguru import logger
 
 # import sys
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
@@ -45,8 +45,6 @@ from detection_vis_backend.train.inference import infer
 # # Close the session
 # db.close()
 
-logging.basicConfig(level=logging.INFO)
-
 
 app = FastAPI()
 
@@ -70,7 +68,7 @@ def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         users = crud.get_users(db)
     except Exception as e:
-        logging.error(f"An error occurred during getting the users: {str(e)}")
+        logger.error(f"An error occurred during getting the users: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while getting the users.")
 
     if not users:
@@ -83,7 +81,7 @@ def read_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
     try:
         datasets = crud.get_datasets(db)
     except Exception as e:
-        logging.error(f"An error occurred during reading the datasets: {str(e)}")
+        logger.error(f"An error occurred during reading the datasets: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while getting the datasets.")
 
     if not datasets:
@@ -107,13 +105,13 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
         # private_key = paramiko.RSAKey.from_private_key_file("id_rsa")
         private_key = paramiko.RSAKey.from_private_key_file("/home/kangle/.ssh/id_rsa_mifcom")
     except paramiko.PasswordRequiredException:
-        print("Private key is encrypted, password is required")
+        logger.error("Private key is encrypted, password is required")
     except paramiko.SSHException:
-        print("Private key file is not a valid RSA private key file")
+        logger.error("Private key file is not a valid RSA private key file")
     except FileNotFoundError:
-        print("Private key file does not exist")
+        logger.error("Private key file does not exist")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {e}")
 
     try:
         ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
@@ -145,7 +143,7 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
     except Exception as e:
-        logging.error(f"An error occurred during parsing the raw data file: {str(e)}")
+        logger.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -171,7 +169,7 @@ async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = True
         sync_frames = len(dataset_inst.sync_indices)
-        logging.error(f"sync frames: {sync_frames}")
+        logger.info(f"sync frames: {sync_frames}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set sync mode.")
 
@@ -262,7 +260,7 @@ async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], m
         model_meta = schemas.MLModelCreate(name=exp_name,description="info")
         crud.add_model(db=db, mlmodel=model_meta)
     except Exception as e:
-        logging.error(f"An unexpected error occurred during training: {str(e)}")
+        logger.error(f"An unexpected error occurred during training: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
 
     #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
@@ -274,7 +272,7 @@ def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         models = crud.get_models(db)
     except Exception as e:
-        logging.error(f"An error occurred during reading the models: {str(e)}")
+        logger.error(f"An error occurred during reading the models: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while getting the models.")
 
     if not models:
@@ -302,11 +300,11 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
             raise ValueError("Parameters are empty")
 
     # except MetaflowException as e:
-    #     print(f"Metaflow exception occurred: {str(e)}")
+    #     logger.error(f"Metaflow exception occurred: {str(e)}")
     except ValueError as e:
-        print(f"ValueError occurred: {str(e)}")
+        logger.error(f"ValueError occurred: {str(e)}")
     except Exception as e:
-        print(f"An unexpected error occurred: {str(e)}")
+        logger.error(f"An unexpected error occurred: {str(e)}")
             
     return {"datafiles": parameters["datafiles"], "features": parameters["features"], 
             "model_config": parameters["model_config"], "train_config": parameters["train_config"]}
@@ -318,7 +316,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 #     try:
         
 #     except Exception as e:
-#         logging.error(f"An error occurred during training the model: {str(e)}")
+#         logger.error(f"An error occurred during training the model: {str(e)}")
 #         raise HTTPException(status_code=500, detail=f"An error occurred during training the model: {str(e)}")
 #     return Response(status_code=status.HTTP_204_NO_CONTENT)
     
@@ -330,7 +328,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 #     try:
 #         model = crud.get_model(db, model_id)
 #     except Exception as e:
-#         logging.error(f"An error occurred during evaluating the model: {str(e)}")
+#         logger.error(f"An error occurred during evaluating the model: {str(e)}")
 #         raise HTTPException(status_code=500, detail=f"An error occurred druing evaluating the model: {str(e)}")
 
 #     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -346,7 +344,7 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
 
         pred_objs = infer(model.name, checkpoint_id, sample_id, file_id, split_type)     
     except Exception as e:
-        logging.error(f"An error occurred during model prediction: {str(e)}")
+        logger.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
     return pred_objs
@@ -368,9 +366,8 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
         else:
             raise ValueError("Unsupported file format")
         
-
     except Exception as e:
-        logging.error(f"An error occurred during model prediction: {str(e)}")
+        logger.error(f"An error occurred during model prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred druing model prediction: {str(e)}")
 
     return None
@@ -399,7 +396,7 @@ async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_cho
         model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
         crud.add_model(db=db, mlmodel=model_meta)
     except Exception as e:
-        logging.error(f"An unexpected error occurred during training: {str(e)}")
+        logger.error(f"An unexpected error occurred during training: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
 
     return {"model_name": exp_name}

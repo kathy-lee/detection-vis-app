@@ -1,6 +1,5 @@
 import rosbag
 import os
-import logging
 import struct
 import cv2
 import imageio
@@ -25,9 +24,10 @@ from torch.utils.data import Dataset
 from PIL import Image
 from mmwave import dsp
 from mmwave.dsp.utils import Window
+from loguru import logger
 
 
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -42,12 +42,12 @@ class DatasetFactory:
 
     def get_instance(self, class_name, id):
         if id in self.instance_dict:
-            # logging.error(f"#####################{class_name} instance created already, directly return {id}")
+            # logger.debug(f"{class_name} instance created already, directly return {id}")
             return self.instance_dict[id]
         
         class_obj = globals()[class_name]()
         self.instance_dict[id] = class_obj
-        # logging.error(f"#######################{class_name} instance not created yet, will create from file {id}")
+        # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
         return class_obj
 
 # class DatasetFactory:
@@ -88,7 +88,7 @@ class RaDICaL(Dataset):
         try:
             bag = rosbag.Bag(file)
         except rosbag.ROSBagException:
-            print(f"No file found at {file}")
+            logger.error(f"No file found at {file}")
         topics_dict = bag.get_type_and_topic_info()[1]
 
         feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
@@ -178,7 +178,7 @@ class RaDICaL(Dataset):
                             idx_closest = time_diff.index(min(time_diff))
                             index[f] = idx_closest
                     self.sync_indices.append(index)
-        logging.error(f"sync incdices = {len(self.sync_indices)}")
+        logger.debug(f"sync incdices = {len(self.sync_indices)}")
         # parse radar config from config file
         self.radar_cfg = read_radar_params(self.config) 
         self.numRangeBins = self.radar_cfg['profiles'][0]['adcSamples'] #radar_cube.shape[0]
@@ -225,15 +225,15 @@ class RaDICaL(Dataset):
             'image': self.get_image,
             'depth_image': self.get_depthimage,
         }
-        logging.error(f"total frames: {len(self.sync_indices)}")
+        logger.info(f"total frames: {len(self.sync_indices)}")
         # for idx in range(len(self.sync_indices)):
         #     lst = []
         #     for f in features:
         #         feature_data = function_dict[f](idx)
-        #         #logging.error(f"raw {f}: {feature_data.shape}")
+        #         #logger.info(f"raw {f}: {feature_data.shape}")
                 
         #         if f == 'RD': 
-        #             #logging.error('RD begin->')
+        #             #logging.debug('RD begin->')
         #             feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
         #             feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
         #             feature_data = cv2.applyColorMap(feature_data, cv2.COLORMAP_VIRIDIS)
@@ -342,7 +342,7 @@ class RaDICaL(Dataset):
                                 2)  # Line thickness
 
                 writer.append_data(frame)
-                logging.error(idx)
+                logger.debug(idx)
 ####
         return output_path
 
@@ -626,6 +626,7 @@ class RADIal(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        self.segmentation_head = True if model_cfg['segmentation_head'] else False
         return
 
     def __len__(self):
@@ -647,12 +648,7 @@ class RADIal(Dataset):
         # format as following: [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
-        ######################
-        #  Encode the labels #
-        ######################
-        out_label=[]
-        # if(self.encoder!=None):
-        out_label = self.encode(box_labels).copy()      
+        encoded_label = self.encode(box_labels).copy()      
 
         # Read the Radar FFT data
         # radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
@@ -663,18 +659,21 @@ class RADIal(Dataset):
             for i in range(len(self.statistics['input_mean'])):
                 radar_FFT[...,i] -= self.statistics['input_mean'][i]
                 radar_FFT[...,i] /= self.statistics['input_std'][i]
-
-        # Read the segmentation map
-        segmap_name = os.path.join(self.root_dir,'radar_Freespace',"freespace_{:06d}.png".format(sample_id))
-        segmap = Image.open(segmap_name) # [512,900]
-        # 512 pix for the range and 900 pix for the horizontal FOV (180deg)
-        # We crop the fov to 89.6deg
-        segmap = self.crop(segmap)
-        # and we resize to half of its size
-        segmap = np.asarray(self.resize(segmap))==255
-
         radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
-        return radar_FFT, segmap, out_label, box_labels
+        data_dict = {'RD': radar_FFT, 'encoded_label': encoded_label, 'box_label': box_labels}
+        
+        # Read the segmentation map
+        if self.segmentation_head:
+            segmap_name = os.path.join(self.root_dir,'radar_Freespace',"freespace_{:06d}.png".format(sample_id))
+            segmap = Image.open(segmap_name) # [512,900]
+            # 512 pix for the range and 900 pix for the horizontal FOV (180deg)
+            # We crop the fov to 89.6deg
+            segmap = self.crop(segmap)
+            # and we resize to half of its size
+            segmap = np.asarray(self.resize(segmap))==255
+            data_dict.update({'seg_label': segmap})
+   
+        return data_dict # radar_FFT, segmap, encoded_label, box_labels
     
     def set_features(self, features):
         self.features = features
@@ -856,20 +855,19 @@ class RADIalRaw(Dataset):
 
         self.dicts = self.parse_recording(os.path.join(file_path, file_name).name)
         # for Each radar sample, find the clostest sample for each sensor
-        if(master is None):
+        if not master:
             # by default, we use the Radar as Matser sensor
-            if('radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts 
-               or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts):
-                print('Error: recording does not contains the 4 radar chips')
+            if 'radar_ch0' not in self.dicts or 'radar_ch1' not in self.dicts or 'radar_ch2' not in self.dicts or 'radar_ch3' not in self.dicts:
+                logger.error('Error: recording does not contains the 4 radar chips')
             
             keys =list(self.dicts.keys())
             self.keys = keys
             
-            if('gps' in self.dicts):
+            if 'gps' in self.dicts:
                 keys.remove('gps')
-            if('preview' in self.dicts):
+            if 'preview' in self.dicts:
                 keys.remove('preview')
-            if('None' in self.dicts):
+            if 'None' in self.dicts:
                 keys.remove('None')
             keys.remove('radar_ch0')
             keys.remove('radar_ch1')
@@ -880,7 +878,7 @@ class RADIalRaw(Dataset):
             
             # Check the length of all radar recordings!
             NbSample = len(self.dicts['radar_ch3']['timestamp'])
-            print(f"NbSample: ")
+            logger.info(f"NbSample count: {NbSample}")
             # Sequence is radar_ch3 radar_ch0 radar_ch2 radar_ch1
             for i in range(NbSample):
                 timestamp = self.dicts['radar_ch3']['timestamp'][i]
@@ -894,7 +892,7 @@ class RADIalRaw(Dataset):
 
                 match['radar_ch3'] = i
 
-                if(len(idx0)==0 or len(idx1)==0 or len(idx2)==0):
+                if len(idx0)==0 or len(idx1)==0 or len(idx2)==0:
                     id_to_del.append(i)
                     nb_corrupted+=1
                     match['radar_ch0'] = -1
@@ -906,14 +904,14 @@ class RADIalRaw(Dataset):
                     match['radar_ch2'] = idx2[0]
 
                 
-                if(self.sync_mode=='timestamp'):
+                if self.sync_mode=='timestamp':
                     for k in keys:
-                        if(len(self.dicts[k]['timestamp'])>0):
+                        if len(self.dicts[k]['timestamp'])>0:
                             time_diff = np.abs(np.asarray(self.dicts[k]['timestamp']) - timestamp)
                             vmin = time_diff.min()
                             index_min = time_diff.argmin()
 
-                            if(vmin>tolerance):
+                            if vmin>tolerance:
                                 index_min=-1
                         else:
                             index_min=-1
@@ -925,7 +923,7 @@ class RADIalRaw(Dataset):
                         match[k] = index_min
                 else:
                     for k in keys:
-                        if(len(self.dicts[k]['timeofissue'])>0):
+                        if len(self.dicts[k]['timeofissue'])>0:
                             time_diff = np.abs(np.asarray(self.dicts[k]['timeofissue']) - timeofissue)
                             vmin = time_diff.min()
                             index_min = time_diff.argmin()
@@ -948,16 +946,14 @@ class RADIalRaw(Dataset):
             id_to_del = np.unique(np.asarray(id_to_del))
             id_total = np.arange(len(self.table))
             self.id_valid = np.setdiff1d(id_total, id_to_del)
-            if(not self.silent):
-            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
-            	print('Total corrupted frames: ',nb_corrupted/len(self.table)*100,'%')
             self.table = self.table[self.id_valid]
-
-
-        elif(master=='camera'):
+            if not silent:
+                logger.info(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
+                logger.info(f'Total corrupted frames: {nb_corrupted/len(self.table)*100:.2f}%')
+        elif master=='camera':
             # we discard the radar, and consider only camera, laser, can
             if('camera' not in self.dicts):
-                print('Error: recording does not contains camera')
+                logger.error('Error: recording does not contains camera')
             
             keys =list(self.dicts.keys())
 
@@ -1025,12 +1021,11 @@ class RADIalRaw(Dataset):
             id_to_del = np.unique(np.asarray(id_to_del))
             id_total = np.arange(len(self.table))
             id_to_keep = np.setdiff1d(id_total, id_to_del)
-            if(not self.silent):
-            	print('Total tolerance errors: ',nb_tolerance/len(self.table)*100,'%')
             self.table = self.table[id_to_keep]
-
+            if not silent:
+                logger.info(f'Total tolerance errors: {nb_tolerance/len(self.table)*100:.2f}%')
         else:
-            print('Mode not supported')
+            logger.error('Mode not supported')
             return
 
 
@@ -1132,16 +1127,16 @@ class RADIalRaw(Dataset):
         
         if(self.device =='cuda'):
             # if(self.lib=='CuPy'):
-            #     print('CuPy on GPU will be used to execute the processing')
+            #     logger.info('CuPy on GPU will be used to execute the processing')
             #     cp.cuda.Device(0).use()
             #     self.CalibMat = cp.array(self.CalibMat,dtype='complex64')
             #     self.window = cp.array(self.AoA_mat['H'][0])
             # else:
-            print('PyTorch on GPU will be used to execute the processing')
+            logger.info('PyTorch on GPU will be used to execute the processing')
             self.CalibMat = torch.from_numpy(self.CalibMat).to('cuda')
             self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')   
         else:
-            print('CPU will be used to execute the processing')
+            logger.info('CPU will be used to execute the processing')
             self.window = self.AoA_mat['H'][0]
             
         # Build hamming window table to reduce side lobs
@@ -1355,7 +1350,7 @@ class CRUW(Dataset):
         self.feature_path = Path(os.getenv('TMP_ROOTDIR')).joinpath(str(file_id))
         self.feature_path.mkdir(parents=True, exist_ok=True)
         self.pkl_path = os.path.join(self.feature_path, self.seq_name + '.pkl')
-        print("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
+        logger.info("Sequence %s saving to %s" % (self.seq_name, self.pkl_path))
         overwrite = False
         # if overwrite:
         #     if os.path.exists(os.path.join(data_dir, split)):
@@ -1363,7 +1358,7 @@ class CRUW(Dataset):
         #     os.makedirs(os.path.join(data_dir, split))
         try:
             if not overwrite and os.path.exists(self.pkl_path):
-                print("%s already exists, skip" % self.pkl_path)
+                logger.info("%s already exists, skip" % self.pkl_path)
                 return
 
             image_dir = os.path.join(self.root_path, 'TRAIN_CAM_0', self.seq_name, camera_configs['image_folder'])
@@ -1423,7 +1418,7 @@ class CRUW(Dataset):
             pickle.dump(data_dict, open(self.pkl_path, 'wb'))
             # end frames loop
         except Exception as e:
-            print("Error while preparing %s: %s" % (self.seq_name, e))
+            logger.error("Error while preparing %s: %s" % (self.seq_name, e))
         return 
     
     def get_image(self, idx=None, for_visualize=False): 
@@ -1552,6 +1547,8 @@ class CRUW(Dataset):
         # Load radar data
         try:
             data_id = index * self.stride
+            data_dict['start_frame'] = data_id
+            data_dict['end_frame'] = data_id + self.win_size * self.step - 1
             if self.model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
                 if isinstance(chirp_id, int):
                     radar_npy_win = np.zeros((self.win_size, ramap_rsize, ramap_asize, 2), dtype=np.float32)
@@ -1611,17 +1608,12 @@ class CRUW(Dataset):
             else:
                 raise ValueError
             
-            data_dict['radar_data'] = radar_npy_win
-            data_dict['start_frame'] = data_id
-            data_dict['end_frame'] = data_id + self.win_size * self.step - 1
-            #print(f"############################ {data_dict['start_frame']} - {data_dict['end_frame']}")
+            data_dict['RA'] = radar_npy_win
         except:
             # in case load npy fail
             data_dict['status'] = False
-            if not os.path.exists('./tmp'):
-                os.makedirs('./tmp')
             log_name = 'loadnpyfail-' + time.strftime("%Y%m%d-%H%M%S") + '.txt'
-            with open(os.path.join('./tmp', log_name), 'w') as f_log:
+            with open(os.path.join(self.feature_path, log_name), 'w') as f_log:
                 f_log.write('npy path: ' + self.radar_paths[frameid][chirp_id] + \
                             '\nframe indices: %d:%d:%d' % (data_id, data_id + self.win_size * self.step, self.step))
             return data_dict
@@ -1640,16 +1632,16 @@ class CRUW(Dataset):
                 assert confmap_gt.shape == \
                     (self.n_class, self.win_size, radar_configs['ramap_rsize'], radar_configs['ramap_asize'])
 
-            data_dict['anno'] = dict(
-                obj_infos=obj_info,
-                confmaps=confmap_gt,
-            )
-        else:
-            data_dict['anno'] = None
+            # data_dict['anno'] = dict(
+            #     obj_infos=obj_info,
+            #     confmaps=confmap_gt,
+            # )
+            data_dict.update({'obj_infos': obj_info, 'gt_mask': confmap_gt})
+        # else:
+        #     data_dict['anno'] = None
 
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
-            if data_dict['anno'] is not None: # self.all_confmaps and 
-                data_dict['anno']['confmaps'] = data_dict['anno']['confmaps'][:, -1]
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti') and data_dict['gt_mask'] is not None: 
+            data_dict['gt_mask'] = data_dict['gt_mask'][:, -1]
         return data_dict
 
 
@@ -1785,7 +1777,7 @@ class CARRADA(Dataset):
         self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
         
         self.model_type = model_cfg['class']
-        if self.model_type in ('RECORD', 'MVRECORD') :
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             self.process_signal = True
             self.transformations = get_transformations(transform_names=train_cfg['transformations'])
             self.add_temp = True
@@ -1814,7 +1806,7 @@ class CARRADA(Dataset):
                     if new_frame != last_frame + 1:
                         intervals.append(last_frame+4)
                         intervals.append(new_frame)
-            print(intervals)
+            
             seq_intervals = []
             self.indexmapping = []
             self.datasamples_length = 0
@@ -1831,7 +1823,8 @@ class CARRADA(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
-        if self.model_type in ('RECORD', 'MVRECORD') :
+        logger.debug(f"Data item index: {index}")
+        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             frame_id = index + self.win_frames - 1
             init_frame_name = "{:06d}".format(frame_id)
             frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
@@ -1849,7 +1842,7 @@ class CARRADA(Dataset):
                     feature_matrices.append(feature_matrix)
                 feature_matrix = np.dstack(feature_matrices)
                 feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
-                feature_frame = {'matrix': feature_matrix, 'mask': mask}
+                feature_frame = {'matrix': feature_matrix, 'gt_mask': mask}
                 # Apply the same transform to all representations
                 if np.random.uniform(0, 1) > 0.5:
                     is_vflip = True
@@ -1860,16 +1853,35 @@ class CARRADA(Dataset):
                 else:
                     is_hflip = False
                 feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                # Expand one more dim
-                if self.add_temp and self.win_frames > 1:
-                    if isinstance(self.add_temp, bool):
-                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
-                    else:
-                        assert isinstance(self.add_temp, int)
-                        feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
-                # Apply normalization
-                feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-                frame = {'radar': feature_frame['matrix'], 'mask': feature_frame['mask']}
+                
+                if  self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
+                    # Expand one more dim
+                    if self.add_temp:
+                        if isinstance(self.add_temp, bool):
+                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
+                        else:
+                            assert isinstance(self.add_temp, int)
+                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
+                    # Apply normalization
+                    feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
+                    if self.model_type == 'RECORDNoLstmMulti':
+                        c, t, h, w = feature_frame['matrix'].shape
+                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c*t, h, w)
+                    elif self.model_type == 'RECORDNoLstm':
+                        c, t, h, w = feature_frame['matrix'].shape
+                        assert t == 1
+                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
+                    frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
+                else:
+                    # Get ground truth boxes and labels for DAROD network
+                    gt_boxes = []
+                    gt_labels = []
+                    if self.annos[self.seq_name][init_frame_name]:
+                        for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                            #obj_anno['range_doppler']['dense']
+                            gt_boxes.append(obj_anno[featurestr]['box'])
+                            gt_labels.append(obj_anno[featurestr]['label'])
+                    frame = {self.features[0]: feature_frame['matrix'], 'label': gt_labels, 'boxes': gt_boxes}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
@@ -1916,7 +1928,7 @@ class CARRADA(Dataset):
 
                 rd_matrix = np.dstack(rd_matrices)
                 rd_matrix = np.rollaxis(rd_matrix, axis=-1)
-                rd_frame = {'matrix': rd_matrix, 'mask': rd_mask}
+                rd_frame = {'matrix': rd_matrix, 'gt_mask': rd_mask}
                 rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1928,7 +1940,7 @@ class CARRADA(Dataset):
 
                 ra_matrix = np.dstack(ra_matrices)
                 ra_matrix = np.rollaxis(ra_matrix, axis=-1)
-                ra_frame = {'matrix': ra_matrix, 'mask': ra_mask}
+                ra_frame = {'matrix': ra_matrix, 'gt_mask': ra_mask}
                 ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1941,7 +1953,7 @@ class CARRADA(Dataset):
                 ad_matrix = np.dstack(ad_matrices)
                 ad_matrix = np.rollaxis(ad_matrix, axis=-1)
                 # Fill fake mask just to apply transform
-                ad_frame = {'matrix': ad_matrix, 'mask': rd_mask.copy()}
+                ad_frame = {'matrix': ad_matrix, 'gt_mask': rd_mask.copy()}
                 ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
                 if self.add_temp:
                     if isinstance(self.add_temp, bool):
@@ -1954,22 +1966,13 @@ class CARRADA(Dataset):
                 rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
                 ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
                 ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
-                frame = {'rd_matrix': rd_frame['matrix'], 'rd_mask': rd_frame['mask'],
-                        'ra_matrix': ra_frame['matrix'], 'ra_mask': ra_frame['mask'],
-                        'ad_matrix': ad_frame['matrix']}
-                
-            # Get ground truth boxes and labels
-            gt_boxes = []
-            gt_labels = []
-            if self.annos[self.seq_name][init_frame_name]:
-                for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                    #obj_anno['range_doppler']['dense']
-                    gt_boxes.append(obj_anno[featurestr]['box'])
-                    gt_labels.append(obj_anno[featurestr]['label'])
-            camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            frame.update({'image_path': camera_path, 'label': gt_labels, 'boxes': gt_boxes})
+                frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['gt_mask'],
+                        'RA': ra_frame['matrix'], 'ra_mask': ra_frame['gt_mask'],
+                        'AD': ad_frame['matrix']}
+
+            # camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
+            # frame.update({'image_path': camera_path})
         elif self.model_type == 'RadarCrossAttention':
-            print(f"\nItem {index}:")
             raw_index = self.indexmapping[index]
             frame = {'image_path': self.image_filenames[raw_index]}
             ra_map = np.zeros((self.win_frames, 256, 256))
@@ -2002,17 +2005,17 @@ class CARRADA(Dataset):
                 gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
             else:                                        
                 gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
-            frame.update({'rd_matrix': rd_map, 'ra_matrix': ra_map, 'ad_matrix': ad_map, 'mask': gauss_map})
+            frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
                 center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
-                frame.update({'center_map': center_offset}) 
+                frame.update({'gt_center_map': center_offset}) 
             if self.orientation:
                 orient_map = get_orent_map(self.annos[self.seq_name][raw_index])  
-                frame.update({'orent_map': orient_map}) 
+                frame.update({'gt_orent_map': orient_map}) 
             
             for key,value in frame.items():
                 if key != 'image_path':
-                    print(f"{key}: {value.shape}")
+                    logger.debug(f"{key}: {value.shape}")
         else:
             raise ValueError(f"CARRADA dataset doesn't support the model type({self.model_type}) training/inference.")
         return frame
@@ -2117,14 +2120,12 @@ class RADDetDataset(Dataset):
                 y_c, x_c, h, w = (bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5])
                 y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
                 gt.append([x1, y1, x2, y2, cls])
-                print("####################### RD label ######################")
-                print([x1, y1, x2, y2, cls])
+                logger.debug(f"RD label: [{x1}, {y1}, {x2}, {y2}, {cls}]")
             elif feature_name == "RA":
                 y_c, x_c, h, w = (bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4])
                 y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
                 gt.append([x1, y1, x2, y2, cls])
-                print("####################### RA label ######################")
-                print([x1, y1, x2, y2, cls])
+                logger.debug(f"RA label: [{x1}, {y1}, {x2}, {y2}, {cls}]")
             #cart_box = np.array([cart_box])   
         return gt
     
@@ -2150,7 +2151,7 @@ class RADDetDataset(Dataset):
 
         if model_cfg["class"] == "RADDet":
             self.model_type = "RADDet"
-            self.anchor_boxes = np.array(train_cfg["anchor_boxes"])
+            self.anchor_boxes = np.array(model_cfg["anchor_boxes"])
             self.headoutput_shape = [3,16,16,4,78]
             self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
         else:
@@ -2184,11 +2185,14 @@ class RADDetDataset(Dataset):
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
             feature_data = np.transpose(feature_data, (2, 0, 1))
+            feature_name = "RAD"
         elif self.model_type == "DAROD":
             if self.features == ["RD"]:
                 feature_data = self.get_RD(index)
+                feature_name = "RD"
             elif self.features == ["RA"]:
                 feature_data = self.get_RA(index)
+                feature_name = "RA"
 
             x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
             boxes = gt_instances["boxes"]
@@ -2230,7 +2234,7 @@ class RADDetDataset(Dataset):
             feature_data = np.expand_dims(feature_data, axis=0)  
         else:
             raise ValueError("Model type not supported")    
-        return {'radar': feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
+        return {feature_name: feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
     
     def encodeToLabels(self, gt_instances):
         """ Transfer ground truth instances into Detection Head format """
@@ -2507,7 +2511,6 @@ class UWCR(Dataset):
                 self.label_filenames = self.label_filenames[:id_min - id_max + 1]
 
         self.frame_sync = len(self.image_filenames) 
-        print(f"Parsing {file_name}: {self.frame_sync} sync frames({id_max} - {id_min})")
         with open(self.config, 'r') as f:
             self.radar_cfg = json.load(f)
         self.n_angle = 128
@@ -2522,6 +2525,8 @@ class UWCR(Dataset):
                         5: 'bus',
                         7: 'truck',
                         80: 'cyclist'}
+        self.rng_grid = confmap2ra(self.radar_cfg, name='range')
+        self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
         return 
 
     def get_image(self, idx=None, for_visualize=False): 
@@ -2546,7 +2551,10 @@ class UWCR(Dataset):
         for i in range(data.shape[1]):
             for j in range(data.shape[2]):
                 win_data[:, i, j] = np.multiply(data[:, i, j], hanning_win)
-        rd = np.fft.fft(win_data, self.n_range, axis=0)
+        rd = np.fft.fft(win_data, self.n_range, axis=0) # (128, 8, 255)
+        
+        if for_visualize:
+            rd = np.abs(rd[:, 0, :])
         return rd
 
     def get_RV_VA_slice(self, idx=None, for_visualize=False):
@@ -2606,18 +2614,23 @@ class UWCR(Dataset):
 
         fft_data_raw = np.fft.fft(win_data, self.n_angle, axis=1)
         fft3d_data_cmplx = np.fft.fftshift(fft_data_raw, axes=1)
-        filter_static =  False
-        keep_complex = False
-        if keep_complex:
-            fft3d_data = fft3d_data_cmplx
+
+        if for_visualize:
+            ra = np.abs(fft3d_data_cmplx[:, :, 0])
         else:
-            fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
-            fft_data_imag = np.expand_dims(fft3d_data_cmplx.imag, axis=3)
-            # output format [range, angle, chirps, real/imag] : (128, 128, 255, 2)
-            fft3d_data = np.float32(np.concatenate((fft_data_real, fft_data_imag), axis=3))
-        if filter_static:
-            fft3d_data = fft3d_data - np.mean(fft3d_data, axis=2, keepdims=True)
-        return fft3d_data
+            filter_static =  False
+            keep_complex = False
+            if keep_complex:
+                ra = fft3d_data_cmplx
+            else:
+                fft_data_real = np.expand_dims(fft3d_data_cmplx.real, axis=3)
+                fft_data_imag = np.expand_dims(fft3d_data_cmplx.imag, axis=3)
+                # output format [range, angle, chirps, real/imag] : (128, 128, 255, 2)
+                ra = np.float32(np.concatenate((fft_data_real, fft_data_imag), axis=3))
+            
+            if filter_static:
+                ra = ra - np.mean(ra, axis=2, keepdims=True)
+        return ra
 
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
@@ -2646,14 +2659,35 @@ class UWCR(Dataset):
         return feature_data
     
     def get_label(self, feature_name, idx=None):
-        labels = pd.read_csv(self.label_filenames[idx]).values.tolist() 
+        filename = self.label_filenames[idx]
+        try:
+            labels = pd.read_csv(filename, header=None).values.tolist()
+        except pd.errors.EmptyDataError:
+            return []
+        
         gt = []
-        if labels:
+        if feature_name == "RA":
+            logger.debug(filename)
+            logger.debug(labels)
             for obj in labels:
                 category = self.label_map[obj[1]]
                 center_x, center_y, width, length = obj[2:]
-                if feature_name == "RA": 
-                    gt.append([center_x - width/2, center_y - length/2, center_x + width/2, center_y + length/2, category])
+                # convert gt obj to range-angle 
+                distance = math.sqrt(center_x ** 2 + center_y ** 2)
+                angle = math.degrees(math.atan(center_x / center_y))  # in degree
+                logger.info(f"{distance}m, {angle}deg, {category}")
+                if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
+                    continue
+                if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
+                    continue
+                rng_idx, agl_idx = ra2idx(distance, math.radians(angle), self.rng_grid, self.agl_grid)
+            
+                # bbox = [center_x - width / 2, center_y - length / 2, 
+                #         center_x + width / 2, center_y + length / 2, 
+                #         category]
+                bbox = [int(rng_idx), int(agl_idx), category]
+                logger.debug(bbox)
+                gt.append(bbox)
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
@@ -2671,8 +2705,6 @@ class UWCR(Dataset):
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
-        self.rng_grid = confmap2ra(self.radar_cfg, name='range')
-        self.agl_grid = confmap2ra(self.radar_cfg, name='angle')
         self.noise_channel = False
         return 
 
@@ -2680,6 +2712,7 @@ class UWCR(Dataset):
         return self.datasamples_length
 
     def __getitem__(self, index):
+        logger.debug(f"Data item index: {index}")
         data_id = index * self.stride
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
@@ -2709,8 +2742,8 @@ class UWCR(Dataset):
                 for obj in labels:
                     category = self.label_map[int(obj[1])]
                     # class_id = self.class_ids[category]
-                    x = int(float(obj[2]))
-                    y = int(float(obj[3]))
+                    x = obj[2]
+                    y = obj[3]
                     distance = math.sqrt(x ** 2 + y ** 2)
                     angle = math.degrees(math.atan(x / y))  # in degree
                     if distance > self.radar_cfg['rr_max'] or distance < self.radar_cfg['rr_min']:
@@ -2746,8 +2779,9 @@ class UWCR(Dataset):
             confmap_gt = confmap_gt[:self.n_class]
             assert confmap_gt.shape == \
                     (self.n_class, self.win_size, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
-            assert np.shape(obj_info)[0] == self.win_size
-        data_dict = {'ra_matrix': radar_npy_win_ra, 'rv_matrix': radar_npy_win_rv, 'va_matrix': radar_npy_win_va, \
+        
+        assert len(obj_info) == self.win_size
+        data_dict = {'RA': radar_npy_win_ra, 'RD': radar_npy_win_rv, 'AD': radar_npy_win_va, \
                      'confmap_gt': confmap_gt, 'gt_label': obj_info, \
                      'seq_name': self.seq_name,  'start_frame': data_id, 'end_frame': data_id + self.win_size * self.step - 1}
         return data_dict

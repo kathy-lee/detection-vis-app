@@ -1,5 +1,4 @@
 import numpy as np
-import logging
 import math
 import scipy
 import matplotlib.pyplot as plt
@@ -7,9 +6,8 @@ import matplotlib.pyplot as plt
 
 from skimage import transform
 from torchvision import transforms
+from loguru import logger
 
-
-logger = logging.getLogger()
 
 def reshape_frame(data, samples_per_chirp, n_receivers, n_tdm, n_chirps_per_frame):
   _data = data.reshape(-1, 8)
@@ -518,7 +516,7 @@ def generate_confmap(n_obj, obj_info, radar_configs, gaussian_thres=36):
         else:
             raise TypeError
         if class_name not in classes:
-            print("not recognized class: %s" % class_name)
+            logger.warning("not recognized class: %s" % class_name)
             continue
         class_id = get_class_id(class_name, classes)
         sigma = 2 * np.arctan(confmap_length[class_name] / (2 * range_grid[rng_idx])) * confmap_sigmas[class_name]
@@ -574,7 +572,7 @@ def visualize_confmap(confmap, pps=[]):
             plt.imshow(confmap_noise, origin='lower', aspect='auto')
             plt.show()
     else:
-        print("Warning: wrong shape of confmap!")
+        logger.warning("Warning: wrong shape of confmap!")
         return
     plt.imshow(confmap_viz, origin='lower', aspect='auto')
     for pp in pps:
@@ -823,7 +821,7 @@ class Flip:
         self.proba = proba
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         h_flip_proba = np.random.uniform(0, 1)
         if h_flip_proba < self.proba:
             matrix = np.flip(matrix, axis=1).copy()
@@ -832,7 +830,7 @@ class Flip:
         if v_flip_proba < self.proba:
             matrix = np.flip(matrix, axis=2).copy()
             mask = np.flip(mask, axis=2).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
 
 
 class HFlip:
@@ -844,13 +842,13 @@ class HFlip:
         pass
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         matrix = np.flip(matrix, axis=1).copy()
         if len(mask.shape) == 3:
             mask = np.flip(mask, axis=1).copy()
         elif len(mask.shape) == 4:
             mask = np.flip(mask, axis=2).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
 
 
 class VFlip:
@@ -862,13 +860,13 @@ class VFlip:
         pass
 
     def __call__(self, frame):
-        matrix, mask = frame['matrix'], frame['mask']
+        matrix, mask = frame['matrix'], frame['gt_mask']
         matrix = np.flip(matrix, axis=2).copy()
         if len(mask.shape) == 3:
             mask = np.flip(mask, axis=2).copy()
         elif len(mask.shape) == 4:
             mask = np.flip(mask, axis=3).copy()
-        return {'matrix': matrix, 'mask': mask}
+        return {'matrix': matrix, 'gt_mask': mask}
     
 
 def get_transformations(transform_names, split='train', sizes=None):

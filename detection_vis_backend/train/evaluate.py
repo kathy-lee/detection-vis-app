@@ -14,98 +14,88 @@ from shapely.geometry import Polygon
 from scipy.stats import hmean
 from sklearn.metrics import confusion_matrix
 from copy import deepcopy
+from loguru import logger
 
 
-from detection_vis_backend.train.utils import pixor_loss, decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, boxDecoder, lossYolo, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent 
+from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
-from detection_vis_backend.networks.darod import roi_delta, calculate_rpn_actual_outputs, darod_loss
 
 
 
-def FFTRadNet_val_evaluation(net, loader, check_perf=False, losses_params=None, device='cpu'):
+def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device='cpu'):
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
     metrics = Metrics()
     metrics.reset()
-    criterion_det = pixor_loss if losses_params['detection_loss'] == 'PixorLoss' else None
-    criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') if losses_params['segmentation_loss'] == 'BCEWithLogitsLoss' else nn.BCELoss()
-
+    
     for i, data in enumerate(loader):
-        # input, out_label,segmap,labels
-        inputs = data[0].to(device).float()
-        label_map = data[1].to(device).float()
-        seg_map_label = data[2].to(device).double()
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
 
+        inputs = data['RD']
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-
-        if(criterion_det!=None and criterion_seg!=None):
-            classif_loss,reg_loss = criterion_det(outputs['Detection'], label_map,losses_params)           
-            prediction = outputs['Segmentation'].contiguous().flatten()
-            label = seg_map_label.contiguous().flatten()        
-            loss_seg = criterion_seg(prediction, label)
-            loss_seg *= inputs.size(0)
-                
-            classif_loss *= losses_params['weight'][0]
-            reg_loss *= losses_params['weight'][1]
-            loss_seg *=losses_params['weight'][2]
-
-            loss = classif_loss + reg_loss + loss_seg
-
-            # statistics
-            running_loss += loss.item() * inputs.size(0)
+    
+        data.pop('RD')
+        loss = net.get_loss(outputs, data, train_config)
+        running_loss += loss.item() * inputs.size(0)
 
         if(check_perf):
             out_obj = outputs['Detection'].detach().cpu().numpy().copy()
-            labels = data[3]
+            label_obj = data['box_label']
 
             out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
-            label_freespace = seg_map_label.detach().cpu().numpy().copy()
+            label_freespace = data['seg_label'].detach().cpu().numpy().copy()
 
-            for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels,label_freespace):
+            for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,label_obj,label_freespace):
                 metrics.update(pred_map[0],true_map,np.asarray(decode(pred_obj,0.05)),true_obj,threshold=0.2,range_min=5,range_max=100) 
                 
         kbar.update(i)
         
     mAP,mAR, mIoU = metrics.GetMetrics()
-
     return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
-def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
-
+def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
     net.eval()
-    
+    running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
 
     predictions = {'prediction':{'objects':[],'freespace':[]},'label':{'objects':[],'freespace':[]}}
-    for i, data in enumerate(loader):
-
-        # input, out_label,segmap,labels
-        inputs = data[0].to(device).float()
-
+    for iter, data in enumerate(loader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        
+        inputs = data['RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
+
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.size(0)
+            logger.info(f"Val sample {iter} loss: {loss}")
 
         out_obj = outputs['Detection'].detach().cpu().numpy().copy()
         out_seg = torch.sigmoid(outputs['Segmentation']).detach().cpu().numpy().copy()
         
-        labels_object = data[3]
-        label_freespace = data[2].numpy().copy()
+        labels_obj = data['box_label']
+        label_freespace = data['seg_label'].detach().cpu().numpy().copy()
             
-        for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels_object,label_freespace):
-            
+        for pred_obj,pred_map,true_obj,true_map in zip(out_obj,out_seg,labels_obj,label_freespace):
             predictions['prediction']['objects'].append( np.asarray(decode(pred_obj,0.05)))
             predictions['label']['objects'].append(true_obj)
 
             predictions['prediction']['freespace'].append(pred_map[0])
-            predictions['label']['freespace'].append(true_map)
-                
+            predictions['label']['freespace'].append(true_map)   
 
-        kbar.update(i)
-        print(f'Step {i+1}/{len(loader)}')
-        
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+  
     mAP, mAR, F1_score = GetFullMetrics(predictions['prediction']['objects'],predictions['label']['objects'],range_min=5,range_max=100,IOU_threshold=0.5)
 
     mIoU = []
@@ -120,9 +110,13 @@ def FFTRadNet_test_evaluation(net, loader, device='cpu', iou_threshold=0.5):
         mIoU.append(iou)
 
     mIoU = np.asarray(mIoU).mean()
-    print('------- Freespace Scores ------------')
-    print('  mIoU',mIoU*100,'%')
-    return {'mAP': [mAP], 'mAR':[mAR], 'F1_score': [F1_score], 'mIoU': [mIoU*100]}
+    logger.info('------- Freespace Scores ------------')
+    logger.info(f'  mIoU: {mIoU*100} %')
+
+    result = {'mAP': mAP, 'mAR': mAR, 'F1_score': F1_score, 'mIoU': mIoU}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(loader.dataset)})
+    return result
 
 
 def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_threshold=0.5):
@@ -133,10 +127,8 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     RangeError = []
     AngleError = []
 
-    out = []
-
-    for threshold in np.arange(0.1,0.96,0.1):
-        print(f"begin the iteration of threshold = {threshold}")
+    for threshold in np.arange(0.2,0.96,0.1):
+        logger.info(f"\nEvaluation with threshold = {threshold}")
         iou_threshold.append(threshold)
 
         TP = 0
@@ -177,12 +169,10 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
 
             # valid predictions and labels exist for the currently inspected point cloud
             if len(ground_truth_box_corners)>0 and len(Object_predictions)>0:
-
                 used_gt = np.zeros(len(ground_truth_box_corners))
                 for pid, prediction in enumerate(Object_predictions):
                     iou = bbox_iou(prediction[1:], ground_truth_box_corners)
                     ids = np.where(iou>=IOU_threshold)[0]
-
                     
                     if(len(ids)>0):
                         TP += 1
@@ -195,8 +185,6 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
                     else:
                         FP+=1
                 FN += np.sum(used_gt==0)
-
-
             elif(len(ground_truth_box_corners)==0):
                 FP += len(Object_predictions)
             elif(len(Object_predictions)==0):
@@ -206,33 +194,32 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
             precision.append( TP / (TP+FP)) # When there is a detection, how much I m sure
             recall.append(TP / (TP+FN))
         else:
-            precision.append( 0) # When there is a detection, how much I m sure
+            precision.append(0) 
             recall.append(0)
 
         if nbObjects > 0:
             RangeError.append(range_error/nbObjects)
             AngleError.append(angle_error/nbObjects)
         
-
     perfs['precision']=precision
     perfs['recall']=recall
 
     F1_score = (np.mean(precision)*np.mean(recall))/((np.mean(precision) + np.mean(recall))/2)
-    print('------- Detection Scores ------------')
-    print('  mAP:',np.mean(perfs['precision']))
-    print('  mAR:',np.mean(perfs['recall']))
-    print('  F1 score:',F1_score)
+    logger.info('------- Detection Scores ------------')
+    logger.info(f"  mAP: {np.mean(perfs['precision'])}")
+    logger.info(f"  mAR: {np.mean(perfs['recall'])}")
+    logger.info(f"  F1 score: {F1_score}")
 
-    print('------- Regression Errors------------')
-    print('  Range Error:',np.mean(RangeError),'m')
-    print('  Angle Error:',np.mean(AngleError),'degree')
+    logger.info('------- Regression Errors------------')
+    logger.info(f"  Range Error: {np.mean(RangeError)} m")
+    logger.info(f"  Angle Error: {np.mean(AngleError)} degree")
 
     mAP = np.mean(perfs['precision'])
     mAR = np.mean(perfs['recall'])
     return mAP, mAR, F1_score
 
-def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=70,IOU_threshold=0.2):
 
+def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=70,IOU_threshold=0.2):
     TP = 0
     FP = 0
     FN = 0
@@ -263,9 +250,7 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
 
     # valid predictions and labels exist for the currently inspected point cloud
     if NbDet>0 and NbGT>0:
-
         used_gt = np.zeros(len(ground_truth_box_corners))
-
         for pid, prediction in enumerate(Object_predictions):
             iou = bbox_iou(prediction[1:], ground_truth_box_corners)
             ids = np.where(iou>=IOU_threshold)[0]
@@ -276,7 +261,6 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
             else:
                 FP+=1
         FN += np.sum(used_gt==0)
-
     elif(NbGT==0):
         FP += NbDet
     elif(NbDet==0):
@@ -286,7 +270,6 @@ def GetDetMetrics(predictions,object_labels,threshold=0.2,range_min=5,range_max=
 
 
 def GetSegMetrics(PredMap,label_map):
-
     # Segmentation
     pred = PredMap.reshape(-1)>=0.5
     label = label_map.reshape(-1)
@@ -294,8 +277,8 @@ def GetSegMetrics(PredMap,label_map):
     intersection = np.abs(pred*label).sum()
     union = np.sum(label) + np.sum(pred) -intersection
     iou = intersection /union
-
     return iou
+
 
 class Metrics():
     def __init__(self,):
@@ -318,7 +301,7 @@ class Metrics():
             union = np.sum(label) + np.sum(pred) -intersection
             self.iou.append(intersection /union)
 
-        TP,FP,FN = GetDetMetrics(ObjectPred,Objectlabels,threshold=0.2,range_min=range_min,range_max=range_max)
+        TP,FP,FN = GetDetMetrics(ObjectPred,Objectlabels,threshold=threshold,range_min=range_min,range_max=range_max)
 
         self.TP += TP
         self.FP += FP
@@ -343,7 +326,6 @@ class Metrics():
             self.mIoU = np.asarray(self.iou).mean()
 
         return self.precision,self.recall,self.mIoU 
-
 
 
 class ConfmapStack:
@@ -459,15 +441,14 @@ def read_rodnet_res(filename, n_frame, n_class, classes, rng_grid, agl_grid):
     return dts
 
 
-def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, classes, log=False):
+def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, classes):
     gts = gts_dict[imgId, catId]
     dts = dts_dict[imgId, catId]
     if len(gts) == 0 and len(dts) == 0:
         return None
 
-    if log:
-        olss_flatten = np.ravel(olss_dict[imgId, catId])
-        print("Frame %d: %10s %s" % (imgId, classes[catId], list(olss_flatten)))
+    olss_flatten = np.ravel(olss_dict[imgId, catId])
+    logger.debug("Frame %d: %10s %s" % (imgId, classes[catId], list(olss_flatten)))
 
     dtind = np.argsort([-d['score'] for d in dts], kind='mergesort')
     dts = [dts[i] for i in dtind]
@@ -516,15 +497,16 @@ def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, 
 
     gt_dets = read_gt_txt(gt_path, n_frame, n_class, classes)
     sub_dets = read_rodnet_res(res_path, n_frame, n_class, classes, rng_grid, agl_grid)
+    if sub_dets:
+        olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
+                    for imgId in range(n_frame)
+                    for catId in range(3)}
 
-    olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
-                for imgId in range(n_frame)
-                for catId in range(3)}
-
-    evalImgs = [evaluate_img(gt_dets, sub_dets, imgId, catId, olss_all, olsThrs, recThrs, classes)
-                for imgId in range(n_frame)
-                for catId in range(3)]
-
+        evalImgs = [evaluate_img(gt_dets, sub_dets, imgId, catId, olss_all, olsThrs, recThrs, classes)
+                    for imgId in range(n_frame)
+                    for catId in range(3)]
+    else:
+        evalImgs = None
     return evalImgs
 
 
@@ -544,7 +526,7 @@ def compute_ols_dts_gts(gts_dict, dts_dict, imgId, catId):
     return olss
 
 
-def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=True):
+def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes):
     T = len(olsThrs)
     R = len(recThrs)
     K = n_class
@@ -571,8 +553,7 @@ def accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=True):
         ng = gtm.shape[1]  # number of ground truth
         n_objects[classid] = ng
 
-        if log:
-            print("%10s: %4d dets, %4d gts" % (classes[classid], dtm.shape[1], gtm.shape[1]))
+        logger.debug("%10s: %4d dets, %4d gts" % (classes[classid], dtm.shape[1], gtm.shape[1]))
 
         tps = np.array(dtm, dtype=bool)
         fps = np.logical_not(dtm)
@@ -688,40 +669,25 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
     return stats
 
 
-def validate(net, dataloader, criterion, device):
-    net.eval()
-    running_loss = 0.0
-    
-    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
-    for i, data_dict in enumerate(dataloader):
-        data = data_dict['radar_data'].to(device).float()
-        confmap_gt = data['anno']['confmaps'].to(device).float()
-        with torch.set_grad_enabled(False):
-            confmap_pred = net(data)
-        loss = criterion(confmap_pred, confmap_gt)
-        print(f'val loss of sample {i}: {loss}')
-        running_loss += loss.item() * data.size(0)
-        kbar.update(i)
-    return
-
-
-def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
+def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
     radar_cfg = sensor_cfg['radar_cfg']
-    n_class = 3 # dataset.object_cfg.n_class
-    classes = ["pedestrian", "cyclist", "car"]  # dataset.object_cfg.classes
+    n_class = 3 
+    classes = ["pedestrian", "cyclist", "car"]  
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
     net.eval()
-
+    running_loss = 0.0
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     confmap_shape = (3, 128, 128) # (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
     iter_ = init_genConfmap
-    for i in range(train_cfg['win_size'] - 1):
+    for i in range(train_config['win_size'] - 1):
         while iter_.next is not None:
             iter_ = iter_.next
         iter_.next = ConfmapStack(confmap_shape)
@@ -730,106 +696,80 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
     total_count = 0
     load_tic = time.time()
     sequences = []
-    for iter, data_dict in enumerate(dataloader):
+    for iter, data in enumerate(dataloader):
         load_time = time.time() - load_tic
-        data = data_dict['radar_data'].to(device).float()
-        try:
-            image_paths = data_dict['image_paths'][0]
-        except:
-            print('warning: fail to load RGB images, will not visualize results')
-            image_paths = None
-        seq_name = data_dict['seq_name']
-        if seq_name not in sequences:
-            sequences.append(seq_name)
 
-        # if not args.demo:
-        confmap_gt = data_dict['anno']['confmaps']
-        obj_info = data_dict['anno']['obj_infos']
-        # else:
-        #     confmap_gt = None
-        #     obj_info = None
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
         
-        # Currently only support batch_size set to 1 for val evaluation
-        start_frame_id = data_dict['start_frame'].item()
-        end_frame_id = data_dict['end_frame'].item()
-
+        inputs = data['RA']
         tic = time.time()
-        #confmap_pred = net(data.float().cuda())
         with torch.set_grad_enabled(False):
-            confmap_pred = net(data)
-
-        if 'stacked_num' in model_cfg:
-            confmap_pred = confmap_pred[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
+            outputs = net(inputs)
+        
+        if hasattr(net, 'stacked_num'):
+            confmap_pred = outputs[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
         else:
-            confmap_pred = confmap_pred.cpu().detach().numpy()
+            confmap_pred = outputs.cpu().detach().numpy()
 
         infer_time = time.time() - tic
         total_time += infer_time
 
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+        
+        seq_name = data['seq_name'][0]
+        if seq_name not in sequences:
+            sequences.append(seq_name)
+            save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
+        # Currently only support batch_size set to 1 for val evaluation
+        start_frame_id = data['start_frame'].item()
+        end_frame_id = data['end_frame'].item()
+        
         iter_ = init_genConfmap
         for i in range(confmap_pred.shape[2]):
             if iter_.next is None and i != confmap_pred.shape[2] - 1:
                 iter_.next = ConfmapStack(confmap_shape)
             iter_.append(confmap_pred[0, :, i, :, :])
             iter_ = iter_.next
-
+        
         process_tic = time.time()
-        save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
-        for i in range(train_cfg['train_stride']): # test_stride
+        
+        for i in range(train_config['train_stride']): # test_stride
             total_count += 1
-            res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+            res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             cur_frame_id = start_frame_id + i
             write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
-            # confmap_pred_0 = init_genConfmap.confmap
-            # res_final_0 = res_final
-            # if image_paths is not None:
-            #     img_path = image_paths[i]
-            #     radar_input = chirp_amp(data.numpy()[0, :, i, :, :], radar_configs['data_type'])
-            #     fig_name = os.path.join(test_res_dir, seq_name, 'rod_viz', '%010d.jpg' % (cur_frame_id))
-            #     if confmap_gt is not None:
-            #         confmap_gt_0 = confmap_gt[0, :, i, :, :]
-            #         visualize_test_img(fig_name, img_path, radar_input, confmap_pred_0, confmap_gt_0, res_final_0,
-            #                             dataset, sybl=sybl)
-            #     else:
-            #         visualize_test_img_wo_gt(fig_name, img_path, radar_input, confmap_pred_0, res_final_0,
-            #                                     dataset, sybl=sybl)
             init_genConfmap = init_genConfmap.next
-
+        
         if iter == len(dataloader) - 1:
-            offset = train_cfg['train_stride'] # test_stride
+            offset = train_config['train_stride'] # test_stride
             cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
-                res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+                res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
-                # confmap_pred_0 = init_genConfmap.confmap
-                # res_final_0 = res_final
-                # if image_paths is not None:
-                #     img_path = image_paths[offset]
-                #     radar_input = chirp_amp(data.numpy()[0, :, offset, :, :], radar_configs['data_type'])
-                #     fig_name = os.path.join(test_res_dir, seq_name, 'rod_viz', '%010d.jpg' % (cur_frame_id))
-                #     if confmap_gt is not None:
-                #         confmap_gt_0 = confmap_gt[0, :, offset, :, :]
-                #         visualize_test_img(fig_name, img_path, radar_input, confmap_pred_0, confmap_gt_0,
-                #                             res_final_0,
-                #                             dataset, sybl=sybl)
-                #     else:
-                #         visualize_test_img_wo_gt(fig_name, img_path, radar_input, confmap_pred_0, res_final_0,
-                #                                     dataset, sybl=sybl)
                 init_genConfmap = init_genConfmap.next
                 offset += 1
                 cur_frame_id += 1
-        print(f"Sample {iter}/{len(dataloader)} finished")
+        
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
 
         proc_time = time.time() - process_tic
-        print("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
+        logger.info("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
                 (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
-    print("ave time: %f" % (total_time / total_count))
+    logger.info("Ave infer time: %f" % (total_time / total_count))
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
@@ -844,20 +784,29 @@ def RODNet_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device):
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
         
-        eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+        if evalImgs:
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+            logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            n_frames_all += n_frame
+            evalImgs_all.extend(evalImgs)
+        else:
+            logger.info(f"{seq_name}_rod_res.txt is empty.")
+            
+    if evalImgs_all:    
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+        logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
+    else:
+        result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
 
-        n_frames_all += n_frame
-        evalImgs_all.extend(evalImgs)
-
-    eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
-    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
-def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, device, model_type):
+def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
     root_path = "/home/kangle/dataset/CRUW"
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
@@ -868,55 +817,57 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, devi
     agl_grid = confmap2ra(radar_cfg, name='angle')
 
     net.eval()
+    running_loss = 0.0
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     sequences = []
-    for iter, data_dict in enumerate(dataloader):
-        print(f"Sample {iter}")
-        
-        ra_maps = data_dict['radar_data'].to(device).float()
-        confmap_gts = data_dict['anno']['confmaps'].float()
-        image_paths = data_dict['image_paths']
-        seq_name = data_dict['seq_name']
+    for iter, data in enumerate(dataloader):
+        seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
-        save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+            save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
 
-        if confmap_gts is not None:
-            start_frame_name = image_paths[0][0].split('/')[-1].split('.')[0]
-            frame_name = image_paths[0][-1].split('/')[-1].split('.')[0]
-            frame_id = int(frame_name)
-        else:
-            start_frame_name = image_paths[0][0][0].split('/')[-1].split('.')[0].split('_')[0]
-            frame_name = image_paths[0][-1][0].split('/')[-1].split('.')[0].split('_')[0]
-            frame_id = int(frame_name)
+        for key in data:
+            logger.debug(f"data contains key: {key}")
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+                logger.debug(f"Put {key} feature to GPU: {data[key]}")
 
-        if frame_id == train_cfg['win_size']-1 and model_type not in ('RECORDNoLstmMulti', 'RECORDNoLstm'):
+        inputs = data['RA']
+        logger.debug('get input data')
+
+        frame_id = int(data['end_frame'].item())
+        if frame_id == train_config['win_size']-1 and type(net).__name__ not in ('RECORDNoLstm', 'RECORDNoLstmMulti'):
             for tmp_frame_id in range(frame_id):
-                print("Eval frame", tmp_frame_id)
-                tmp_ra_maps = ra_maps[:, :, :tmp_frame_id+1]
+                tmp_ra_maps = inputs[:, :, :tmp_frame_id+1]
                 with torch.set_grad_enabled(False):
                     confmap_pred = net(tmp_ra_maps)
-                res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+                res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
-
+        
         with torch.set_grad_enabled(False):
-            confmap_pred = net(ra_maps)
-            
-        # Write results
-        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_cfg, n_class, rng_grid, agl_grid)
+            confmap_pred = net(inputs)
+        logger.debug('get network output')
+        
+        res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
-    print(f'record_res.txt file(s) for {sequences} created')
+
+        if eval_type == "val":
+            loss = net.get_loss(confmap_pred, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+    logger.info(f'record_res.txt file(s) for {sequences} created')
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     evalImgs_all = []
     n_frames_all = 0
     for seq_name in sequences:
         res_path = os.path.join(save_dir, seq_name + '_record_res.txt')
-        # with open(res_path, 'r') as f:
-        #     content = f.read().strip()
-        # if not content:
-        #     print(f"No objects detected in {seq_name}.")
-        #     continue
-
         gt_path = os.path.join(root_path, 'TRAIN_RAD_H_ANNO', seq_name + '.txt')
         n_frame = len(os.listdir(os.path.join(root_path, 'TRAIN_CAM_0', seq_name, 'IMAGES_0')))
 
@@ -924,17 +875,26 @@ def RECORD_CRUW_evaluation(net, dataloader, save_dir, train_cfg, model_cfg, devi
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
 
-        eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
-        stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-        print("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+        if evalImgs:
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+            logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
+            n_frames_all += n_frame
+            evalImgs_all.extend(evalImgs)
+        else:
+            logger.info(f"{seq_name}_rod_res.txt is empty.")
 
-        n_frames_all += n_frame
-        evalImgs_all.extend(evalImgs)
-        
-    eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
-    stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+    if evalImgs_all:    
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
+        stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
+        logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
+        result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
+    else:
+        result = {'mAP': 0, 'mAR': 0, 'F1_score': 0, 'mIoU': 0}
+
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
 class Evaluator:
@@ -1031,58 +991,69 @@ class Evaluator:
         self.confusion_matrix = np.zeros((self.num_class,) * 2)
 
 
-def RECORD_CARRADA_evaluation(net, dataloader, features, criterion, device):
+def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
-    metrics = Evaluator(4) # number of classes
+    metrics = Evaluator(net.n_class) 
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}") 
-        input = data['radar'].to(device).float()
-        label = data['mask'].to(device).float()
-     
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        
+        inputs = data[features[0]]
         with torch.set_grad_enabled(False):
-            outputs = net(input)
-
-        losses = [c(outputs, torch.argmax(label, axis=1)) for c in criterion]
-        loss = torch.mean(torch.stack(losses))
-        running_loss += loss.item() * input.size(0)
-        metrics.add_batch(torch.argmax(label, axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
-        kbar.update(iter)
+            outputs = net(inputs)
+        
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+        
+        metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     metrics_dict = get_metrics(metrics)
 
     mAP = sum(metrics_dict['prec_by_class']) / len(metrics_dict['prec_by_class'])
     mAR = sum(metrics_dict['recall_by_class']) / len(metrics_dict['recall_by_class'])
-    return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':metrics_dict['miou']}
+    result = {'mAP':mAP, 'mAR':mAR, 'mIoU': metrics_dict['miou']}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
    
 
-def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_criterion, device):
+def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
-    rd_metrics = Evaluator(4) # number of classes
-    ra_metrics = Evaluator(4) # number of classes
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+    rd_metrics = Evaluator(net.n_class) 
+    ra_metrics = Evaluator(net.n_class) 
     for iter, data in enumerate(dataloader):
-        print(f"Sample {iter}")
-        input = (data['rd_matrix'].to(device).float(), data['ra_matrix'].to(device).float(), data['ad_matrix'].to(device).float())
-        label = {'rd': data['rd_mask'].to(device).float(), 'ra': data['ra_mask'].to(device).float()}
-            
-        with torch.set_grad_enabled(False):
-            outputs = net(input)
-
-        rd_losses = [c(outputs['rd'], torch.argmax(label['rd'], axis=1)) for c in rd_criterion]
-        rd_loss = torch.mean(torch.stack(rd_losses))
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
         
-        ra_losses = [c(outputs['ra'], torch.argmax(label['ra'], axis=1)) for c in ra_criterion]
-        ra_loss = torch.mean(torch.stack(ra_losses))
+        inputs = {feature: data[feature] for feature in features}
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
 
-        loss = torch.mean(rd_loss + ra_loss)
-        running_loss += loss.item() * input[0].size(0)
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
 
-        rd_metrics.add_batch(torch.argmax(label['rd'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
-        ra_metrics.add_batch(torch.argmax(label['ra'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
-        kbar.update(iter)
+        rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
+        ra_metrics.add_batch(torch.argmax(data['ra_mask'], axis=1).cpu(), torch.argmax(outputs['ra'], axis=1).cpu())
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
     metrics_dict = dict()
     metrics_dict['range_doppler'] = get_metrics(rd_metrics)
@@ -1096,10 +1067,10 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, features, rd_criterion, ra_crit
             sum(metrics_dict['range_angle']['prec_by_class']) / len(metrics_dict['range_angle']['prec_by_class']) / 2 
     mAR = sum(metrics_dict['range_doppler']['recall_by_class']) / len(metrics_dict['range_doppler']['recall_by_class']) / 2 + \
             sum(metrics_dict['range_angle']['recall_by_class']) / len(metrics_dict['range_angle']['recall_by_class']) / 2
-    return {'loss': running_loss, 
-            'mAP': mAP, 
-            'mAR': mAR, 
-            'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 def iou2d(box_xywh_1, box_xywh_2):
@@ -1217,40 +1188,52 @@ def mAP(predictions, gts, input_size, ap_each_class, tp_iou_threshold=0.5, mode=
     return mean_ap, ap_each_class
 
 
-def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, device):
+def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
+    n_class = net.n_class
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+
     mean_ap_test = 0.0
     ap_all_class_test = []
     ap_all_class = []
-    for class_id in range(model_config['n_class']):
+    for class_id in range(n_class):
         ap_all_class.append([])
-    with torch.set_grad_enabled(False):
-        for iter, data in enumerate(dataloader):
-            inputs = data['radar'].to(device).float()
-            label = data['label'].to(device).float()
-            raw_boxes = data['boxes'].to(device).float()
+    
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+
+        inputs = data["RAD"]
+        with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            pred_raw, pred = boxDecoder(outputs, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
-            box_loss, conf_loss, category_loss = lossYolo(pred_raw, pred, label, raw_boxes[..., :6], train_config['input_size'], train_config['focal_loss_iou_threshold'])
-            box_loss *= 1e-1
-            loss = box_loss + conf_loss + category_loss
-            running_loss += loss.item() * inputs.size(0)
-            pred = pred.detach().cpu().numpy()
-            raw_boxes = raw_boxes.detach().cpu().numpy()
-            for batch_id in range(raw_boxes.shape[0]):
-                raw_boxes_frame = raw_boxes[batch_id]
-                pred_frame = pred[batch_id]
-                predicitons = yoloheadToPredictions(pred_frame, \
-                                    conf_threshold=train_config["confidence_threshold"])
-                nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
-                                train_config["input_size"], sigma=0.3, method="nms")
-                mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
-                                        train_config["input_size"], ap_all_class, \
-                                        tp_iou_threshold=train_config["mAP_iou3d_threshold"])
-                mean_ap_test += mean_ap
+            
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        pred = outputs['pred'].detach().cpu().numpy()
+        raw_boxes = data['boxes'].detach().cpu().numpy()
+        for batch_id in range(raw_boxes.shape[0]):
+            raw_boxes_frame = raw_boxes[batch_id]
+            pred_frame = pred[batch_id]
+            predicitons = yoloheadToPredictions(pred_frame, \
+                                conf_threshold=train_config["confidence_threshold"])
+            nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
+                            net.input_size, sigma=0.3, method="nms")
+            mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
+                                    net.input_size, ap_all_class, \
+                                    tp_iou_threshold=train_config["mAP_iou3d_threshold"])
+            mean_ap_test += mean_ap
+
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
             kbar.update(iter)
+
     for ap_class_i in ap_all_class:
         if len(ap_class_i) == 0:
             class_ap = 0.
@@ -1258,11 +1241,10 @@ def RADDet_evaluation(net, dataloader, batch_size, model_config, train_config, d
             class_ap = np.mean(ap_class_i)
         ap_all_class_test.append(class_ap)
     mean_ap_test /= batch_size * len(dataloader)
-    print("-------> ap: %.6f"%(mean_ap_test))
-    return {'loss': running_loss, 
-            'mAP': mean_ap_test, 
-            'mAR': 0.0, 
-            'mIoU': 0.0}
+    result = {'mAP': mean_ap_test, 'mAR': 0.0, 'mIoU': 0.0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 class RunningAverage():
@@ -1321,8 +1303,6 @@ def accumulate_tp_fp(pred_boxes, pred_labels, pred_scores, gt_boxes, gt_classes,
             tp_dict[pred_label]["scores"][iou_idx].append(pred_score)
             tp_dict[pred_label]["tp"][iou_idx].append(0)
             tp_dict[pred_label]["fp"][iou_idx].append(0)
-            #print(tp_dict[pred_label]["tp"][iou_idx])
-            #print(tp_dict[pred_label]["fp"][iou_idx])
             if pred_label == gt_label and iou[max_idx_iou] >= iou_thresholds[iou_idx] and \
                     list(gt_box) not in detected_gts[iou_idx]:
                 tp_dict[pred_label]["tp"][iou_idx][-1] = 1
@@ -1456,7 +1436,7 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     for class_id in range(n_classes):
         tp, fp, scores, total_gt = tp_dict[class_id]["tp"], tp_dict[class_id]["fp"], tp_dict[class_id]["scores"], \
             tp_dict[class_id]["total_gt"]
-        print(f"class {class_id}: {total_gt}")
+        logger.debug(f"class {class_id}: {total_gt}")
         # Added begins
         if total_gt == 0:
             continue
@@ -1475,7 +1455,7 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
                 = compute_ap_class(tp[iou_idx], fp[iou_idx], scores[iou_idx], total_gt)
             ap_dict[class_id]["F1"][iou_idx] = compute_f1(ap_dict[class_id]["precision"][iou_idx],
                                                           ap_dict[class_id]["recall"][iou_idx])
-    print(valid_class_ids)
+    logger.debug(valid_class_ids)
     ap_dict["mean"] = {
         "AP": [np.mean([ap_dict[class_id]["AP"][iou_th] for class_id in valid_class_ids])
                for iou_th in range(len(ap_dict[valid_class_ids[0]]["AP"]))],
@@ -1489,54 +1469,58 @@ def AP(tp_dict, n_classes, iou_th=[0.5]):
     return ap_dict
 
 
-def DAROD_evaluation(net, dataloader, model_config, train_config, device, iou_thresholds=[0.5]):
+def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, iou_thresholds=[0.5]):
     net.eval()
+    n_class = net.n_class
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
-    n_classes = model_config['n_class'] - 1 # Ignore 0 class which is BG
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+
+    n_class = n_class - 1 # Ignore 0 class which is BG
     tp_dict = dict()
-    val_loss = RunningAverage()
-    for class_id in range(n_classes):
+    for class_id in range(n_class):
         tp_dict[class_id] = {
             "tp": [[] for _ in range(len(iou_thresholds))],
             "fp": [[] for _ in range(len(iou_thresholds))],
             "scores": [[] for _ in range(len(iou_thresholds))],
             "total_gt": 0
         }
-    with torch.set_grad_enabled(False):
-        for iter, data in enumerate(dataloader):
-            inputs = data['radar'].to(device).float()
-            gt_labels = data['label'].to(device).int()
-            gt_boxes = data['boxes'].to(device).float()
+    
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        
+        inputs = data['RD']
+        with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            # loss
-            bbox_deltas, bbox_labels = calculate_rpn_actual_outputs(net.anchors, gt_boxes, gt_labels, model_config, train_config["seed"])
-            frcnn_reg_actuals, frcnn_cls_actuals = roi_delta(outputs["roi_bboxes_out"], gt_boxes, gt_labels, model_config, train_config["seed"])
-            rpn_reg_loss, rpn_cls_loss, frcnn_reg_loss, frcnn_cls_loss = darod_loss(outputs, bbox_labels, bbox_deltas, frcnn_reg_actuals, frcnn_cls_actuals)
-            losses = rpn_reg_loss + rpn_cls_loss + frcnn_reg_loss + frcnn_cls_loss
-            val_loss(losses)
-            print("Get loss, begin evaluation")
-            if outputs["decoder_output"] is not None:
-                pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
-                # print(f"gt_labels:{gt_labels}")
-                # print(f"pred_labels:{pred_labels}")
-                pred_labels = pred_labels - 1
-                gt_labels = gt_labels - 1
-                for batch_id in range(pred_boxes.shape[0]):
-                    tp_dict = accumulate_tp_fp(pred_boxes.cpu().numpy()[batch_id], pred_labels.cpu().numpy()[batch_id],
-                                                    pred_scores.cpu().numpy()[batch_id], gt_boxes.cpu().numpy()[batch_id],
-                                                    gt_labels.cpu().numpy()[batch_id], tp_dict,
-                                                    iou_thresholds=iou_thresholds)
+        
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        if outputs["decoder_output"] is not None:
+            pred_boxes, pred_labels, pred_scores = outputs["decoder_output"]
+            pred_labels = pred_labels - 1
+            gt_labels = data['label'] - 1
+            for batch_id in range(pred_boxes.shape[0]):
+                tp_dict = accumulate_tp_fp(pred_boxes.cpu().numpy()[batch_id], pred_labels.cpu().numpy()[batch_id],
+                                                pred_scores.cpu().numpy()[batch_id], data['boxes'].cpu().numpy()[batch_id],
+                                                gt_labels.cpu().numpy()[batch_id], tp_dict,
+                                                iou_thresholds=iou_thresholds)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
             kbar.update(iter)
 
-    print("******************* Eval metrics******************")
-    ap_dict = AP(tp_dict, n_classes, iou_thresholds)
-    # Added
-    running_loss = val_loss.total
+    ap_dict = AP(tp_dict, n_class, iou_thresholds)
     mAP = np.mean(ap_dict["mean"]["AP"])
     mAR = np.mean(ap_dict["mean"]["recall"])
-    print("****************** Eval ended **********************")
-    return {'loss': running_loss.cpu(), 'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': 0.0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return  result
 
 
 def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs):
@@ -1550,22 +1534,25 @@ def evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid,
     return evalImgs
 
 
-def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
+def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
 
     net.eval()
+    n_class = net.n_class
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
-    n_class = model_cfg['n_class']
     classes = ["pedestrian", "cyclist", "car"] 
-    confmap_shape = (model_cfg['n_class'], model_cfg['ramap_rsize'], model_cfg['ramap_asize'])
     with open('/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'r') as file:
         radar_cfg = json.load(file)
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
     
+    confmap_shape = (n_class, radar_cfg['ramap_rsize'], radar_cfg['ramap_asize'])
     init_genConfmap = ConfmapStack(confmap_shape)
     iter_ = init_genConfmap
-    for i in range(train_cfg['win_size'] - 1):
+    for i in range(train_config['win_size'] - 1):
         while iter_.next is not None:
             iter_ = iter_.next
         iter_.next = ConfmapStack(confmap_shape)
@@ -1579,21 +1566,29 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
     gt_objs = {(i, j): [] for i in range(n_frame) for j in range(n_class)}
     id_gt = 1
     id_res = 1
-    for iter, data_dict in enumerate(dataloader):
-        load_time = time.time() - load_tic
-        inputs = (data_dict['ra_matrix'].to(device).float(), data_dict['rv_matrix'].to(device).float(), data_dict['va_matrix'].to(device).float())
-        for i in range(train_cfg['train_stride']):
-            if data_dict['gt_label'][0][i]:
-                for obj in data_dict['gt_label'][0][i]:
+    for iter, data in enumerate(dataloader):
+        # get gt info
+        for i in range(train_config['train_stride']):
+            if data['gt_label'][0][i]:
+                for obj in data['gt_label'][0][i]:
                     ridx, aidx, category = obj
                     rng = rng_grid[ridx]
                     agl = agl_grid[aidx]
                     classid = get_class_id(category, classes)
+                    if classid == -1000: 
+                        continue
                     gt_obj = {'id': id_gt, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
                                     'classid': classid, 'score': 1.0}
                     gt_objs[iter, classid].append(gt_obj)
                     id_gt += 1
             # TODO: Handle the case of empty annotation
+
+        load_time = time.time() - load_tic
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        
+        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
                 
         # seq_name = data_dict['seq_name']
         # if seq_name not in sequences:
@@ -1605,9 +1600,14 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
         
         tic = time.time()
         with torch.set_grad_enabled(False):
-            output = net(inputs)
+            outputs = net(inputs)
         
-        confmap_pred = output['confmap_pred'][-1].cpu().detach().numpy()  
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        confmap_pred = outputs['confmap_pred'][-1].cpu().detach().numpy()  
         confmap_pred = np.expand_dims(confmap_pred, axis=0)
         infer_time = time.time() - tic
         total_time += infer_time
@@ -1621,9 +1621,9 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
 
         process_tic = time.time()
         # save_path = os.path.join(save_dir, seq_name + '_rampcnn_res.txt')
-        for i in range(train_cfg['train_stride']): # test_stride
+        for i in range(train_config['train_stride']): # test_stride
             total_count += 1
-            res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+            res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             # cur_frame_id = start_frame_id + i
             # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
             for obj in res_final:
@@ -1643,7 +1643,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
             # cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
-                res_final = post_process_single_frame(init_genConfmap.confmap, train_cfg, n_class, rng_grid, agl_grid)
+                res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
                 # write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
                 for obj in res_final:
                     class_id, ridx, aidx, conf = obj
@@ -1658,17 +1658,20 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
                 init_genConfmap = init_genConfmap.next
                 # offset += 1
                 # cur_frame_id += 1
-        print(f"Sample {iter}/{len(dataloader)} finished")
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
 
         if init_genConfmap is None:
             init_genConfmap = ConfmapStack(confmap_shape)
 
         # proc_time = time.time() - process_tic
-        # print("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
+        # logger.info("Testing %s: frame %4d to %4d | Load time: %.4f | Inference time: %.4f | Process time: %.4f" %
         #         (seq_name, start_frame_id, end_frame_id, load_time, infer_time, proc_time))
 
         load_tic = time.time()
-    print("ave time: %f" % (total_time / total_count))
+    logger.info("Average Infer time: {:.4f} s".format(total_time / total_count))
 
     # 2.Evaluation the detection predictions with Ground-truth annotations
     olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
@@ -1676,12 +1679,18 @@ def RAMP_CNN_evaluation(net, dataloader, train_cfg, model_cfg, device):
     evalImgs = evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
     eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
-    print("AP_total: %.4f | AR_total: %.4f" % (stats[0] * 100, stats[1] * 100))
-    return {'loss':0, 'mAP':stats[0], 'mAR':stats[1], 'mIoU':0}
+    logger.info("AP_total: {:.4f} | AR_total: {:.4f}".format(stats[0] * 100, stats[1] * 100))
+    result = {'mAP': stats[0], 'mAR': stats[1], 'mIoU': 0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
-def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
+def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, thresh=2):
     net.eval()
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
 
     cls = dict()
     temp_dict = {'grd_no':0,'Conf':[],'O_P':[],'O_T':[],'TP':[],'P':[],'R':[],'AP':[],'asc':{'gt_r':[],'gt_a':[],'pd_r':[],'pd_a':[]}}
@@ -1691,53 +1700,65 @@ def RadarCrossAttention_evaluation(net, loader, model_config, device, thresh=2):
 
     prev_size = 0
 
-    with torch.no_grad():
-        for idx, data in enumerate(loader):
-            inputs = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
-            grd_map = data["mask"].to(device).float()
-            if model_config["orientation"]:
-                tr_o = data["orent_map"].to(device).float()
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
         
-            with torch.set_grad_enabled(False):
-                output = net(inputs)
+        inputs = {feature: data[feature] for feature in ['RD', 'RA', 'AD']}
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
 
-            if data['ra_matrix'].shape[0] != prev_size:
-                mask, peak_cls = create_default(grd_map.size(), kernel_window=(3,5))
-                mask = mask.to(device=device)
-                peak_cls = peak_cls.to(device=device)
-           
-            prev_size = data['ra_matrix'].shape[0]
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        if data['RA'].shape[0] != prev_size:
+            mask, peak_cls = create_default(data["gt_mask"].size(), kernel_window=(3,5))
+            mask = mask.to(device=device)
+            peak_cls = peak_cls.to(device=device)
+        
+        prev_size = data['RA'].shape[0]
+
+        pred_map = torch.sigmoid(outputs["pred_mask"])
+        pred_c = 8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
+
+        # pred_c shape: torch.Size([16, 2, 256, 256])
+        cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
+                                pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
+                                tr_o=data["gt_orent_map"], pred_o=outputs["pred_orent"], cls=cls,
+                                thresh=thresh, device=device)
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+    logger.info("Val data loop finished.")
+
+    for idx in range(len(cls)):
+        categ = cls[f"{idx}"]
+        P =[]
+        R=[]
+        TP = 0
+        GT = categ['grd_no']
+        index = np.argsort(-categ['Conf'])
+        for cnt, i in enumerate(index):
+            TP += categ['TP'][i]
+            P = np.append(P,TP/(cnt+1))
+            R = np.append(R, TP/GT)
+        categ['P']= P
+        categ['R'] = R
+        categ['AP'] = np.trapz(P,R)
+        prec = np.sum(categ['TP'])
+        rec =  len(categ['TP'])
+        logger.info(f"{idx} | AP: {categ['AP']}, P: {prec / rec}, R: {prec / GT}, GT: {GT}, Heading Accuracy: {cls[f'{idx}']['O_T']}, {cls[f'{idx}']['O_P']}")
+        cls[f"{idx}"] = categ
     
-            pred_map = torch.sigmoid(output["pred_mask"])
-            pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
- 
-            print(f"pred_c shape: {pred_c.shape}") #pred_c shape: torch.Size([16, 2, 256, 256])
-            cls = metrics_center(grd_map=grd_map, pred_map=pred_map,
-                                 pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                 tr_o=tr_o, pred_o=output["pred_orent"], cls=cls,
-                                 thresh=thresh, device=device)
-            print(f"item {idx} finished")
-
-        for idx in range(len(cls)):
-            categ = cls[f"{idx}"]
-            P =[]
-            R=[]
-            TP = 0
-            GT = categ['grd_no']
-            index = np.argsort(-categ['Conf'])
-            for cnt, i in enumerate(index):
-                TP += categ['TP'][i]
-                P = np.append(P,TP/(cnt+1))
-                R = np.append(R, TP/GT)
-            categ['P']= P
-            categ['R'] = R
-            categ['AP'] = np.trapz(P,R)
-            prec = np.sum(categ['TP'])
-            rec =  len(categ['TP'])
-            print(idx, 'AP:',categ['AP'],'P:' f"{prec/rec}" , 'R:',f"{prec/GT}", 'GT:'f" {GT}")
-            #print('Heading Accuracy', cls[f"{idx}"]['O_T'],'\n',cls[f"{idx}"]['O_P'])
-            cls[f"{idx}"] = categ
-    return {'loss':0, 'mAP':0, 'mAR':0, 'mIoU':0}
+    mAP = (cls['0']['AP'] + cls['1']['AP'] + cls['2']['AP']) / 3
+    result = {'mAP': mAP, 'mAR': 0, 'mIoU': 0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
 
 
 def metrics_center(grd_map, pred_map, pred_c, mask, 
@@ -1755,10 +1776,6 @@ def metrics_center(grd_map, pred_map, pred_c, mask,
     cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
     return cls  
 
-def distance(x1,y1,x2,y2):
-    dx = x1-x2
-    dy = y1-y2
-    return torch.sqrt(dx**2 + dy**2)
 
 def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, device='cpu'):
     for grd_cord in grd_idx:
@@ -1785,7 +1802,6 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
                 dist = torch.cat([dist,torch.Tensor([100]).to(device=device)]) # dummy distance
 
         if len(dist)!=0:
-            #print(f"{dist}\n")
             if torch.min(dist) < dist_thresh:
                 min_idx = torch.argmin(dist)
                 t_r = int(grd_idx[min_idx][2])
@@ -1812,3 +1828,20 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
 
 
 
+RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
+RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
+dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
+eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
+eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
+for i in RODNet_subtypes:
+    eval_func_dict[i, "CRUW"] = RODNet_evaluation
+for i in RECORD_subtypes:
+    eval_func_dict[i, "CRUW"] = RECORD_CRUW_evaluation
+    eval_func_dict[i, "CARRADA"] = RECORD_CARRADA_evaluation
+eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
+eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
+eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
+eval_func_dict["DAROD", "CARRADA"] = DAROD_evaluation
+eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
+eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation

@@ -30,7 +30,7 @@ if 'datafile_chosen' not in st.session_state:
   st.session_state.datafile_chosen = 0
 
 
-featureset = ["ADC", "RAD", "RA", "RD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image"]
+featureset = ["ADC", "RAD", "RA", "RD", "spectrogram", "radarPC", "lidarPC", "image", "depth_image", "AD"]
 
 # frame sync mode
 if 'frame_sync' not in st.session_state:
@@ -138,14 +138,14 @@ for idx, f in enumerate(featureset):
       features_show.append(False)
     else:
       features_show.append(True)
-  elif f in ("RAD", "RA", "RD", "spectrogram", "radarPC") and datafile_chosen["ADC"]:
+  elif f in ("RAD", "RA", "RD", "AD", "spectrogram", "radarPC") and datafile_chosen["ADC"]:
     features.append(f)
     features_show.append(False)
     # if f != "RAD":
     #   features_show.append(False)
     # else:
     #   features_show.append(True) # Do not support 3d array display
-  elif f in ("RA", "RD", "spectrogram", "radarPC") and "RAD" in features:
+  elif f in ("RA", "RD", "AD", "spectrogram", "radarPC") and "RAD" in features:
     features.append(f)
     features_show.append(False)
 

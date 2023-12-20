@@ -10,14 +10,11 @@ import cv2
 import polarTransform
 import torch.nn as nn
 
-from shapely.geometry import Polygon
-from scipy.stats import hmean
-from sklearn.metrics import confusion_matrix
-from PIL import Image
+from loguru import logger
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, boxDecoder, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
+from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
 
 
 def infer(model, checkpoint_id, sample_id, file_id, split_type):
@@ -60,7 +57,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     with torch.set_grad_enabled(False):
         if model_type == "FFTRadNet":
             # input_data: [radar_FFT, segmap,out_label,box_labels,image]
-            input = torch.tensor(data[0]).unsqueeze(0).to(device).float()
+            input = torch.tensor(data["RD"]).unsqueeze(0).to(device).float()
             output = net(input)
             pred_obj = output['Detection'].detach().cpu().numpy().copy()[0]
             pred_obj = decode(pred_obj,0.05)
@@ -81,12 +78,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             #feature_show_pred = "image"
             pred_objs = {"image": pred_objs}
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
-            input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
+            input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
             output = net(input)
-            if 'stacked_num' in model_config:
-                confmap_pred = output[-1].detach().cpu().numpy()  # (1, 4, 32, 128, 128)
+            if hasattr(net, 'stacked_num'):
+                confmap_pred = output[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
             else:
-                confmap_pred = output.detach().cpu().numpy()
+                confmap_pred = output.cpu().detach().numpy()
             pred_objs = post_process_single_frame(confmap_pred[0,:,0,:,:], parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
             # filter invalid predictions
             mask = pred_objs[:, 0] != -1 
@@ -99,7 +96,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             #feature_show_pred = "RA"
             pred_objs = {"RA": pred_objs.tolist()}
         elif model_type in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti") and dataset_type == "CRUW":
-            input = torch.tensor(data['radar_data']).unsqueeze(0).to(device).float()
+            input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
             output = net(input)
             confmap_pred = output[0].detach().cpu().numpy()
             pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
@@ -114,10 +111,10 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             #feature_show_pred = "RA"
             pred_objs = {"RA": pred_objs.tolist()}
         elif model_type == "RECORD" and dataset_type == "CARRADA":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            feature = parameters["features"][0]
+            input = torch.tensor(data[feature]).unsqueeze(0).to(device).float()
             output = net(input)
             confmap_pred = output[0].detach().cpu().numpy()
-            feature = parameters["features"][0]
             if feature == "RA":
                 pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
             elif feature == "RD":
@@ -134,9 +131,10 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = pred_objs[:, [1, 2, 0, 3]]
             pred_objs = {feature: pred_objs.tolist()}
         elif model_type == "MVRECORD":
-            input = (torch.tensor(data['rd_matrix']).unsqueeze(0).to(device).float(), 
-                     torch.tensor(data['ra_matrix']).unsqueeze(0).to(device).float(), 
-                     torch.tensor(data['ad_matrix']).unsqueeze(0).to(device).float())
+            # input = (torch.tensor(data['RD']).unsqueeze(0).to(device).float(), 
+            #          torch.tensor(data['RA']).unsqueeze(0).to(device).float(), 
+            #          torch.tensor(data['AD']).unsqueeze(0).to(device).float())
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
             confmap_pred_ra = output['ra'].detach().cpu().numpy()
             confmap_pred_rd = output['rd'].detach().cpu().numpy()
@@ -161,11 +159,10 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs["RD"] = pred_objs["RD"][:, [1, 2, 0, 3]]
             pred_objs = {"RA": pred_objs_ra.tolist(), "RD": pred_objs_rd.tolist()}
         elif model_type == "RADDet":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            input = torch.tensor(data['RAD']).unsqueeze(0).to(device).float()
             output = net(input)
             train_config = parameters["train_config"]
-            _, pred = boxDecoder(output, train_config['input_size'], train_config['anchor_boxes'], model_config['n_class'], train_config['yolohead_xyz_scales'][0], device)
-            pred = pred.detach().cpu()
+            pred = output['pred'].detach().cpu()
             predicitons = yoloheadToPredictions(pred[0], conf_threshold=train_config["confidence_threshold"])
             pred_objs = nms(predicitons, train_config["nms_iou3d_threshold"], train_config["input_size"], sigma=0.3, method="nms")
             rd_objs = []
@@ -177,7 +174,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 ra_objs.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
             pred_objs = {"RD": rd_objs, "RA": ra_objs}
         elif model_type == "DAROD":
-            input = torch.tensor(data['radar']).unsqueeze(0).to(device).float()
+            input = torch.tensor(data['RD']).unsqueeze(0).to(device).float()
             output = net(input)
             pred_boxes, pred_labels, pred_scores = output["decoder_output"]
             pred_boxes = pred_boxes.detach().cpu().numpy()[0].astype(float)
@@ -187,10 +184,11 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = [list(pred_boxes[i]) + [pred_labels[i], pred_scores[i]] for i in range(len(pred_boxes))]
             pred_objs = {"RD": pred_objs}
         elif model_type == "RAMP_CNN":
-            input = (data['ra_matrix'].to(device).float(), data['rv_matrix'].to(device).float(), data['va_matrix'].to(device).float())
+            #input = (data['RA'].to(device).float(), data['RD'].to(device).float(), data['AD'].to(device).float())
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
             confmap_pred = output['confmap_pred'].cpu().detach().numpy() 
-            pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            pred_objs = post_process_single_frame(confmap_pred[0,:,0,:,:], parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
             # filter invalid predictions
             mask = pred_objs[:, 0] != -1 
             pred_objs = pred_objs[mask]
@@ -202,27 +200,31 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             #feature_show_pred = "RA"
             pred_objs = {"RA": pred_objs.tolist()}
         elif model_type == "RadarCrossAttention":
-            input = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
+            #input = (data['ra_matrix'].to(device).float(), data['rd_matrix'].to(device).float(), data['ad_matrix'].to(device).float())  
+            input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
-            pred_map = torch.sigmoid(output["pred_mask"])
+            pred_map = torch.sigmoid(output["pred_mask"]).detach().cpu()
             pred_c = 8 * (torch.sigmoid(output["pred_center"]) - 0.5)
-            pred_o = output["pred_orent"]
-            mask, peak_cls = create_default(pred_map.size(), kernel_window=(3,5))
+            pred_c = pred_c.detach().cpu().numpy()
+            pred_o = output["pred_orent"].detach().cpu().numpy()
+            mask, peak_cls = create_default(pred_map.shape, kernel_window=(3,5))
             pred_intent, pred_idx = peaks_detect(pred_map, mask, peak_cls, heat_thresh=0.6)
-            pred_idx= distribute(pred_idx,device)
+            pred_idx= distribute(pred_idx)
             pred_idx = update_peaks(pred_c, pred_idx)
             pred_idx, pred_intent= association(pred_intent, pred_idx, device)
+            logger.debug(pred_idx)
+
             ra_objs = []
             for cnt, cord in enumerate(pred_idx):
                 p_cls, p_row, p_col = int(cord[1]), cord[2], cord[3]
                 orientation = orent(pred_o[p_row,::], int(p_row//4), int(p_col//4), pred=True)
                 ra_objs.append([p_row, p_col, p_cls, pred_intent[cnt], orientation]) # [row_id, col_id, cls_id, confidence, heading]
-                print(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
+                logger.debug(f"Class: {p_cls}, Confidence: {pred_intent[cnt]},\
                     Range: {50*p_row/256}, Angle(deg): {p_col*57.29*2/256 - 57.29},\
                     Heading: {orientation}")  
-            pred_objs = {"RA": ra_objs.tolist()}
+            pred_objs = {"RA": ra_objs}
         else:
-            raise ValueError("Inference of the chosen model type is not supported")
+            raise ValueError(f"Inference of the chosen model type {model_type} is not supported")
 
     return pred_objs
 
@@ -233,10 +235,10 @@ def display_inference_FFTRadNet(image, input, model_outputs, obj_labels, train_c
     # Model outputs
     pred_obj = model_outputs['Detection'].detach().cpu().numpy().copy()[0]
     out_seg = torch.sigmoid(model_outputs['Segmentation']).detach().cpu().numpy().copy()[0,0]
-    print(f"pred_obj before decode: {pred_obj.shape}")
+    logger.debug(f"pred_obj before decode: {pred_obj.shape}")
     # Decode the output detection map
     pred_obj = decode(pred_obj,0.05)
-    print(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
+    logger.debug(f"pred_obj after decode: {type(pred_obj)}, {len(pred_obj)}")
     pred_obj = np.asarray(pred_obj)
 
     # process prediction: polar to cartesian, NMS...
