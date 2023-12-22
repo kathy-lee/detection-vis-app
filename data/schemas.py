@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 class UserCreate(BaseModel):
@@ -10,8 +10,8 @@ class User(BaseModel):
     email: str
     name: str
 
-    class Config:
-        orm_mode = True
+    class ConfigDict:
+        from_attributes=True
 
 class Directory(BaseModel):
     id: int
@@ -19,8 +19,8 @@ class Directory(BaseModel):
     description: str
     parent_id: Optional[int]
 
-    class Config:
-        orm_mode = True
+    class ConfigDict:
+        from_attributes=True
 
 
 class File(BaseModel):
@@ -44,8 +44,9 @@ class File(BaseModel):
     labeled: bool
     directory_id: int
     
-    class Config:
-        orm_mode = True
+    class ConfigDict:
+        from_attributes=True
+
 
 class MLModel(BaseModel):
     id: int
@@ -55,8 +56,9 @@ class MLModel(BaseModel):
     # flow_name: str
     parent_id: Optional[int]
 
-    class Config:
-        orm_mode = True
+    class ConfigDict:
+        from_attributes=True
+
 
 class MLModelCreate(BaseModel):
     name: str

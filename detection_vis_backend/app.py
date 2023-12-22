@@ -23,7 +23,7 @@ from loguru import logger
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from data import crud, schemas
-from data.database import SessionLocal
+from data.database import get_session_local
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.train.train import train
 from detection_vis_backend.train.inference import infer
@@ -56,11 +56,13 @@ def read_root():
 
 # Dependency
 def get_db():
-    db = SessionLocal()
+    #db = SessionLocal()
+    db = get_session_local()
     try:
         yield db
     finally:
         db.close()
+
 
 
 @app.get("/users", response_model=List[schemas.User])
