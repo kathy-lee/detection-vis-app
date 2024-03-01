@@ -62,6 +62,27 @@
           "parse":"CRUW",
           "labeled":true,
           "directory_id":8
+       },
+       {
+          "id":56,
+          "name":"2019_04_30_MLMS000",
+          "description":"description",
+          "size":"463MB",
+          "path":"/home/kangle/dataset/CRUW",
+          "ADC":false,
+          "RAD":false,
+          "RA":true,
+          "AD":false,
+          "RD":false,
+          "spectrogram":false,
+          "radarPC":false,
+          "lidarPC":false,
+          "image":true,
+          "depth_image":false,
+          "config":"/home/kangle/dataset/CRUW/sensor_config_rod2021.json",
+          "parse":"CRUW",
+          "labeled":true,
+          "directory_id":8
        }
     ],
     "features":[
@@ -110,9 +131,7 @@
                    "parse":"CRUW",
                    "labeled":true,
                    "directory_id":8
-                }
-             ],
-             "val":[
+                },
                 {
                    "id":54,
                    "name":"2019_04_09_PMS2000",
@@ -135,10 +154,33 @@
                    "directory_id":8
                 }
              ],
-             "test":[
+             "val":[
                 {
                    "id":55,
                    "name":"2019_04_09_PMS3000",
+                   "description":"description",
+                   "size":"463MB",
+                   "path":"/home/kangle/dataset/CRUW",
+                   "ADC":false,
+                   "RAD":false,
+                   "RA":true,
+                   "AD":false,
+                   "RD":false,
+                   "spectrogram":false,
+                   "radarPC":false,
+                   "lidarPC":false,
+                   "image":true,
+                   "depth_image":false,
+                   "config":"/home/kangle/dataset/CRUW/sensor_config_rod2021.json",
+                   "parse":"CRUW",
+                   "labeled":true,
+                   "directory_id":8
+                }
+             ],
+             "test":[
+                {
+                   "id":56,
+                   "name":"2019_04_30_MLMS000",
                    "description":"description",
                    "size":"463MB",
                    "path":"/home/kangle/dataset/CRUW",
