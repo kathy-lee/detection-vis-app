@@ -12,6 +12,7 @@ def set_env_vars():
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
     os.environ['BACKEND_SERVICE'] = "localhost"
     os.environ['TMP_ROOTDIR'] = "/home/kangle/dataset/tmp"
+    os.environ['MODEL_ROOTDIR'] = "/home/kangle/dataset/trained_models"
 
 
 client = TestClient(app)
@@ -105,7 +106,7 @@ def test_read_models():
 
 
 def test_read_model():
-    model_id = 0
+    model_id = 123
     response = client.get(f"http://{backend_service}:8001/model/{model_id}")
     assert response.status_code == 200
     model_dict = response.json()
@@ -128,7 +129,7 @@ def test_train_model():
 
 
 def test_predict():
-    model_id = 0
+    model_id = 123
     checkpoint_id = 0
     file_id = 53
     split_type = "train"
@@ -137,7 +138,8 @@ def test_predict():
     response = client.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
     assert response.status_code == 200
     prediction = response.json()
-    assert isinstance(prediction, list)
+    assert all(isinstance(value, list) for value in prediction.values()), "Prediction objects should be list type."
+
 
 
 def test_retrain_model():
