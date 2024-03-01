@@ -25,14 +25,20 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     if not parameters:
         raise ValueError("Parameters are empty")
 
+    logger.info(f"Inference with model {model} (checkpoint {checkpoint_id}) on no.{sample_id}th {split_type} sample:")
+    logger.info(parameters)
+
     # Get input data and groundtruth label info
     dataset_factory = DatasetFactory()
-    dataset_type = parameters["datafiles"][0]["parse"]
+    file_info = next((d for d in parameters["datafiles"] if d.get("id") == file_id), None)
+    logger.info(file_info)
+    dataset_type = file_info["parse"]
     dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
-    #dataset_inst.parse(file_id, parameters["datafiles"][0]["path"], parameters["datafiles"][0]["name"], parameters["datafiles"][0]["config"])
+    dataset_inst.parse(file_id, file_info["path"], file_info["name"], file_info["config"])
     dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
     data = dataset_inst[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
+    logger.info("Get data sample.")
 
     # Initialize the model
     model_config = parameters["model_config"]
@@ -51,6 +57,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     dict = torch.load(os.path.join(model_path, checkpoint), map_location=device)
     net.load_state_dict(dict['net_state_dict'])  
     net.to(device)
+    logger.info("Loaded the model.")
     
     # Prediction
     net.eval()
@@ -79,12 +86,15 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = {"image": pred_objs}
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
             input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
+            logger.info(f"Input data: {input.shape}")
             output = net(input)
+            logger.info(f"Network output prediction: {output.shape}")
             if hasattr(net, 'stacked_num'):
                 confmap_pred = output[-1].cpu().detach().numpy()  # (1, 4, 32, 128, 128)
             else:
                 confmap_pred = output.cpu().detach().numpy()
             pred_objs = post_process_single_frame(confmap_pred[0,:,0,:,:], parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            logger.info("Post-process finished.")
             # filter invalid predictions
             mask = pred_objs[:, 0] != -1 
             pred_objs = pred_objs[mask]
@@ -225,7 +235,8 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_objs = {"RA": ra_objs}
         else:
             raise ValueError(f"Inference of the chosen model type {model_type} is not supported")
-
+    
+    logger.info(f"Prediction result: {pred_objs}")
     return pred_objs
 
 
