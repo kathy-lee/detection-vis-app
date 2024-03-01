@@ -4,3 +4,4 @@
 /.metaflow
 /build
 /*.egg-info
+*.log
