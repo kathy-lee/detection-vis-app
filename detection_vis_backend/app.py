@@ -23,7 +23,7 @@ from loguru import logger
 # sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from data import crud, schemas
-from data.database import SessionLocal
+from data.database import get_session_local
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.train.train import train
 from detection_vis_backend.train.inference import infer
@@ -56,11 +56,13 @@ def read_root():
 
 # Dependency
 def get_db():
-    db = SessionLocal()
+    #db = SessionLocal()
+    db = get_session_local()
     try:
         yield db
     finally:
         db.close()
+
 
 
 @app.get("/users", response_model=List[schemas.User])
@@ -85,7 +87,7 @@ def read_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail="An error occurred while getting the datasets.")
 
     if not datasets:
-        raise HTTPException(status_code=404, detail="No datasets found.")
+        raise HTTPException(status_code=404, detail="No dataset found.")
     return datasets
 
 
@@ -156,7 +158,7 @@ async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         frame_sync = dataset_inst.frame_sync
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve sync mode.")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve dataset sync mode.")
 
     return frame_sync
 
@@ -184,7 +186,7 @@ async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
         dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = False
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to set sync mode.")
+        raise HTTPException(status_code=500, detail=f"Failed to unset sync mode.")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -210,7 +212,7 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
         #             count = dataset_inst.frames_count[f]
         #             break       
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve feature size.")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve {feature_name} feature size.")
 
     return count
  
@@ -273,7 +275,7 @@ def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
         models = crud.get_models(db)
     except Exception as e:
         logger.error(f"An error occurred during reading the models: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error occurred while getting the models.")
+        raise HTTPException(status_code=500, detail="An error occurred when trying to get the models.")
 
     if not models:
         raise HTTPException(status_code=404, detail="No models found.")
@@ -302,9 +304,9 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
     # except MetaflowException as e:
     #     logger.error(f"Metaflow exception occurred: {str(e)}")
     except ValueError as e:
-        logger.error(f"ValueError occurred: {str(e)}")
+        logger.error(f"ValueError occurred when trying to get model info: {str(e)}")
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {str(e)}")
+        logger.error(f"An unexpected error occurred when trying to get model info: {str(e)}")
             
     return {"datafiles": parameters["datafiles"], "features": parameters["features"], 
             "model_config": parameters["model_config"], "train_config": parameters["train_config"]}

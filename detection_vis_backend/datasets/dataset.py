@@ -153,6 +153,7 @@ class RaDICaL(Dataset):
         bag.close()
         
         non_zero_lengths = [l for l in self.frames_count.values() if l != 0]
+        logger.debug(non_zero_lengths)
         if len(non_zero_lengths) == 0:
             self.frame_sync = 0
         elif len(non_zero_lengths) == 1:
@@ -2785,3 +2786,4 @@ class UWCR(Dataset):
                      'confmap_gt': confmap_gt, 'gt_label': obj_info, \
                      'seq_name': self.seq_name,  'start_frame': data_id, 'end_frame': data_id + self.win_size * self.step - 1}
         return data_dict
+    
