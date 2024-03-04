@@ -8,7 +8,6 @@ from data.models import Directory, File, MLmodel
 
 @pytest.fixture(autouse=True, scope='session')
 def set_env_vars():
-    print("Setting environment variables")
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
     os.environ['BACKEND_SERVICE'] = "localhost"
     os.environ['TMP_ROOTDIR'] = "/home/kangle/dataset/tmp"

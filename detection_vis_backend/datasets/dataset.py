@@ -2444,9 +2444,7 @@ class Astyx(Dataset):
                 obj_image = obj_image / obj_image[2, :]
                 obj_image = np.delete(obj_image, 2, 0)
                 objects_2Dimage.append(obj_image)
-                print(obj_image.shape)
                 gt.append(obj_image.flatten().tolist() + [cls])
-                print(len(gt[0]))
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):

@@ -30,7 +30,6 @@ def db_session():
 
 @pytest.fixture(autouse=True, scope='session')
 def set_env_vars():
-    print("Setting environment variables")
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
 
 
