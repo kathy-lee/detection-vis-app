@@ -121,7 +121,7 @@ if st.session_state['sync_checkbox']:
   if sync_frames == 0:
     sync_frames = set_sync(datafile_chosen['id'])
   
-  st.slider('Choose a frame', 0, sync_frames, 0, key='frame_slider')
+  st.slider('Choose a frame', 0, sync_frames - 1, 0, key='frame_slider')
 else:
   # st.session_state.frame_sync = False
   if sync_frames == 0:

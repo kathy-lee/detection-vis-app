@@ -2,27 +2,29 @@ INSERT INTO users (name, email) VALUES ('User1', 'user1@example.com');
 INSERT INTO users (name, email) VALUES ('User2', 'user2@example.com');
 
 
-INSERT INTO directories (name, description, parent_id) VALUES ('RaDICaL', 'radical description', NULL); 
-INSERT INTO directories (name, description, parent_id) VALUES ('radar_high_res', 'radar high res description', 1);
-INSERT INTO directories (name, description, parent_id) VALUES ('indoor_human', 'indoor human description', 1);
-INSERT INTO directories (name, description, parent_id) VALUES ('30m_collection', '30m_collection description', 1);
-INSERT INTO directories (name, description, parent_id) VALUES ('50m_collection', '50m_collection description', 1);
+INSERT INTO directories (name, description, parent_id) VALUES ('RaDICaL', 'RaDICaL dataset (Radar, Depth, IMU, RGB Camera for Learning) is an open source dataset with raw radar ADC measurements along with  RGB-D (color camera and depth camera) and IMU (inertial measurement unit) measurements. Link: https://publish.illinois.edu/radicaldata/', NULL); 
+INSERT INTO directories (name, description, parent_id) VALUES ('radar_high_res', 'This is a sub dataset of RaDICaL: radar high res scene', 1);
+INSERT INTO directories (name, description, parent_id) VALUES ('indoor_human', 'This is a sub dataset of RaDICaL: indoor human scene', 1);
+INSERT INTO directories (name, description, parent_id) VALUES ('30m_collection', 'This is a sub dataset of RaDICaL: 30m_collection scene', 1);
+INSERT INTO directories (name, description, parent_id) VALUES ('50m_collection', 'This is a sub dataset of RaDICaL: 50m_collection scene', 1);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('RADIal(raw)', 'RADIal raw data record, only part labeled', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('RADIal(raw)', 'RADIal a collection of 2-hour of raw data from synchronized automotive-grade sensors (camera, laser, High Definition radar) in various environments (citystreet, highway, countryside road) and comes with GPS and vehicle’s CAN traces. RADIal contains 91 sequences of 1 to 4 minutes in duration, for a total of 2 hours. These sequences are categorized in highway, country-side and city driving. Link: https://github.com/valeoai/RADIal/tree/main Note: RADIal raw data record is only part labeled.', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('RADIal(labeled)', 'RADIal ready-to-use labeled data, 8252 frames in total', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('RADIal(labeled)', 'RADIal a collection of 2-hour of raw data from synchronized automotive-grade sensors (camera, laser, High Definition radar) in various environments (citystreet, highway, countryside road) and comes with GPS and vehicle’s CAN traces. RADIal contains 91 sequences of 1 to 4 minutes in duration, for a total of 2 hours. These sequences are categorized in highway, country-side and city driving. Link: https://github.com/valeoai/RADIal/tree/main Note: RADIal ready-to-use is fully labeled, 8252 frames in total.', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('CRUW_ROD2021', 'CRUW description', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('CRUW_ROD2021', 'CRUW is a public camera-radar dataset for autonomous vehicle applications. It is a good resource for researchers to study FMCW radar data, that has high potential in the future autonomous driving. Link: https://www.cruwdataset.org/', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('CARRADA', 'CARRADA description', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('CARRADA', 'CARRADA is a dataset of synchronized camera and radar recordings with rangeangle-Doppler annotations. Link: https://github.com/valeoai/carrada_dataset', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('RADDet_dataset', 'RADDet description', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('RADDet_dataset', 'RADDet is a radar dataset that contains radar data in the form of Range-AzimuthDoppler tensors along with the bounding boxes on the tensor for dynamic road users, category labels, and 2D bounding boxes on the Cartesian Bird-Eye-View range map. Link: https://github.com/ZhangAoCanada/RADDet', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('Astyx', 'Astyx description', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('Astyx', 'Astyx is a radar-centric automotive dataset based on radar, lidar and camera data for the purpose of 3D object detection.', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('K-Radar', 'description', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('K-Radar', 'KAIST-Radar (K-Radar) is a large-scale object detection dataset and benchmark that contains 35K frames of 4D Radar tensor (4DRT) data with power measurements along the Doppler, range, azimuth, and elevation dimensions, together with carefully annotated 3D bounding box labels of objects on the roads. Link: https://github.com/kaist-avelab/K-Radar', NULL);
 
-INSERT INTO directories (name, description, parent_id) VALUES ('UWCR', 'A dataset for the 2TX-4RX MMWave Radar with the raw ADC data. 6 type objects(pedestrian, cyclist, car, motorbike, bus, truck) were collected to fit the automotive object detection scenario.', NULL);
+INSERT INTO directories (name, description, parent_id) VALUES ('UWCR', 'A dataset for the 2TX-4RX MMWave Radar with the raw ADC data. 6 type objects(pedestrian, cyclist, car, motorbike, bus, truck) were collected to fit the automotive object detection scenario. Link: https://github.com/Xiangyu-Gao/Raw_ADC_radar_dataset_for_automotive_object_detection', NULL);
+
+INSERT INTO directories (name, description, parent_id) VALUES ('ViewOfDelft', 'A novel automotive dataset recorded in Delft, the Netherlands which contains 8600+ frames of synchronized and calibrated 64-layer LiDAR-, (stereo) camera-, and 3+1D(range, azimuth, elevation, + Doppler) radar-data acquired in complex, urban traffic. Link: https://intelligent-vehicles.org/datasets/view-of-delft/', NULL);
 
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) VALUES ('1.bag', 'description', '2.5GB', './1.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
@@ -168,6 +170,7 @@ INSERT INTO files (name, description, size, path, directory_id, config, parse, "
 VALUES ('2019_05_29_pbms007', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
 VALUES ('2019_05_29_pcms005', 'description', '1.1GB', '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive', 14, '/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'UWCR', TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE);
-              
-            
+
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('ViewOfDelft', 'description', '14.6GB', '/home/kangle/Downloads/wd_disk_radar_data/ViewOfDelft', 15, '', 'ViewOfDelft', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);         
             
