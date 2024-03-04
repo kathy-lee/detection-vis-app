@@ -27,9 +27,9 @@ from mmwave.dsp.utils import Window
 from loguru import logger
 
 
+from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx
 from detection_vis_backend.datasets.cfar import CA_CFAR
-
 
 
 class DatasetFactory:
@@ -2444,7 +2444,9 @@ class Astyx(Dataset):
                 obj_image = obj_image / obj_image[2, :]
                 obj_image = np.delete(obj_image, 2, 0)
                 objects_2Dimage.append(obj_image)
+                print(obj_image.shape)
                 gt.append(obj_image.flatten().tolist() + [cls])
+                print(len(gt[0]))
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
