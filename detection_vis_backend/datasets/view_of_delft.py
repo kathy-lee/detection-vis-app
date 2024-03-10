@@ -94,17 +94,19 @@ class ViewOfDelft(Dataset):
         with open(self.label_filenames[idx], 'r') as text:
             annos = text.readlines()
 
-        with open(self.calib_lidar_filenames[idx], "r") as f:
-            lines = f.readlines()
-            intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
-            T_lidar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
-            T_lidar_to_camera = np.concatenate([T_lidar_to_camera, [[0, 0, 0, 1]]], axis=0)
+        if feature_name == "lidarPC":
+            with open(self.calib_lidar_filenames[idx], "r") as f:
+                lines = f.readlines()
+                intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
+                T_lidar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
+                T_lidar_to_camera = np.concatenate([T_lidar_to_camera, [[0, 0, 0, 1]]], axis=0)
 
-        with open(self.calib_radar_filenames[idx], "r") as f:
-            lines = f.readlines()
-            intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
-            T_radar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
-            T_radar_to_camera = np.concatenate([T_radar_to_camera, [[0, 0, 0, 1]]], axis=0)
+        if feature_name == "radarPC":
+            with open(self.calib_radar_filenames[idx], "r") as f:
+                lines = f.readlines()
+                intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
+                T_radar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
+                T_radar_to_camera = np.concatenate([T_radar_to_camera, [[0, 0, 0, 1]]], axis=0)
         
         for anno in annos:   
             anno = anno.split()
