@@ -174,8 +174,8 @@ VALUES ('2019_05_29_pcms005', 'description', '1.1GB', '/home/kangle/Downloads/wd
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
 VALUES ('ViewOfDelft', 'description', '14.6GB', '/home/kangle/Downloads/wd_disk_radar_data/ViewOfDelft', 15, '', 'ViewOfDelft', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);         
-            
+
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
-VALUES ('v1.0-trainval01', 'description', '29.0GB', '/home/kangle/Downloads/wd_disk_radar_data/nuscences_v1.0_full', 16, '', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);  
+VALUES ('v1.0_mini', 'mini set of NuScenes v1.0 for testing', '9.0GB', '/home/kangle/dataset/nuscences_v1.0_mini', 16, 'v1.0-mini', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);         
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
-VALUES ('v1.0-trainval02', 'description', '29.0GB', '/home/kangle/Downloads/wd_disk_radar_data/nuscences_v1.0_full', 16, '', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);  
+VALUES ('v1.0_full', 'full set of NuScenes v1.0', '29.0GB', '/home/kangle/Downloads/wd_disk_radar_data/nuscences_v1.0_full', 16, 'meta', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);  
