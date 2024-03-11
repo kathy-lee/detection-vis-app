@@ -422,14 +422,7 @@ class NuScenes(Dataset):
     def get_label(self, feature_name, idx=None):
         # sample = [sample for sample in self.samples_info if sample["token"] == self.radarPC_frames[idx]["sample_token"]][0]
         objs = [obj for obj in self.sample_annotation if obj["sample_token"] == self.radarPC_frames[idx]["sample_token"]]
-        # for i,obj in enumerate(objs):
-        #     print(f"{i} raw obj in my app:")
-        #     print(f"token: {obj['token']}")
-        #     print(f"sample_token: {obj['sample_token']}")
-        #     print(f"translation: {obj['translation']}")
-        #     print(f"size: {obj['size']}")
-        #     print(f"rotation: {obj['rotation']}")
-        #     print("\n")
+        
         # Box(record['translation'], record['size'], Quaternion(record['rotation']), name=record['category_name'], token=record['token'])
 
         # # Move box to ego vehicle coord system.
@@ -444,7 +437,7 @@ class NuScenes(Dataset):
         for i, obj in enumerate(objs):
             # find category
             category_token = [i["category_token"] for i in self.instances if i["token"] == obj["instance_token"]][0]
-            category = [i["name"] for i in self.category if i["token"] == category_token][0]
+            category = [i["name"] for i in self.category if i["token"] == category_token][0].split('.')[-1]
 
             # center
             center = np.array(obj["translation"])
@@ -452,10 +445,15 @@ class NuScenes(Dataset):
             orientation = Quaternion(obj['rotation'])
             # 3D bounding box corners. (Convention: x points forward, y to the left, z up.)
             w, l, h = obj["size"]
-            x_corners = l / 2 * np.array([1,  1,  1,  1, -1, -1, -1, -1])
-            y_corners = w / 2 * np.array([1, -1, -1,  1,  1, -1, -1,  1])
-            z_corners = h / 2 * np.array([1,  1, -1, -1,  1,  1, -1, -1])
-            corners = np.vstack((x_corners, y_corners, z_corners))
+            # x_corners = l / 2 * np.array([1,  1,  1,  1, -1, -1, -1, -1])
+            # y_corners = w / 2 * np.array([1, -1, -1,  1,  1, -1, -1,  1])
+            # z_corners = h / 2 * np.array([1,  1, -1, -1,  1,  1, -1, -1])
+            # corners = np.vstack((x_corners, y_corners, z_corners))
+            # # Use Astyx format:
+            x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2]
+            y_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2]
+            z_corners = [h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2]
+            corners = np.vstack([x_corners, y_corners, z_corners])
             
             if feature_name == "lidarPC":
                 ego_pose_record = [i for i in self.ego_pose if i["token"] == self.lidarPC_frames[idx]["ego_pose_token"]][0]
@@ -489,6 +487,7 @@ class NuScenes(Dataset):
 
             if feature_name in ("lidarPC", "radarPC"):
                 # corners = corners[:2, :]
+                corners = corners.T
                 gt.append(corners.flatten().tolist() + [category])    
             else:
                 # view from camera 
@@ -499,12 +498,7 @@ class NuScenes(Dataset):
                 corners_img = np.dot(viewpad, corners_img)
                 corners_img = corners_img[:3, :]
                 corners_img = corners_img / corners_img[2:3, :].repeat(3, 0).reshape(3, 8)
-
                 corners_img = corners_img[:2, :]
-                # print(i)
-                # print("converted gt corners in my app:")
-                # print(corners)
-                # print('\n')
 
                 # check box if it's in 2D image of CAM_FRONT
                 imsize = [1600, 900]
