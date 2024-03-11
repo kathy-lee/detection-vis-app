@@ -83,14 +83,18 @@ def test_NuScenes(db_session: Session):
 
     # get lidar point cloud and its label
     lidar_pc = dataset_inst.get_feature("lidarPC", id, for_visualize=True)
-    gt_label = dataset_inst.get_label("lidarPC", id)
     assert isinstance(lidar_pc, (np.ndarray, np.generic)), "Lidar point cloud data in NuScenes is numpy array type."
     assert len(lidar_pc.shape) == 2, "Lidar point cloud data in NuScenes is a 2-dimensional array."
     assert lidar_pc.shape[1] == 4, "Lidar point cloud data in NuScenes is with N*4 shape."
+    gt_label = dataset_inst.get_label("lidarPC", id)
+    assert isinstance(gt_label, list), f"Lidar gt label should be list type."
+    assert len(gt_label[0]) == 25, f"Lidar gt label should be 25 dimension."
 
     # get radar point cloud and its label
     radar_pc = dataset_inst.get_feature("radarPC", id, for_visualize=True)
-    gt_label = dataset_inst.get_label("radarPC", id)
     assert isinstance(radar_pc, (np.ndarray, np.generic)), "Radar point cloud data in NuScenes is numpy array type."
     assert len(radar_pc.shape) == 2, "Radar point cloud data in NuScenes is a 2-dimensional array."
     assert radar_pc.shape[1] == 18, "Radar point cloud data in NuScenes is with N*18 shape."
+    gt_label = dataset_inst.get_label("radarPC", id)
+    assert isinstance(gt_label, list), f"Radar gt label should be list type."
+    assert len(gt_label[0]) == 25, f"Radar gt label should be 25 dimension."
