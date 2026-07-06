@@ -215,16 +215,17 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
       if len(objs[0]) == 25:
+        # Case: Astyx Dataset; NuScenes Dataset
         plt.scatter(feature_image[:, 0], feature_image[:, 1], c='darkblue', s=1, alpha=0.5)
-        plt.xlim(0, 100) 
+        plt.xlim(-50, 50) # plt.xlim(0, 100) 
         plt.ylim(-50, 50)
         for obj in objs:
           points = obj[:24]
           points = np.array(points).reshape((8, 3))
           for k in range(0, 3):
-            plt.plot(points[k:k + 2, 0], points[k:k + 2, 1], 'r-')
-          plt.plot([points[3, 0], points[0, 0]], [points[3, 1], points[0, 1]], 'r-', linewidth=1)
-          plt.text(points[0, 0] + 1, points[0, 1] + 1, obj[24], c='g')
+            plt.plot(points[k:k + 2, 0], points[k:k + 2, 1], 'r-', clip_on=True)
+          plt.plot([points[3, 0], points[0, 0]], [points[3, 1], points[0, 1]], 'r-', linewidth=1, clip_on=True)
+          plt.text(points[0, 0] + 1, points[0, 1] + 1, obj[24], c='g', clip_on=True)
       else:
         # Case: RADIal Dataset
         plt.plot(feature_image[:,1], feature_image[:,0], '.')

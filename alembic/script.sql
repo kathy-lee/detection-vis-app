@@ -26,6 +26,7 @@ INSERT INTO directories (name, description, parent_id) VALUES ('UWCR', 'A datase
 
 INSERT INTO directories (name, description, parent_id) VALUES ('ViewOfDelft', 'A novel automotive dataset recorded in Delft, the Netherlands which contains 8600+ frames of synchronized and calibrated 64-layer LiDAR-, (stereo) camera-, and 3+1D(range, azimuth, elevation, + Doppler) radar-data acquired in complex, urban traffic. Link: https://intelligent-vehicles.org/datasets/view-of-delft/', NULL);
 
+INSERT INTO directories (name, description, parent_id) VALUES ('NuScenes', 'The nuScenes dataset is a large-scale dataset for autonomous driving which collected 1000 driving scenes in Boston and Singapore, each scene is around 20 seconds. The dataset annotates 23 object classes with accurate 3D bounding boxes. Link: https://www.nuscenes.org/', NULL);
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) VALUES ('1.bag', 'description', '2.5GB', './1.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) VALUES ('2.bag', 'description', '2.5GB', './2.bag', 2, '', '', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE);
@@ -173,4 +174,8 @@ VALUES ('2019_05_29_pcms005', 'description', '1.1GB', '/home/kangle/Downloads/wd
 
 INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
 VALUES ('ViewOfDelft', 'description', '14.6GB', '/home/kangle/Downloads/wd_disk_radar_data/ViewOfDelft', 15, '', 'ViewOfDelft', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);         
-            
+
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('v1.0_mini', 'mini set of NuScenes v1.0 for testing', '9.0GB', '/home/kangle/dataset/nuscences_v1.0_mini', 16, 'v1.0-mini', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);         
+INSERT INTO files (name, description, size, path, directory_id, config, parse, "ADC", "RAD", "RA", "AD", "RD", spectrogram, "radarPC", "lidarPC", image, depth_image, labeled) 
+VALUES ('v1.0_full', 'full set of NuScenes v1.0', '29.0GB', '/home/kangle/Downloads/wd_disk_radar_data/nuscences_v1.0_full', 16, 'meta', 'NuScenes', FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, TRUE);  

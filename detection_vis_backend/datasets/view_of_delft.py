@@ -1,28 +1,8 @@
-import rosbag
 import os
-import struct
-import cv2
-import imageio
-import io
-import torch
-import math
-import pickle
-import json
-import random
-import time
 import numpy as np
-import scipy.io as spio
-import torchvision.transforms as transform
-import pandas as pd
-import matplotlib.pyplot as plt
 
 
-from pathlib import Path
-from torchvision.transforms import Resize,CenterCrop
 from torch.utils.data import Dataset
-from PIL import Image
-from mmwave import dsp
-from mmwave.dsp.utils import Window
 from loguru import logger
 
 
@@ -114,17 +94,19 @@ class ViewOfDelft(Dataset):
         with open(self.label_filenames[idx], 'r') as text:
             annos = text.readlines()
 
-        with open(self.calib_lidar_filenames[idx], "r") as f:
-            lines = f.readlines()
-            intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
-            T_lidar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
-            T_lidar_to_camera = np.concatenate([T_lidar_to_camera, [[0, 0, 0, 1]]], axis=0)
+        if feature_name == "lidarPC":
+            with open(self.calib_lidar_filenames[idx], "r") as f:
+                lines = f.readlines()
+                intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
+                T_lidar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
+                T_lidar_to_camera = np.concatenate([T_lidar_to_camera, [[0, 0, 0, 1]]], axis=0)
 
-        with open(self.calib_radar_filenames[idx], "r") as f:
-            lines = f.readlines()
-            intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
-            T_radar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
-            T_radar_to_camera = np.concatenate([T_radar_to_camera, [[0, 0, 0, 1]]], axis=0)
+        if feature_name == "radarPC":
+            with open(self.calib_radar_filenames[idx], "r") as f:
+                lines = f.readlines()
+                intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
+                T_radar_to_camera = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Extrinsic
+                T_radar_to_camera = np.concatenate([T_radar_to_camera, [[0, 0, 0, 1]]], axis=0)
         
         for anno in annos:   
             anno = anno.split()
