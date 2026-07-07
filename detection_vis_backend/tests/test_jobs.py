@@ -111,3 +111,8 @@ def test_run_retraining_sets_parent_id(monkeypatch):
     assert result == {"model_name": "FFTRadNet___Z"}
     assert seen["pretrained"] == "/ckpt.pth"
     assert added == {"name": "FFTRadNet___Z", "parent_id": 7}
+
+
+def test_worker_exposes_main():
+    from detection_vis_backend.jobs import worker
+    assert callable(worker.main)
