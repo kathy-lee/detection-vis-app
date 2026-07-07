@@ -113,18 +113,18 @@ def test_read_model():
     assert all(key in model_dict for key in ["datafiles", "features", "model_config", "train_config"])
 
 
-def test_train_model():
-    sample_config = json.load("sample_for_train_test.json")
-    params = {
-                "datafiles_chosen": sample_config["datafiles"], 
-                "features_chosen": sample_config["features"], 
-                "mlmodel_configs": sample_config["model_config"], 
-                "train_configs": sample_config["train_config"]
-            }
-    response = client.post(f"http://{backend_service}:8001/train", json=params)
-    assert response.status_code == 200
-    result = response.json()
-    assert isinstance(result, dict) and "model_name" in result.keys()
+# def test_train_model():
+#     sample_config = json.load("sample_for_train_test.json")
+#     params = {
+#                 "datafiles_chosen": sample_config["datafiles"], 
+#                 "features_chosen": sample_config["features"], 
+#                 "mlmodel_configs": sample_config["model_config"], 
+#                 "train_configs": sample_config["train_config"]
+#             }
+#     response = client.post(f"http://{backend_service}:8001/train", json=params)
+#     assert response.status_code == 200
+#     result = response.json()
+#     assert isinstance(result, dict) and "model_name" in result.keys()
 
 
 def test_predict():
@@ -141,16 +141,91 @@ def test_predict():
 
 
 
-def test_retrain_model():
-    sample_config = json.load("sample_for_train_test.json")
-    model_id = sample_config["model_id"]
-    params = {
-                "datafiles_chosen": sample_config["datafiles"], 
-                "features_chosen": sample_config["features"], 
-                "mlmodel_configs": sample_config["model_config"], 
-                "train_configs": sample_config["train_config"]
-            }
-    response = client.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
-    assert response.status_code == 200
-    result = response.json()
-    assert isinstance(result, dict) and "model_name" in result.keys()
+# def test_retrain_model():
+#     sample_config = json.load("sample_for_train_test.json")
+#     model_id = sample_config["model_id"]
+#     params = {
+#                 "datafiles_chosen": sample_config["datafiles"],
+#                 "features_chosen": sample_config["features"],
+#                 "mlmodel_configs": sample_config["model_config"],
+#                 "train_configs": sample_config["train_config"]
+#             }
+#     response = client.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
+#     assert response.status_code == 200
+#     result = response.json()
+#     assert isinstance(result, dict) and "model_name" in result.keys()
+
+
+# --- job-queue endpoint tests (fast; fake queue, mocked training — no GPU/data/DB) ---
+from unittest.mock import MagicMock
+from contextlib import contextmanager
+
+
+@pytest.fixture
+def mock_training(monkeypatch):
+    """Make run_training/run_retraining return fast without GPU/data/DB."""
+    from detection_vis_backend.jobs import tasks
+    monkeypatch.setattr(tasks, "_parse_datafiles", lambda datafiles: None)
+    monkeypatch.setattr(tasks, "train", lambda *a, **k: "FFTRadNet___TEST")
+
+    @contextmanager
+    def _s():
+        yield MagicMock()
+    monkeypatch.setattr(tasks, "_session", _s)
+    monkeypatch.setattr(tasks.crud, "add_model", lambda db, mlmodel: None)
+    monkeypatch.setattr(tasks, "_resolve_last_checkpoint", lambda model_id: "/ckpt.pth")
+
+
+def _sample():
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "sample_for_train_test.json")) as f:
+        return json.load(f)
+
+
+def test_train_returns_job_id_and_job_finishes(fake_queue, mock_training):
+    s = _sample()
+    resp = client.post("/train", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    })
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    assert job_id
+
+    jresp = client.get(f"/jobs/{job_id}")
+    assert jresp.status_code == 200
+    body = jresp.json()
+    assert body["status"] == "finished"
+    assert body["model_name"] == "FFTRadNet___TEST"
+
+
+def test_retrain_returns_job_id(fake_queue, mock_training):
+    s = _sample()
+    model_id = s["model_id"]
+    resp = client.post(f"/retrain/{model_id}", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    })
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    assert job_id
+
+    body = client.get(f"/jobs/{job_id}").json()
+    assert body["status"] == "finished"
+    assert body["model_name"] == "FFTRadNet___TEST"
+
+
+def test_get_jobs_unknown_id_404(fake_queue):
+    resp = client.get("/jobs/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_delete_started_job_returns_409(fake_queue, mock_training):
+    # is_async=False jobs finish immediately, so they are not "queued" → cannot cancel
+    s = _sample()
+    job_id = client.post("/train", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    }).json()["job_id"]
+    resp = client.delete(f"/jobs/{job_id}")
+    assert resp.status_code == 409

@@ -28,6 +28,11 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.train.train import train
 from detection_vis_backend.train.inference import infer
 
+from rq.job import Job
+from rq.exceptions import NoSuchJobError
+from detection_vis_backend.jobs import queue as job_queue
+from detection_vis_backend.jobs.tasks import run_training, run_retraining
+
 
 
 
@@ -255,18 +260,29 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 #     query_items = {"q": feature_list}
 #     return query_items   
 
-@app.post("/train")
-async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    try: 
-        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info")
-        crud.add_model(db=db, mlmodel=model_meta)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during training: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+# OLD: ran training synchronously inside the request handler (blocked the event loop
+# for the whole run). Replaced by the enqueue version below — training now runs in the
+# RQ worker; this returns a job_id immediately and the UI polls GET /jobs/{id}.
+# @app.post("/train")
+# async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+#         exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
+#         model_meta = schemas.MLModelCreate(name=exp_name,description="info")
+#         crud.add_model(db=db, mlmodel=model_meta)
+#     except Exception as e:
+#         logger.error(f"An unexpected error occurred during training: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+#
+#     #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
+#     return {"model_name": exp_name}
 
-    #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
-    return {"model_name": exp_name}
+
+@app.post("/train")
+def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    job = job_queue.get_queue().enqueue(
+        run_training, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
+        job_timeout=-1)
+    return {"job_id": job.id}
 
 
 @app.get("/models", response_model=List[schemas.MLModel])
@@ -375,34 +391,73 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
     return None
 
 
+# OLD: ran retraining synchronously in the request handler. Replaced by the enqueue
+# version below. Note the old code had two latent bugs now fixed in jobs/tasks.py:
+#   - parent=model_id was silently dropped (schema field is parent_id)
+#   - checkpoint pattern "epoch"+str(n) missed zero-padded filenames like "epoch09"
+# @app.post("/retrain/{model_id}")
+# async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+#         model = crud.get_model(db, model_id)
+#         model_rootdir = os.getenv('MODEL_ROOTDIR')
+#         parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
+#         with open(parameter_path, 'r') as f:
+#             parameters = json.load(f)
+#         if not parameters:
+#             raise ValueError("Parameters are empty")
+#
+#
+#         pattern = "epoch" + str(parameters["train_config"]["num_epochs"] - 1)
+#         for file in os.listdir(os.path.join(model_rootdir, model.name)):
+#             if pattern in file and file.endswith(".pth"):
+#                 checkpoint = os.path.join(model_rootdir, model.name, file)
+#         exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
+#         # with open('exp_info.txt', 'r') as f:
+#         #     exp_name = f.read()
+#
+#         model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
+#         crud.add_model(db=db, mlmodel=model_meta)
+#     except Exception as e:
+#         logger.error(f"An unexpected error occurred during training: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+#
+#     return {"model_name": exp_name}
+
+
 @app.post("/retrain/{model_id}")
-async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    try: 
-        model = crud.get_model(db, model_id)
-        model_rootdir = os.getenv('MODEL_ROOTDIR')
-        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
-        with open(parameter_path, 'r') as f:
-            parameters = json.load(f)
-        if not parameters:
-            raise ValueError("Parameters are empty")
-        
+def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    job = job_queue.get_queue().enqueue(
+        run_retraining, model_id, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
+        job_timeout=-1)
+    return {"job_id": job.id}
 
-        pattern = "epoch" + str(parameters["train_config"]["num_epochs"] - 1)
-        for file in os.listdir(os.path.join(model_rootdir, model.name)):
-            if pattern in file and file.endswith(".pth"):  
-                checkpoint = os.path.join(model_rootdir, model.name, file)
-        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
-        # with open('exp_info.txt', 'r') as f:
-        #     exp_name = f.read()
 
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
-        crud.add_model(db=db, mlmodel=model_meta)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during training: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    try:
+        job = Job.fetch(job_id, connection=job_queue.get_redis())
+    except NoSuchJobError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    status = job.get_status()
+    resp = {"job_id": job_id, "status": status, "progress": job.meta.get("progress")}
+    if status == "finished":
+        resp["model_name"] = (job.return_value() or {}).get("model_name")
+    if status == "failed":
+        exc = job.exc_info or ""
+        resp["error"] = exc.strip().splitlines()[-1] if exc else None
+    return resp
 
-    return {"model_name": exp_name}
 
+@app.delete("/jobs/{job_id}")
+def cancel_job(job_id: str):
+    try:
+        job = Job.fetch(job_id, connection=job_queue.get_redis())
+    except NoSuchJobError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get_status() == "queued":
+        job.cancel()
+        return {"status": "canceled"}
+    raise HTTPException(status_code=409, detail="Job already started; cannot cancel")
 
 
 if __name__ == "__main__":
