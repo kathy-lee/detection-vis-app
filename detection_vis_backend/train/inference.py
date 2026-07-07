@@ -48,7 +48,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     net = network_factory.get_instance(model_type, model_config)
 
     # set device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load the model checkpoint
     model_rootdir = os.getenv('MODEL_ROOTDIR')
