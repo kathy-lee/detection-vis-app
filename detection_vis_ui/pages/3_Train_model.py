@@ -3,6 +3,7 @@ import streamlit as st
 import requests
 import os
 import json
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,6 +15,43 @@ from streamlit_ace import st_ace
 
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 model_rootdir = os.getenv('MODEL_ROOTDIR')
+
+
+def render_training_job(job_id_key):
+    """Poll the backend training job and render its progress.
+
+    Returns the finished model_name (str) once the job completes, else None.
+    Reruns the page every ~2s while the job is queued/running so the progress
+    bar updates without blocking the UI.
+    """
+    job_id = st.session_state.get(job_id_key)
+    if not job_id:
+        return None
+    job = requests.get(f"http://{backend_service}:8001/jobs/{job_id}").json()
+    status = job["status"]
+    if status in ("queued", "started"):
+        prog = job.get("progress")
+        if prog:
+            st.progress(prog["epoch"] / prog["total_epochs"],
+                        text=f"epoch {prog['epoch']}/{prog['total_epochs']} · loss {prog['loss']:.4f}")
+        else:
+            st.progress(0.0, text="queued…")
+        if status == "queued" and st.button("Cancel", key=f"cancel_{job_id_key}"):
+            requests.delete(f"http://{backend_service}:8001/jobs/{job_id}")
+            del st.session_state[job_id_key]
+            st.rerun()
+        time.sleep(2)
+        st.rerun()
+    elif status == "finished":
+        del st.session_state[job_id_key]
+        return job["model_name"]
+    elif status == "failed":
+        st.error(f"Training failed: {job.get('error')}")
+        del st.session_state[job_id_key]
+    elif status == "canceled":
+        st.info("Training canceled.")
+        del st.session_state[job_id_key]
+    return None
 
 st.set_page_config(
     page_title = "Have fun ",
@@ -221,37 +259,30 @@ if train_mode == train_modes[0]:
     
     train_action = st.button("Train", key="train_btn")
     if train_action:
-      with st.spinner(text="Training model in progress..."):
-        # find the chosen data files which are not parsed yet, and parse them
-        for f in st.session_state.datafiles_chosen:
-          datafile_parsed = f"parse_{f['id']}"
-          if datafile_parsed not in st.session_state:
-            st.session_state[datafile_parsed] = False
-            response = requests.get(f"http://{backend_service}:8001/parse/{f['id']}")
-            if response.status_code != 204:
-              st.info(f"An error occurred in parsing data file {f['name']}.")
-              st.stop()
-            else:
-              st.session_state[datafile_parsed] = True
-        params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
-                  "features_chosen": st.session_state.features_chosen, 
-                  "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
-        response = requests.post(f"http://{backend_service}:8001/train", json=params)
+      # Parsing of the chosen datafiles now happens inside the training job
+      # (jobs/tasks.py:_parse_datafiles), so submit is a single instant enqueue.
+      params = {"datafiles_chosen": st.session_state.datafiles_chosen,
+                "features_chosen": st.session_state.features_chosen,
+                "mlmodel_configs": st.session_state.model_configs,
+                "train_configs": st.session_state.train_configs}
+      response = requests.post(f"http://{backend_service}:8001/train", json=params)
       if response.status_code != 200:
-        st.info("An error occurred in training.")
+        st.info("An error occurred in submitting training.")
         st.stop()
-      else:
-        res = response.json()
-        st.session_state.model_chosen = res["model_name"]
-        # show evaluation result
-        st.write("Model Evaluation Result:")
-        st.write("Val dataset")
-        val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
-        st.table(val_eval)
-        st.write("Test dataset")
-        test_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "test_eval.csv"))
-        st.table(test_eval)         
+      st.session_state.train_job_id = response.json()["job_id"]
+      st.rerun()
+
+    model_name = render_training_job("train_job_id")
+    if model_name:
+      st.session_state.model_chosen = model_name
+      # show evaluation result
+      st.write("Model Evaluation Result:")
+      st.write("Val dataset")
+      val_eval = pd.read_csv(os.path.join(model_rootdir, model_name, "val_eval.csv"))
+      st.table(val_eval)
+      st.write("Test dataset")
+      test_eval = pd.read_csv(os.path.join(model_rootdir, model_name, "test_eval.csv"))
+      st.table(test_eval)
       
 
         
@@ -290,26 +321,28 @@ if train_mode == train_modes[1]:
     if not check_before_train(st.session_state.datafiles_chosen, model_paras["datafiles"]):
       st.info("The chosen data file(s) has been trained in this model, please change.")
     else:
-      with st.spinner(text="Training model in progress..."):
-        params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
-                  "features_chosen": st.session_state.features_chosen, 
-                  "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
-        response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
+      params = {"datafiles_chosen": st.session_state.datafiles_chosen,
+                "features_chosen": st.session_state.features_chosen,
+                "mlmodel_configs": st.session_state.model_configs,
+                "train_configs": st.session_state.train_configs}
+      response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
       if response.status_code != 200:
-        st.info("An error occurred in training.")
+        st.info("An error occurred in submitting retraining.")
         st.stop()
-      else:
-        res = response.json()
-        st.session_state.model_chosen = res["model_name"]
-        # show evaluation result
-        st.write("Model Evaluation Result:")
-        st.write("Val dataset")
-        val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
-        st.table(val_eval)
-        st.write("Test dataset")
-        test_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "test_eval.csv"))
-        st.table(test_eval)
+      st.session_state.retrain_job_id = response.json()["job_id"]
+      st.rerun()
+
+  retrained = render_training_job("retrain_job_id")
+  if retrained:
+    st.session_state.model_chosen = retrained
+    # show evaluation result
+    st.write("Model Evaluation Result:")
+    st.write("Val dataset")
+    val_eval = pd.read_csv(os.path.join(model_rootdir, retrained, "val_eval.csv"))
+    st.table(val_eval)
+    st.write("Test dataset")
+    test_eval = pd.read_csv(os.path.join(model_rootdir, retrained, "test_eval.csv"))
+    st.table(test_eval)
 
 infer_action = st.button("Go to inference", key="inference_btn")
 if infer_action:
