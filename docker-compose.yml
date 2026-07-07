@@ -14,7 +14,7 @@ services:
         - ./storage:/storage
   
   detection_vis_backend:
-    build: 
+    build:
       dockerfile: detection_vis_backend/Dockerfile
     environment:
       - PYTHONPATH=/opt
@@ -23,6 +23,7 @@ services:
       - DB_USER=postgres
       - DB_PSWD=postgres
       - DB_NAME=postgres
+      - REDIS_URL=redis://redis:6379/0
     ports:
       - 8001:8001
     volumes:
@@ -32,6 +33,36 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    image: "redis:7-alpine"
+    ports:
+      - "6379:6379"
+
+  # Runs training/retraining jobs off the request path. In dev the worker runs on the
+  # host (see run.sh) so it gets the GPU. NOTE: GPU passthrough for this container
+  # (deploy.resources.reservations.devices / NVIDIA runtime) plus MODEL_ROOTDIR/
+  # DATASET_ROOTDIR/TMP_ROOTDIR are a documented prod follow-up — not wired here.
+  detection_vis_worker:
+    build:
+      dockerfile: detection_vis_backend/Dockerfile
+    command: python -m detection_vis_backend.jobs.worker
+    environment:
+      - PYTHONPATH=/opt
+      - DB_HOST=0.0.0.0
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PSWD=postgres
+      - DB_NAME=postgres
+      - DATABASE_URL=postgresql://postgres:postgres@db/postgres
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./storage:/storage
+    depends_on:
+      - redis
+      - db
 
   db:
     image: "postgres:14"
