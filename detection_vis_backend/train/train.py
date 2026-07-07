@@ -270,7 +270,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     return train_loader, val_loader, test_loader
 
 
-def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):   
+def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None, progress_cb=None):
     
     # Setup random seed
     torch.manual_seed(train_config['seed'])
@@ -305,7 +305,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         df_val_eval = pd.DataFrame(columns=['Epoch', 'loss', 'mAP', 'mAR', 'mIoU'])
 
         # set device
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
         # if device == 'cuda:0':
         #     torch.cuda.empty_cache()
@@ -413,7 +413,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
             
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
-            
+
+            if progress_cb is not None:
+                progress_cb(epoch + 1, num_epochs, float(eval['loss']), 'train')
+
             writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
             writer.add_scalar('Loss/test', eval['loss'], global_step)
             writer.add_scalar('Metrics/mAP', eval['mAP'], global_step)
