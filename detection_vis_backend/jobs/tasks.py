@@ -1,3 +1,5 @@
+import json
+import os
 from contextlib import contextmanager
 
 from rq import get_current_job
@@ -44,4 +46,29 @@ def run_training(datafiles, features, model_config, train_config):
                      progress_cb=_make_cb(job))
     with _session() as db:
         crud.add_model(db, schemas.MLModelCreate(name=exp_name, description="info"))
+    return {"model_name": exp_name}
+
+
+def _resolve_last_checkpoint(model_id):
+    with _session() as db:
+        model = crud.get_model(db, model_id)
+    model_rootdir = os.getenv("MODEL_ROOTDIR")
+    model_dir = os.path.join(model_rootdir, model.name)
+    with open(os.path.join(model_dir, "train_info.txt")) as f:
+        parameters = json.load(f)
+    pattern = "epoch{:02d}".format(parameters["train_config"]["num_epochs"] - 1)
+    for fname in os.listdir(model_dir):
+        if pattern in fname and fname.endswith(".pth"):
+            return os.path.join(model_dir, fname)
+    raise FileNotFoundError(f"No final checkpoint ({pattern}) for model {model.name}")
+
+
+def run_retraining(model_id, datafiles, features, model_config, train_config):
+    job = get_current_job()
+    checkpoint = _resolve_last_checkpoint(model_id)
+    _parse_datafiles(datafiles)
+    exp_name = train(datafiles, features, model_config, train_config,
+                     pretrained=checkpoint, progress_cb=_make_cb(job))
+    with _session() as db:
+        crud.add_model(db, schemas.MLModelCreate(name=exp_name, description="info", parent_id=model_id))
     return {"model_name": exp_name}
