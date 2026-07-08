@@ -5,3 +5,5 @@
 /build
 /*.egg-info
 *.log
+/docs/**
+/.pytest_cache
