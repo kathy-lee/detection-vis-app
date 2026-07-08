@@ -778,7 +778,7 @@ class RADIalRaw(Dataset):
     def parse_recording(self, folder):
         recorder_folder_path = Path(folder)
         
-        list_files = [file for file in os.listdir(recorder_folder_path) if os.isfile(os.path.join(recorder_folder_path, file))]
+        list_files = [file for file in os.listdir(recorder_folder_path) if os.path.isfile(os.path.join(recorder_folder_path, file))]
         
         # list the number of sensor recorded
         list_of_sensors = []
@@ -837,7 +837,10 @@ class RADIalRaw(Dataset):
         return dict_sensor
 
 
-    def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False): 
+    def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False):
+        self.sync_mode = sync_mode
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.method = 'RA'  # 'RA' (range-azimuth map) or 'PC' (radar point cloud; needs CFAR)
         # 1. Open the REC file
         self.rec_file_name = file_name +'_events_log.rec'
         self.rec_file_path = os.path.join(file_path, file_name, self.rec_file_name)
@@ -855,7 +858,7 @@ class RADIalRaw(Dataset):
         nb_corrupted = 0
         nb_tolerance = 0
 
-        self.dicts = self.parse_recording(os.path.join(file_path, file_name).name)
+        self.dicts = self.parse_recording(os.path.join(file_path, file_name))
         # for Each radar sample, find the clostest sample for each sensor
         if not master:
             # by default, we use the Radar as Matser sensor
@@ -1030,6 +1033,8 @@ class RADIalRaw(Dataset):
             logger.error('Mode not supported')
             return
 
+        # all extracted features share the same number of synchronized frames
+        self.frame_sync = len(self.table)
 
         self.can_frames={'timestamp':[],'ID':[],'data':[]}
         if('can' in self.dicts):
@@ -1066,57 +1071,57 @@ class RADIalRaw(Dataset):
         struct_fmt = '=7f4B'
         struct_len = struct.calcsize(struct_fmt)
         struct_unpack = struct.Struct(struct_fmt).unpack_from
-        for idx in self.table:
+        for sample_id, match in enumerate(self.table):
             # MJPG mode
             if(np.shape(self.dicts['camera']['offset'])[0]>0):
-                offset = int(self.dicts['camera']['offset'][idx])
-                length = int(self.dicts['camera']['datasize'][idx])
+                offset = int(self.dicts['camera']['offset'][match['camera']])
+                length = int(self.dicts['camera']['datasize'][match['camera']])
                 f.seek(offset)
                 data = f.read(length)
                 image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
             # AVI MOde
             else:
-                f.set(cv2.CAP_PROP_POS_FRAMES,idx)
+                f.set(cv2.CAP_PROP_POS_FRAMES, match['camera'])
                 ret, image = f.read()
-            cv2.imwrite(os.path.join(feature_path, "image", f"image_{idx}.jpg"), image)
+            cv2.imwrite(os.path.join(feature_path, "image", f"image_{sample_id}.jpg"), image)
 
             # lidar pc
-            offset = self.dicts['scala']['offset'][idx]
-            datasize = self.dicts['scala']['datasize'][idx]
+            offset = self.dicts['scala']['offset'][match['scala']]
+            datasize = self.dicts['scala']['datasize'][match['scala']]
             fd.seek(offset)
             pts3d=[]
             for i in range(int(datasize/struct_len)):
                 pts3d.append(struct_unpack(fd.read(struct_len)))
             pts3d = np.asarray(pts3d)
-            np.save(os.path.join(feature_path, "lidarpc", f"lidarpc_{idx}.npy"), pts3d)
+            np.save(os.path.join(feature_path, "lidarPC", f"lidarPC_{sample_id}.npy"), pts3d)
 
             # radar adc
-            offset = int(self.dicts['radar_ch0']['offset'][idx])
-            datasize = self.dicts['radar_ch0']['datasize'][idx]
+            offset = int(self.dicts['radar_ch0']['offset'][match['radar_ch0']])
+            datasize = self.dicts['radar_ch0']['datasize'][match['radar_ch0']]
             fd_ch0.seek(offset)
             adc0 = np.fromfile(fd_ch0, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch1']['offset'][idx])
-            datasize = self.dicts['radar_ch1']['datasize'][idx]
+            offset = int(self.dicts['radar_ch1']['offset'][match['radar_ch1']])
+            datasize = self.dicts['radar_ch1']['datasize'][match['radar_ch1']]
             fd_ch1.seek(offset)
             adc1 = np.fromfile(fd_ch1, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch2']['offset'][idx])
-            datasize = self.dicts['radar_ch2']['datasize'][idx]
+            offset = int(self.dicts['radar_ch2']['offset'][match['radar_ch2']])
+            datasize = self.dicts['radar_ch2']['datasize'][match['radar_ch2']]
             fd_ch2.seek(offset)
             adc2 = np.fromfile(fd_ch2, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch3']['offset'][idx])
-            datasize = self.dicts['radar_ch3']['datasize'][idx]
+            offset = int(self.dicts['radar_ch3']['offset'][match['radar_ch3']])
+            datasize = self.dicts['radar_ch3']['datasize'][match['radar_ch3']]
             fd_ch3.seek(offset)
             adc3 = np.fromfile(fd_ch3, dtype=np.int16, count=int(datasize/2))
 
-            frame0 = np.reshape(adc0[0::2] + 1j*adc0[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame1 = np.reshape(adc1[0::2] + 1j*adc1[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame2 = np.reshape(adc2[0::2] + 1j*adc2[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame3 = np.reshape(adc3[0::2] + 1j*adc3[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            frame0 = np.reshape(adc0[0::2] + 1j*adc0[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame1 = np.reshape(adc1[0::2] + 1j*adc1[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame2 = np.reshape(adc2[0::2] + 1j*adc2[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame3 = np.reshape(adc3[0::2] + 1j*adc3[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
             adc = np.concatenate([frame3,frame0,frame1,frame2],axis=2)
-            np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
+            np.save(os.path.join(feature_path, "adc", f"adc_{sample_id}.npy"), adc)
 
         self.AoA_mat = np.load(os.path.join(file_path, "CalibrationTable.npy"),allow_pickle=True).item()
 
@@ -1161,7 +1166,7 @@ class RADIalRaw(Dataset):
                 file = os.path.join(self.feature_path,"image",f"image_{index}.jpg")
                 data = np.asarray(Image.open(file))
             elif f == 'lidarPC':
-                file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{index}.npy")
+                file = os.path.join(self.feature_path,"lidarPC",f"lidarPC_{index}.npy")
                 data = np.load(file)
             elif f == 'adc':
                 file = os.path.join(self.feature_path,"adc",f"adc_{index}.npy")
@@ -1176,12 +1181,15 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
+        range_fft = np.fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        RD_spectrums = np.fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        if for_visualize:
+            # collapse the complex MIMO cube to a real range-Doppler power map for display
+            return np.sum(np.abs(RD_spectrums), axis=2)
         return RD_spectrums
-    
+
     def get_RA(self, idx=None, for_visualize=False):
         file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
         complex_adc = np.load(file)
@@ -1189,10 +1197,10 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
+        range_fft = np.fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        RD_spectrums = np.fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
 
         doppler_indexes = []
         for doppler_bin in range(self.numChirps):
@@ -1284,19 +1292,23 @@ class RADIalRaw(Dataset):
         return np.vstack([RangeBin,DopplerBin_candidates,az,el]).transpose()
 
     def get_lidarpointcloud(self, idx=None, for_visualize=False):
-        file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{idx}.npy")
+        file = os.path.join(self.feature_path,"lidarPC",f"lidarPC_{idx}.npy")
         pc = np.load(file)
         return pc
 
-    def get_image(self, idx=None, for_visualize=False): 
+    def get_image(self, idx=None, for_visualize=False):
         image_path = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
         #image = np.asarray(Image.open(image_path))
         return image_path
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
-      
+
     def get_spectrogram(self, idx=None, for_visualize=False):
+        return None
+
+    def get_RAD(self, idx=None, for_visualize=False):
+        # RADIal raw data has no range-azimuth-doppler cube feature
         return None
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
