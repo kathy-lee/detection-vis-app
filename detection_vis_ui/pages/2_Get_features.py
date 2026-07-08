@@ -373,7 +373,7 @@ if "RD" in features and not features_show[features.index("RD")]:
   if "fft_cfg" not in st.session_state:
     st.session_state.fft_cfg = 0
   fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
-  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
+  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT to get Range-Doppler(RD) spectrum?", fft_config_list, index = st.session_state.fft_cfg)
   st.session_state.fft_cfg = fft_config_list.index(fft_config)
 
 
@@ -386,27 +386,15 @@ if "spectrogram" in features and not features_show[features.index("spectrogram")
 
 
 feature = "RA"
-counter = f"counter_{feature}" 
+counter = f"counter_{feature}"
 if feature in features:
   if not features_show[features.index(feature)]:
     if "aoa_cfg" not in st.session_state:
       st.session_state.aoa_cfg = 0
     aoa_config_list = ["Not interested", "Barlett", "Capon"]
-    aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
+    aoa_config = st.sidebar.radio("How would you like to do AoA estimation to get Range-Azimuth(RA)?", aoa_config_list, index=st.session_state.aoa_cfg)
     st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
-    #
-    if aoa_config in ("Barlett", "Capon"):
-      expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-      if counter not in st.session_state:
-        st.session_state[counter] = st.session_state.frame_id
-      with expander_RA:
-        show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
-  else:
-    expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-    if counter not in st.session_state:
-      st.session_state[counter] = st.session_state.frame_id
-    with expander_RA:
-      show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
+  # NOTE: the RA figure is rendered below the RD figure (see the RA render block after RD).
 
 
 if "noise_cfg" not in st.session_state:
@@ -420,7 +408,12 @@ if "radarPC" in features and not features_show[features.index("radarPC")]:
   if "cfar_cfg" not in st.session_state:
     st.session_state.cfar_cfg = 0
   cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
-  cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
+  cfar_config = st.sidebar.radio(
+    "Through which CFAR method would you like to extract the radar point cloud (CFAR)?", cfar_config_list,
+    index=st.session_state.cfar_cfg,
+    help="CFAR detection extracts the radar point cloud from the range-Doppler map. "
+         "Pick a CFAR variant to compute and display it."
+  )
   st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
 
 
@@ -470,20 +463,24 @@ if feature in features and (features_show[features.index("RD")] or fft_config in
     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=cfg)
 
 
-# feature = "RA" 
-# counter = f"counter_{feature}"  
-# if aoa_config in ("Barlett", "Capon"):
-#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-#   if counter not in st.session_state:
-#     st.session_state[counter] = st.session_state.frame_id
-#   with expander_RA:
-#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
-# elif feature in features:
-#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-#   if counter not in st.session_state:
-#     st.session_state[counter] = st.session_state.frame_id
-#   with expander_RA:
-#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
+# RA figure rendered here so it appears below the RD figure. The AoA sidebar config
+# (aoa_config) is computed further up; here we only render.
+feature = "RA"
+counter = f"counter_{feature}"
+if feature in features:
+  if not features_show[features.index(feature)]:
+    if aoa_config in ("Barlett", "Capon"):
+      expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+      if counter not in st.session_state:
+        st.session_state[counter] = st.session_state.frame_id
+      with expander_RA:
+        show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
+  else:
+    expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+    if counter not in st.session_state:
+      st.session_state[counter] = st.session_state.frame_id
+    with expander_RA:
+      show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
 
 
 feature = "spectrogram" 

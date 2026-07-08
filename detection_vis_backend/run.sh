@@ -12,7 +12,7 @@ echo "Backend running in ${RUN_MODE} mode"
 
 export MODEL_ROOTDIR="/home/kangle/dataset/trained_models"
 export DATASET_ROOTDIR="/home/kangle/dataset"
-export TMP_ROOTDIR="/home/kangle/dataset/tmp"
+export TMP_ROOTDIR="/home/kangle/dataset/tmp"  # Dir for keeping temporary results
 export LOGURU_LEVEL="INFO"
 
 if [ $RUN_MODE = "prod" ]; then
