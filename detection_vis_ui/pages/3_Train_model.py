@@ -27,7 +27,16 @@ def render_training_job(job_id_key):
     job_id = st.session_state.get(job_id_key)
     if not job_id:
         return None
-    job = requests.get(f"http://{backend_service}:8001/jobs/{job_id}").json()
+    try:
+        resp = requests.get(f"http://{backend_service}:8001/jobs/{job_id}", timeout=10)
+        job = resp.json()
+    except Exception:
+        # transient polling failure (network hiccup, etc.) — don't crash the whole
+        # page; show a reconnect notice and retry on the next tick. The backend job
+        # keeps running regardless of the UI.
+        st.progress(0.0, text="reconnecting to training job…")
+        time.sleep(2)
+        st.rerun()
     status = job["status"]
     if status in ("queued", "started"):
         prog = job.get("progress")
