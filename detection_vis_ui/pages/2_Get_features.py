@@ -369,6 +369,14 @@ if 'frame_slider' in st.session_state:
   st.session_state.frame_id = st.session_state['frame_slider']
 
 
+# Defaults so these are always defined even when their sidebar block below is skipped
+# (e.g. a natively-shown feature), avoiding NameErrors where they're referenced later.
+fft_config = "Not interested"
+tfa_config = "Not interested"
+aoa_config = "Not interested"
+cfar_config = "Not interested"
+
+
 if "RD" in features and not features_show[features.index("RD")]:
   if "fft_cfg" not in st.session_state:
     st.session_state.fft_cfg = 0

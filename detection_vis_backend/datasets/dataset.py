@@ -840,7 +840,6 @@ class RADIalRaw(Dataset):
     def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False):
         self.sync_mode = sync_mode
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.method = 'RA'  # 'RA' (range-azimuth map) or 'PC' (radar point cloud; needs CFAR)
         # 1. Open the REC file
         self.rec_file_name = file_name +'_events_log.rec'
         self.rec_file_path = os.path.join(file_path, file_name, self.rec_file_name)
@@ -1125,23 +1124,20 @@ class RADIalRaw(Dataset):
 
         self.AoA_mat = np.load(os.path.join(file_path, "CalibrationTable.npy"),allow_pickle=True).item()
 
-        if(self.method == 'PC'):
-            self.CFAR_fct = CA_CFAR(win_param=(9,9,3,3), threshold=2, rd_size=(self.numSamplePerChirp,16))
-            self.CalibMat = np.rollaxis(self.AoA_mat['Signal'],2,1).reshape(self.AoA_mat['Signal'].shape[0]*self.AoA_mat['Signal'].shape[2],self.AoA_mat['Signal'].shape[1])
-        else:
-            # For RA map estimation, we consider only one elevation, the one parallel to the road plan (index=5)
-            self.CalibMat=self.AoA_mat['Signal'][...,5]
-        
+        # Set up processing artifacts for BOTH radar products so a single instance
+        # can serve range-azimuth maps (get_RA) and radar point clouds (get_radarpointcloud).
+        # Range-Azimuth: one elevation, the one parallel to the road plan (index=5).
+        self.CalibMat_RA = self.AoA_mat['Signal'][...,5]
+        # Point cloud: reshaped calibration matrix + CFAR. Kept on CPU/NumPy because
+        # get_radarpointcloud is NumPy-only (no GPU branch).
+        self.CalibMat_PC = np.rollaxis(self.AoA_mat['Signal'],2,1).reshape(self.AoA_mat['Signal'].shape[0]*self.AoA_mat['Signal'].shape[2],self.AoA_mat['Signal'].shape[1])
+        self.CFAR_fct = CA_CFAR(win_param=(9,9,3,3), threshold=2, rd_size=(self.numSamplePerChirp,16))
+        self.window_np = self.AoA_mat['H'][0]  # NumPy window for the point-cloud path
+
         if(self.device =='cuda'):
-            # if(self.lib=='CuPy'):
-            #     logger.info('CuPy on GPU will be used to execute the processing')
-            #     cp.cuda.Device(0).use()
-            #     self.CalibMat = cp.array(self.CalibMat,dtype='complex64')
-            #     self.window = cp.array(self.AoA_mat['H'][0])
-            # else:
-            logger.info('PyTorch on GPU will be used to execute the processing')
-            self.CalibMat = torch.from_numpy(self.CalibMat).to('cuda')
-            self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')   
+            logger.info('PyTorch on GPU will be used to execute the RA processing')
+            self.CalibMat_RA = torch.from_numpy(self.CalibMat_RA).to('cuda')
+            self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')
         else:
             logger.info('CPU will be used to execute the processing')
             self.window = self.AoA_mat['H'][0]
@@ -1214,10 +1210,10 @@ class RADIalRaw(Dataset):
             # Multiply with Hamming window to reduce side lobes
             MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
 
-            Azimuth_spec = np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+            Azimuth_spec = np.abs(self.CalibMat_RA@MIMO_Spectrum.transpose())
             Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
 
-            RA_map = np.sum(np.abs(Azimuth_spec),axis=2)          
+            RA_map = np.sum(np.abs(Azimuth_spec),axis=2)
             return RA_map.transpose()
         else:      
             # if(self.lib=='CuPy'):
@@ -1232,7 +1228,7 @@ class RADIalRaw(Dataset):
             MIMO_Spectrum = torch.from_numpy(MIMO_Spectrum).to('cuda')
             # Multiply with Hamming window to reduce side lobes
             MIMO_Spectrum = torch.transpose(torch.multiply(MIMO_Spectrum,self.window),1,0).cfloat()
-            Azimuth_spec = torch.abs(torch.matmul(self.CalibMat,MIMO_Spectrum))
+            Azimuth_spec = torch.abs(torch.matmul(self.CalibMat_RA,MIMO_Spectrum))
             Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
             RA_map = torch.sum(torch.abs(Azimuth_spec),axis=2)
             return RA_map.detach().cpu().numpy().transpose()
@@ -1274,11 +1270,11 @@ class RADIalRaw(Dataset):
 
         # 4- Extract and reshape the Rx * Tx matrix into the MIMO spectrum
         MIMO_Spectrum = RD_spectrums[RangeBin_candidates,doppler_indexes,:].reshape(len(DopplerBin_candidates),-1)
-        MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
-        
-        # 5- AoA: maker a cross correlation between the recieved signal vs. the calibration matrix 
+        MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window_np)
+
+        # 5- AoA: maker a cross correlation between the recieved signal vs. the calibration matrix
         # to identify azimuth and elevation angles
-        ASpec=np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+        ASpec=np.abs(self.CalibMat_PC@MIMO_Spectrum.transpose())
         
         # 6- Extract maximum per (Range,Doppler) bins
         x,y = np.where(np.isnan(ASpec))
