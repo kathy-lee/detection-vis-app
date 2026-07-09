@@ -284,7 +284,7 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     job = job_queue.get_queue().enqueue(
         run_training, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
-        job_timeout=-1)
+        job_timeout=-1, result_ttl=604800, failure_ttl=604800)  # keep finished & failed jobs listed for 7 days
     return {"job_id": job.id}
 
 
@@ -431,7 +431,7 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
 def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     job = job_queue.get_queue().enqueue(
         run_retraining, model_id, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
-        job_timeout=-1)
+        job_timeout=-1, result_ttl=604800, failure_ttl=604800)  # keep finished & failed jobs listed for 7 days
     return {"job_id": job.id}
 
 
