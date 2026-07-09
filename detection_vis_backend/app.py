@@ -435,6 +435,30 @@ def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: l
     return {"job_id": job.id}
 
 
+def _job_inputs(job):
+    """Reconstruct a job's training inputs from its stored enqueue args."""
+    args = list(job.args or [])
+    func = (job.func_name or "").split(".")[-1]
+    if func == "run_retraining":
+        args = args[1:]  # drop leading model_id
+    datafiles, features, model_config, train_config = (args + [None] * 4)[:4]
+    dl = train_config.get("dataloader", {}) if isinstance(train_config, dict) else {}
+    split = {"mode": dl.get("splitmode")}
+    if dl.get("splitmode") == "random":
+        split["ratios"] = dl.get("split_random")
+    elif dl.get("splitmode") == "sequence":
+        seq = dl.get("split_sequence") or {}
+        split["files"] = {k: [f.get("name") for f in v] for k, v in seq.items()}
+    return {
+        "datafiles": [{"name": d.get("name"), "parse": d.get("parse")}
+                      for d in (datafiles or []) if isinstance(d, dict)],
+        "features": features,
+        "split": split,
+        "model_config": model_config,
+        "train_config": train_config,
+    }
+
+
 def _summarize_job(job):
     func = (job.func_name or "").split(".")[-1]
     kind = "retrain" if "retrain" in func else "train"
@@ -446,6 +470,7 @@ def _summarize_job(job):
         "progress": job.meta.get("progress"),
         "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None,
         "started_at": job.started_at.isoformat() if job.started_at else None,
+        "inputs": _job_inputs(job),
     }
     if status == "finished":
         item["model_name"] = (job.return_value() or {}).get("model_name")
@@ -499,14 +524,26 @@ def get_job(job_id: str):
 
 @app.delete("/jobs/{job_id}")
 def cancel_job(job_id: str):
+    conn = job_queue.get_redis()
     try:
-        job = Job.fetch(job_id, connection=job_queue.get_redis())
+        job = Job.fetch(job_id, connection=conn)
     except NoSuchJobError:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get_status() == "queued":
+    status = job.get_status()
+    if status == "queued":
+        # Not yet started: just drop it from the queue.
         job.cancel()
         return {"status": "canceled"}
-    raise HTTPException(status_code=409, detail="Job already started; cannot cancel")
+    if status == "started":
+        # Running: ask the worker to stop the job. RQ kills the work-horse, which
+        # destroys its CUDA context and frees the GPU automatically; the worker
+        # itself stays alive for future jobs.
+        try:
+            send_stop_job_command(conn, job_id)
+        except Exception as e:
+            raise HTTPException(status_code=409, detail=f"Could not stop running job: {e}")
+        return {"status": "stopping"}
+    raise HTTPException(status_code=409, detail=f"Job is '{status}' and cannot be canceled")
 
 
 if __name__ == "__main__":

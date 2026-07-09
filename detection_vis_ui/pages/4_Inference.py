@@ -29,8 +29,13 @@ st.set_page_config(
 response = requests.get(f"http://{backend_service}:8001/models")  
 models = response.json()
 
+if not models:
+  st.info("No trained models available yet. Train a model first.")
+  st.stop()
+
+# Fall back to the first model if the remembered one no longer exists (e.g. deleted).
 if 'model_chosen' in st.session_state:
-  model_index = next((idx for idx, item in enumerate(models) if item['name'] == st.session_state.model_chosen), -1)
+  model_index = next((idx for idx, item in enumerate(models) if item['name'] == st.session_state.model_chosen), 0)
 else:
   model_index = 0
 model_chosen = st.selectbox("Choose a model", [item["name"] for item in models], index=model_index)
@@ -41,6 +46,9 @@ st.subheader(f"Model: {model_chosen}")
 # show model lineage(datafiles, features, model config, train config, performance)
 
 model_path = os.path.join(model_rootdir, model_chosen)
+if not os.path.isdir(model_path):
+  st.error(f"Model files not found on disk for '{model_chosen}' (the entry may be stale). Please choose another model.")
+  st.stop()
 
 # in default choose the last epoch checkpoint model
 files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f)) and f.endswith('.pth')]
