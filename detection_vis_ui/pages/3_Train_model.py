@@ -17,52 +17,10 @@ backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 model_rootdir = os.getenv('MODEL_ROOTDIR')
 
 
-def render_training_job(job_id_key):
-    """Poll the backend training job and render its progress.
-
-    Returns the finished model_name (str) once the job completes, else None.
-    Reruns the page every ~2s while the job is queued/running so the progress
-    bar updates without blocking the UI.
-    """
-    job_id = st.session_state.get(job_id_key)
-    if not job_id:
-        return None
-    try:
-        resp = requests.get(f"http://{backend_service}:8001/jobs/{job_id}", timeout=10)
-        job = resp.json()
-    except Exception:
-        # transient polling failure (network hiccup, etc.) — don't crash the whole
-        # page; show a reconnect notice and retry on the next tick. The backend job
-        # keeps running regardless of the UI.
-        st.progress(0.0, text="reconnecting to training job…")
-        time.sleep(2)
-        st.rerun()
-    status = job["status"]
-    if status in ("queued", "started"):
-        prog = job.get("progress")
-        if prog:
-            epoch, total = prog["epoch"], prog["total_epochs"]
-            st.progress((epoch - 1) / total, text=f"Running epoch {epoch} of {total}")
-        elif status == "started":
-            st.progress(0.0, text="Training started, preparing first epoch…")
-        else:
-            st.progress(0.0, text="Queued…")
-        if status == "queued" and st.button("Cancel", key=f"cancel_{job_id_key}"):
-            requests.delete(f"http://{backend_service}:8001/jobs/{job_id}")
-            del st.session_state[job_id_key]
-            st.rerun()
-        time.sleep(2)
-        st.rerun()
-    elif status == "finished":
-        del st.session_state[job_id_key]
-        return job["model_name"]
-    elif status == "failed":
-        st.error(f"Training failed: {job.get('error')}")
-        del st.session_state[job_id_key]
-    elif status == "canceled":
-        st.info("Training canceled.")
-        del st.session_state[job_id_key]
-    return None
+def go_to_jobs_button(key):
+    """Jump to the Jobs page, which is the single place to monitor all jobs."""
+    if st.button("View jobs ▸", key=key):
+        switch_page("jobs")
 
 st.set_page_config(
     page_title = "Have fun ",
@@ -281,19 +239,9 @@ if train_mode == train_modes[0]:
         st.info("An error occurred in submitting training.")
         st.stop()
       st.session_state.train_job_id = response.json()["job_id"]
-      st.rerun()
+      st.success("Training job submitted. Track its progress on the Jobs page.")
 
-    model_name = render_training_job("train_job_id")
-    if model_name:
-      st.session_state.model_chosen = model_name
-      # show evaluation result
-      st.write("Model Evaluation Result:")
-      st.write("Val dataset")
-      val_eval = pd.read_csv(os.path.join(model_rootdir, model_name, "val_eval.csv"))
-      st.table(val_eval)
-      st.write("Test dataset")
-      test_eval = pd.read_csv(os.path.join(model_rootdir, model_name, "test_eval.csv"))
-      st.table(test_eval)
+    go_to_jobs_button("view_jobs_train")
       
 
         
@@ -341,19 +289,9 @@ if train_mode == train_modes[1]:
         st.info("An error occurred in submitting retraining.")
         st.stop()
       st.session_state.retrain_job_id = response.json()["job_id"]
-      st.rerun()
+      st.success("Retraining job submitted. Track its progress on the Jobs page.")
 
-  retrained = render_training_job("retrain_job_id")
-  if retrained:
-    st.session_state.model_chosen = retrained
-    # show evaluation result
-    st.write("Model Evaluation Result:")
-    st.write("Val dataset")
-    val_eval = pd.read_csv(os.path.join(model_rootdir, retrained, "val_eval.csv"))
-    st.table(val_eval)
-    st.write("Test dataset")
-    test_eval = pd.read_csv(os.path.join(model_rootdir, retrained, "test_eval.csv"))
-    st.table(test_eval)
+  go_to_jobs_button("view_jobs_retrain")
 
 infer_action = st.button("Go to inference", key="inference_btn")
 if infer_action:

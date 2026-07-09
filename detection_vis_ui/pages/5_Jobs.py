@@ -3,6 +3,8 @@ import requests
 import os
 import time
 
+from streamlit_extras.switch_page_button import switch_page
+
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 
 st.set_page_config(
@@ -94,6 +96,10 @@ if recent:
         for job in recent:
             if job["status"] == "finished":
                 st.markdown(f"✅ {_label(job)} → **{job.get('model_name')}**")
+                if job.get("model_name") and st.button("View on Inference ▸",
+                                                        key=f"toinfer_{job['job_id']}"):
+                    st.session_state.model_chosen = job["model_name"]
+                    switch_page("inference")
             elif job["status"] == "failed":
                 st.markdown(f"❌ {_label(job)} → {job.get('error')}")
             else:
