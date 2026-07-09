@@ -28,8 +28,11 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.train.train import train
 from detection_vis_backend.train.inference import infer
 
+from rq import Queue
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
+from rq.command import send_stop_job_command
 from detection_vis_backend.jobs import queue as job_queue
 from detection_vis_backend.jobs.tasks import run_training, run_retraining
 
@@ -430,6 +433,52 @@ def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: l
         run_retraining, model_id, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
         job_timeout=-1)
     return {"job_id": job.id}
+
+
+def _summarize_job(job):
+    func = (job.func_name or "").split(".")[-1]
+    kind = "retrain" if "retrain" in func else "train"
+    status = job.get_status()
+    item = {
+        "job_id": job.id,
+        "type": kind,
+        "status": status,
+        "progress": job.meta.get("progress"),
+        "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+    }
+    if status == "finished":
+        item["model_name"] = (job.return_value() or {}).get("model_name")
+    if status == "failed":
+        exc = job.exc_info or ""
+        item["error"] = exc.strip().splitlines()[-1] if exc else None
+    return item
+
+
+@app.get("/jobs")
+def list_jobs():
+    conn = job_queue.get_redis()
+    q = Queue(job_queue.QUEUE_NAME, connection=conn)
+    started = StartedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+    finished = FinishedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+    failed = FailedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+
+    def summarize_ids(ids):
+        out = []
+        for jid in ids:
+            try:
+                out.append(_summarize_job(Job.fetch(jid, connection=conn)))
+            except NoSuchJobError:
+                continue
+        return out
+
+    # most recent finished/failed first, capped
+    recent_ids = list(reversed(finished.get_job_ids()))[:10] + list(reversed(failed.get_job_ids()))[:10]
+    return {
+        "running": summarize_ids(started.get_job_ids()),
+        "queued": summarize_ids(q.job_ids),
+        "recent": summarize_ids(recent_ids),
+    }
 
 
 @app.get("/jobs/{job_id}")

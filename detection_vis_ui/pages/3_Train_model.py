@@ -41,10 +41,12 @@ def render_training_job(job_id_key):
     if status in ("queued", "started"):
         prog = job.get("progress")
         if prog:
-            st.progress(prog["epoch"] / prog["total_epochs"],
-                        text=f"epoch {prog['epoch']}/{prog['total_epochs']} · loss {prog['loss']:.4f}")
+            epoch, total = prog["epoch"], prog["total_epochs"]
+            st.progress((epoch - 1) / total, text=f"Running epoch {epoch} of {total}")
+        elif status == "started":
+            st.progress(0.0, text="Training started, preparing first epoch…")
         else:
-            st.progress(0.0, text="queued…")
+            st.progress(0.0, text="Queued…")
         if status == "queued" and st.button("Cancel", key=f"cancel_{job_id_key}"):
             requests.delete(f"http://{backend_service}:8001/jobs/{job_id}")
             del st.session_state[job_id_key]

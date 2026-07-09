@@ -358,6 +358,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         for epoch in range(startEpoch, num_epochs):
             kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
             logger.info(f'Epoch {epoch+1}/{num_epochs}')
+            # report the epoch as running so the UI shows progress during (not only after) it
+            if progress_cb is not None:
+                progress_cb(epoch + 1, num_epochs, None, 'running')
             ###################
             ## Training loop ##
             ###################
