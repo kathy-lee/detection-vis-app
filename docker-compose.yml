@@ -38,8 +38,15 @@ services:
 
   redis:
     image: "redis:7-alpine"
+    # Persist the RQ queue / registries / job history so they survive a redis
+    # container recreation or host reboot. --appendonly yes enables AOF (redis
+    # journals every write to /data and replays it on restart); the named volume
+    # gives /data a durable home outside the container's throwaway layer.
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
 
   # Runs training/retraining jobs off the request path. In dev the worker runs on the
   # host (see run.sh) so it gets the GPU. NOTE: GPU passthrough for this container
@@ -79,3 +86,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+volumes:
+  redis-data:
