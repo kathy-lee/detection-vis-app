@@ -17,6 +17,15 @@ backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 model_rootdir = os.getenv('MODEL_ROOTDIR')
 
 
+def _load_model_features():
+  """model name -> feature codes it consumes. Single source of truth for both
+  the model dropdown (model_zoo) and the feature-compatibility guard."""
+  with open(os.path.join('detection_vis_backend', 'networks', 'model_features.json'), 'r') as f:
+    return json.load(f)
+
+MODEL_FEATURES = _load_model_features()
+
+
 def go_to_jobs_button(key):
     """Jump to the Jobs page, which is the single place to monitor all jobs."""
     if st.button("View jobs ▸", key=key):
@@ -204,11 +213,24 @@ def find_default_configs(dataset, feature, model):
 
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD", "RAMP_CNN", "RadarCrossAttention"]   # This will be changed when streamlit support selectbox with None as default option
+# model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD", "RAMP_CNN", "RadarCrossAttention"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type"] + list(MODEL_FEATURES.keys())   # derived from model_features.json (single source of truth)
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
-  if model != model_zoo[0]:  
+  if model != model_zoo[0]:
+    # Feature-compatibility guard: every chosen input feature must be one this
+    # model can consume (see networks/model_features.json). Sound subset check —
+    # never blocks a valid combo; catches feeding a model a feature it can't read.
+    supported = MODEL_FEATURES.get(model, [])
+    incompatible = [f for f in (st.session_state.features_chosen or []) if f not in supported]
+    if incompatible:
+      st.info(
+        f"**{model}** can't train on the selected feature(s): {', '.join(incompatible)}. "
+        f"It supports: {', '.join(supported)}. "
+        "Adjust your feature selection on the Get features page, or pick another model."
+      )
+      st.stop()
     st.write("Model description")
 
     model_configs, train_configs = find_default_configs(dataset_name, st.session_state.features_chosen, model)

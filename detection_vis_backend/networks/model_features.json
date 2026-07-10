@@ -1,0 +1,17 @@
+{
+  "FFTRadNet": ["RD"],
+  "RODNet_CDC": ["RA"],
+  "RODNet_CDCv2": ["RA"],
+  "RODNet_HG": ["RA"],
+  "RODNet_HGv2": ["RA"],
+  "RODNet_HGwI": ["RA"],
+  "RODNet_HGwIv2": ["RA"],
+  "RECORD": ["RD", "RA"],
+  "RECORDNoLstm": ["RD", "RA"],
+  "RECORDNoLstmMulti": ["RD", "RA"],
+  "MVRECORD": ["RD", "RA", "AD"],
+  "RADDet": ["RAD"],
+  "DAROD": ["RD"],
+  "RAMP_CNN": ["RD", "RA", "AD"],
+  "RadarCrossAttention": ["RD", "RA", "AD"]
+}
