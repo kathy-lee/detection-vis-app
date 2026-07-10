@@ -80,7 +80,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - /home/kangle/data/detection-pg-data:/var/lib/postgresql/data
+      # - /home/kangle/data/detection-pg-data:/var/lib/postgresql/data  # old bind mount (kept for rollback)
+      - pg-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -89,3 +90,4 @@ services:
 
 volumes:
   redis-data:
+  pg-data:
