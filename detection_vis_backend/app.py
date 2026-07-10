@@ -476,7 +476,13 @@ def _summarize_job(job):
         item["model_name"] = (job.return_value() or {}).get("model_name")
     if status == "failed":
         exc = job.exc_info or ""
-        item["error"] = exc.strip().splitlines()[-1] if exc else None
+        last = exc.strip().splitlines()[-1] if exc else None
+        # Jobs reconciled on worker boot were interrupted by a killed session
+        # (closed terminal / reboot / crash), not a real training error. Show a
+        # clear reason instead of RQ's raw "AbandonedJobError" wording.
+        if last and "AbandonedJobError" in last:
+            last = "Interrupted: the backend/worker was stopped while this job was running."
+        item["error"] = last
     return item
 
 
