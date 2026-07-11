@@ -1,17 +1,112 @@
 {
-  "FFTRadNet": ["RD"],
-  "RODNet_CDC": ["RA"],
-  "RODNet_CDCv2": ["RA"],
-  "RODNet_HG": ["RA"],
-  "RODNet_HGv2": ["RA"],
-  "RODNet_HGwI": ["RA"],
-  "RODNet_HGwIv2": ["RA"],
-  "RECORD": ["RD", "RA"],
-  "RECORDNoLstm": ["RD", "RA"],
-  "RECORDNoLstmMulti": ["RD", "RA"],
-  "MVRECORD": ["RD", "RA", "AD"],
-  "RADDet": ["RAD"],
-  "DAROD": ["RD"],
-  "RAMP_CNN": ["RD", "RA", "AD"],
-  "RadarCrossAttention": ["RD", "RA", "AD"]
+  "FFTRadNet": {
+    "features": ["RD"],
+    "datasets": ["RADIal"],
+    "in_channels": 32,
+    "win_size": 1,
+    "input_size": [512, 256],
+    "notes": "Per-frame input tensor is 32*512*256 = channels*range*Doppler. 32 channels = real+imag of the 16-Rx range-Doppler spectrum; 512 range bins are code-fixed; the 256 Doppler axis carries the 12*16 MIMO array (192 virtual antennas) that fftradnet.py's hardcoded geometry (NbTxAntenna/NbRxAntenna) expects. RADIal-only; not configurable here."
+  },
+  "RODNet_CDC": {
+    "features": ["RA"],
+    "in_channels": 2,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "Fully convolutional; RA map H*W is dataset-determined (CRUW ~128*128). in_channels=2 = real+imag of one map."
+  },
+  "RODNet_CDCv2": {
+    "features": ["RA"],
+    "in_channels": 4,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "v2 uses MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
+  },
+  "RODNet_HG": {
+    "features": ["RA"],
+    "in_channels": 2,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "Hourglass; H*W dataset-determined (CRUW ~128*128)."
+  },
+  "RODNet_HGv2": {
+    "features": ["RA"],
+    "in_channels": 4,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "v2 MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
+  },
+  "RODNet_HGwI": {
+    "features": ["RA"],
+    "in_channels": 2,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "Hourglass w/ inception; H*W dataset-determined."
+  },
+  "RODNet_HGwIv2": {
+    "features": ["RA"],
+    "in_channels": 4,
+    "win_size": 16,
+    "input_size": null,
+    "notes": "v2 MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
+  },
+  "RECORD": {
+    "features": ["RD", "RA"],
+    "datasets": ["CRUW", "CARRADA"],
+    "in_channels": 1,
+    "win_size": 12,
+    "input_size": null,
+    "notes": "Fully convolutional; H*W dataset-determined (CARRADA RD 256*64, RA 256*256). Temporal model (bottleneck LSTM)."
+  },
+  "RECORDNoLstm": {
+    "features": ["RD", "RA"],
+    "datasets": ["CRUW", "CARRADA"],
+    "in_channels": 1,
+    "win_size": 1,
+    "input_size": null,
+    "notes": "Single-frame RECORD variant; H*W dataset-determined."
+  },
+  "RECORDNoLstmMulti": {
+    "features": ["RD", "RA"],
+    "datasets": ["CRUW", "CARRADA"],
+    "in_channels": 1,
+    "win_size": 12,
+    "input_size": null,
+    "notes": "CARRADA path uses in_channels=1 per feature; the CRUW stacked path uses in_channels=96. H*W dataset-determined. CONFIRM which applies to your setup."
+  },
+  "MVRECORD": {
+    "features": ["RD", "RA", "AD"],
+    "in_channels": 1,
+    "win_size": 5,
+    "input_size": null,
+    "notes": "Multi-view: separate RD/RA/AD encoders (in_channels=1 each). H*W dataset-determined."
+  },
+  "RADDet": {
+    "features": ["RAD"],
+    "in_channels": 64,
+    "win_size": 1,
+    "input_size": [256, 256, 64],
+    "notes": "RAD cube: range 256 * azimuth 256 * doppler 64; doppler bins are the channel dim (input_channels=64). Pinned in model config."
+  },
+  "DAROD": {
+    "features": ["RD"],
+    "datasets": ["CARRADA", "RADDetDataset"],
+    "in_channels": 1,
+    "win_size": 1,
+    "input_size": [256, 64],
+    "notes": "RD map 256*64, 1 channel (model config input_size=[256,64,1]). Pinned in model config."
+  },
+  "RAMP_CNN": {
+    "features": ["RD", "RA", "AD"],
+    "in_channels": null,
+    "win_size": 16,
+    "input_size": [128, 128],
+    "notes": "ramap_rsize=128, ramap_asize=128 over a 16-frame window; consumes RD/RA/AD. in_channels not declared in model config (CONFIRM)."
+  },
+  "RadarCrossAttention": {
+    "features": ["RD", "RA", "AD"],
+    "in_channels": null,
+    "win_size": 5,
+    "input_size": null,
+    "notes": "Cross-attention over RD/RA/AD; no spatial size or in_channels pinned in model config (CONFIRM)."
+  }
 }

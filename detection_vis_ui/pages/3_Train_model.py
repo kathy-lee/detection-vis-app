@@ -222,7 +222,8 @@ if train_mode == train_modes[0]:
     # Feature-compatibility guard: every chosen input feature must be one this
     # model can consume (see networks/model_features.json). Sound subset check —
     # never blocks a valid combo; catches feeding a model a feature it can't read.
-    supported = MODEL_FEATURES.get(model, [])
+    # supported = MODEL_FEATURES.get(model, [])   # old flat schema: value was the feature list
+    supported = MODEL_FEATURES.get(model, {}).get("features", [])   # value is now a dict; features live under "features"
     incompatible = [f for f in (st.session_state.features_chosen or []) if f not in supported]
     if incompatible:
       st.info(
@@ -231,6 +232,22 @@ if train_mode == train_modes[0]:
         "Adjust your feature selection on the Get features page, or pick another model."
       )
       st.stop()
+
+    # Dataset-compatibility guard: the model must actually support the dataset the
+    # chosen files come from (see networks/model_features.json "datasets"). This is
+    # stronger than the feature check — e.g. FFTRadNet needs RADIal's specific MIMO
+    # geometry, so an RD map from another dataset won't work even if it "is RD".
+    # Skipped when a model has no "datasets" list yet (not-yet-confirmed models are
+    # left un-gated rather than wrongly blocked).
+    compatible_datasets = MODEL_FEATURES.get(model, {}).get("datasets", [])
+    if compatible_datasets and dataset_name not in compatible_datasets:
+      st.info(
+        f"**{model}** can't train on the **{dataset_name}** dataset. "
+        f"It supports: {', '.join(compatible_datasets)}. "
+        "Choose files from a supported dataset, or pick another model."
+      )
+      st.stop()
+
     st.write("Model description")
 
     model_configs, train_configs = find_default_configs(dataset_name, st.session_state.features_chosen, model)
