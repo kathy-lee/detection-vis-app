@@ -19,24 +19,16 @@ RECORD_MODEL_CONFIG = os.path.join(
 )
 
 
-@pytest.fixture
-def clean_network_factory():
-    """NetworkFactory caches instances at class scope; reset it so a stale cache
-    from a prior test/inference can't leak into this one."""
-    NetworkFactory._instances.clear()
-    yield
-    NetworkFactory._instances.clear()
+def test_get_instance_distinct_configs_same_class():
+    """Regression test: two RECORD models with different configs must each yield a
+    correctly-shaped instance, not a stale reuse of the first.
 
-
-def test_get_instance_distinct_configs_same_class(clean_network_factory):
-    """Regression test: two RECORD models with different configs must yield
-    correctly-shaped instances, not a stale reuse of the first.
-
-    Root cause of the original bug: get_instance keyed its cache on class name
-    alone and ignored `params` on a cache hit. So after building RECORD with the
-    CRUW config (in_channels=8), building it again with the CARRADA/RD config
-    (in_channels=1) returned the cached 8-channel net, and loading a 1-channel
-    CARRADA checkpoint into it failed with size mismatches at inference.
+    Root cause of the original bug: get_instance cached instances keyed on class name
+    alone and ignored `params` on a cache hit. So after building RECORD with the CRUW
+    config (in_channels=8), building it again with the CARRADA/RD config (in_channels=1)
+    returned the cached 8-channel net, and loading a 1-channel CARRADA checkpoint into it
+    failed with size mismatches at inference. The factory now builds a fresh instance per
+    call, so each config gets its own correctly-shaped net.
     """
     with open(RECORD_MODEL_CONFIG) as f:
         cfg = json.load(f)
@@ -57,5 +49,5 @@ def test_get_instance_distinct_configs_same_class(clean_network_factory):
     assert carrada_net.decoder.conv_head2.weight.shape[0] == 4
     assert carrada_net is not cruw_net
 
-    # Same class + same config (a fresh identical dict) still returns the cached instance.
-    assert factory.get_instance("RECORD", copy.deepcopy(carrada_cfg)) is carrada_net
+    # No caching: each call builds a fresh instance, even for the same config.
+    assert factory.get_instance("RECORD", copy.deepcopy(carrada_cfg)) is not carrada_net

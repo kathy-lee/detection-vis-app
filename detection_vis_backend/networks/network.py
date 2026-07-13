@@ -1,4 +1,3 @@
-import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,36 +19,27 @@ from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, 
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 
 class NetworkFactory:
-    _instances = {}
-    _singleton_instance = None
-
-    def __new__(cls, *args, **kwargs):
-        if not cls._singleton_instance:
-            cls._singleton_instance = super().__new__(cls)
-        return cls._singleton_instance
+    # Old: cached instances keyed by class name only, so a second model of the same
+    # class built with a different config silently reused the first instance's shape,
+    # and loading its checkpoint failed with size mismatches (e.g. RECORD CRUW
+    # in_channels=8 vs CARRADA in_channels=1). Networks are cheap to build (~2.8 MB /
+    # ~16 ms for RECORD) and inference moves them onto the GPU, so caching bought almost
+    # nothing while pinning GPU memory for the whole process lifetime. We now build a
+    # fresh instance per call and let it be garbage-collected after the request.
+    # _instances = {}
+    # _singleton_instance = None
+    #
+    # def __new__(cls, *args, **kwargs):
+    #     if not cls._singleton_instance:
+    #         cls._singleton_instance = super().__new__(cls)
+    #     return cls._singleton_instance
 
     def get_instance(self, class_name, params=None):
-        # Old: cached by class name only -> a second model of the same class built with a
-        # different config silently reused the first instance's shape, so load_state_dict
-        # later failed with size mismatches (e.g. RECORD CRUW in_channels=8 vs CARRADA
-        # in_channels=1). Key the cache by (class_name, params) so each distinct config
-        # gets its own instance.
-        # if class_name not in self._instances:
-        #     cls = globals()[class_name]
-        #     if params:
-        #         self._instances[class_name] = cls(**params)
-        #     else:
-        #         self._instances[class_name] = cls()
-        # return self._instances[class_name]
-        key = (class_name, json.dumps(params, sort_keys=True) if params else None)
-        if key not in self._instances:
-            # Fetch the class from globals, create a singleton instance
-            cls = globals()[class_name]
-            if params:
-                self._instances[key] = cls(**params)  # Pass the dict as arguments if it's provided
-            else:
-                self._instances[key] = cls()
-        return self._instances[key]
+        # Fetch the class from globals and build a fresh instance every call.
+        cls = globals()[class_name]
+        if params:
+            return cls(**params)  # Pass the dict as arguments if it's provided
+        return cls()
     
 
 
