@@ -1,3 +1,4 @@
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,14 +29,27 @@ class NetworkFactory:
         return cls._singleton_instance
 
     def get_instance(self, class_name, params=None):
-        if class_name not in self._instances:
+        # Old: cached by class name only -> a second model of the same class built with a
+        # different config silently reused the first instance's shape, so load_state_dict
+        # later failed with size mismatches (e.g. RECORD CRUW in_channels=8 vs CARRADA
+        # in_channels=1). Key the cache by (class_name, params) so each distinct config
+        # gets its own instance.
+        # if class_name not in self._instances:
+        #     cls = globals()[class_name]
+        #     if params:
+        #         self._instances[class_name] = cls(**params)
+        #     else:
+        #         self._instances[class_name] = cls()
+        # return self._instances[class_name]
+        key = (class_name, json.dumps(params, sort_keys=True) if params else None)
+        if key not in self._instances:
             # Fetch the class from globals, create a singleton instance
             cls = globals()[class_name]
             if params:
-                self._instances[class_name] = cls(**params)  # Pass the dict as arguments if it's provided
+                self._instances[key] = cls(**params)  # Pass the dict as arguments if it's provided
             else:
-                self._instances[class_name] = cls()
-        return self._instances[class_name]
+                self._instances[key] = cls()
+        return self._instances[key]
     
 
 
