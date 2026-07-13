@@ -55,7 +55,17 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     model_path = os.path.join(model_rootdir, model)
     checkpoint = [file for file in os.listdir(model_path) if f"epoch{checkpoint_id:02}" in file][0]
     dict = torch.load(os.path.join(model_path, checkpoint), map_location=device)
-    net.load_state_dict(dict['net_state_dict'])  
+    # Checkpoints save net.state_dict() after init_lossfunc() attached the loss criterion
+    # as a submodule (e.g. MVRECORD rd/ra_criterion, RECORD criterion when the loss is a
+    # weighted CE), so they carry criterion.* buffers. Inference never calls init_lossfunc,
+    # so those keys are "unexpected". strict=False ignores them; shape mismatches on real
+    # network keys still raise (verified), so this does not mask config/shape errors.
+    # net.load_state_dict(dict['net_state_dict'])
+    incompatible = net.load_state_dict(dict['net_state_dict'], strict=False)
+    if incompatible.missing_keys:
+        logger.warning(f"Missing network keys when loading checkpoint: {incompatible.missing_keys}")
+    if incompatible.unexpected_keys:
+        logger.debug(f"Ignored non-network keys in checkpoint: {incompatible.unexpected_keys}")
     net.to(device)
     logger.info("Loaded the model.")
     
