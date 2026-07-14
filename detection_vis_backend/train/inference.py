@@ -156,8 +156,11 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             #          torch.tensor(data['AD']).unsqueeze(0).to(device).float())
             input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
-            confmap_pred_ra = output['ra'].detach().cpu().numpy()
-            confmap_pred_rd = output['rd'].detach().cpu().numpy()
+            # MVRECORD.forward returns per-view maps of shape (B, n_class, H, W); index the
+            # batch dim out so post_process_single_frame gets the 3-D (n_class, H, W) it unpacks
+            # (class_size, height, width = confmaps.shape). Every other branch does output[0].
+            confmap_pred_ra = output['ra'][0].detach().cpu().numpy()
+            confmap_pred_rd = output['rd'][0].detach().cpu().numpy()
             pred_objs_ra = post_process_single_frame(confmap_pred_ra, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
             pred_objs_rd = post_process_single_frame(confmap_pred_rd, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
             pred_objs = {"RA": pred_objs_ra, "RD": pred_objs_rd}

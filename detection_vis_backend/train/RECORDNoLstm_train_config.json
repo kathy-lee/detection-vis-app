@@ -56,7 +56,10 @@
         "weight": [0.0004236998233593304, 0.4749960642363426, 0.4175089566101426, 0.1070712793301555]
       },
       "transformations": ["hflip", "vflip"],
-      "norm_type": "tvt"
+      "norm_type": "tvt",
+      "max_dets": 20,
+      "peak_thres": 0.3,
+      "ols_thres": 0.3
     },
 
     "RA": {
@@ -65,7 +68,10 @@
         "weight": [0.00012380283547712211, 0.49374198702138145, 0.4158134117152977, 0.09032079842784382]
       },
       "transformations": ["hflip", "vflip"],
-      "norm_type": "tvt"
+      "norm_type": "tvt",
+      "max_dets": 20,
+      "peak_thres": 0.3,
+      "ols_thres": 0.3
     }
   }
 
