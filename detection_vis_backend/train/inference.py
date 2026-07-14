@@ -17,6 +17,56 @@ from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
 
 
+def carrada_seg_readout(pred_logits, gt_mask, viz_idx):
+    """Segmentation readout for CARRADA (RECORD / MVRECORD).
+
+    CARRADA is a semantic-segmentation task (dense masks, wce_w10sdice, mIoU) -- not detection.
+    This mirrors evaluate.RECORD_CARRADA_evaluation / MVRECORD_CARRADA_evaluation, which do
+    argmax over the class channels for both prediction and ground truth. We return per-pixel
+    class-id maps (0=background,1=pedestrian,2=cyclist,3=car) plus viz_idx, the frame the mask
+    belongs to (the last frame of the input window), so the UI can overlay them on the matching
+    radar image.
+
+    :param pred_logits: model output for one sample, shape (n_class, H, W)
+    :param gt_mask: ground-truth mask, one-hot (n_class, H, W) or already label ids (H, W)
+    :param viz_idx: frame index the masks correspond to
+    :return: {"pred_mask": [[...]], "gt_mask": [[...]], "viz_idx": int}
+    """
+    pred_mask = np.argmax(pred_logits, axis=0)
+    gt = np.asarray(gt_mask)
+    gt_labels = np.argmax(gt, axis=0) if gt.ndim == 3 else gt
+    return {
+        "pred_mask": pred_mask.astype(int).tolist(),
+        "gt_mask": np.asarray(gt_labels).astype(int).tolist(),
+        "viz_idx": int(viz_idx),
+    }
+
+
+def summarize_pred_objs(pred_objs):
+    """Compact, log-friendly view of a prediction result.
+
+    Segmentation results carry dense H*W masks; logging them verbatim floods the backend log
+    with tens of thousands of numbers per view. For those, log the mask shape and per-class
+    pixel counts instead. Detection results (short lists of objects) are logged as-is.
+    """
+    if not isinstance(pred_objs, dict):
+        return pred_objs
+    summary = {}
+    for key, val in pred_objs.items():
+        if isinstance(val, dict) and "pred_mask" in val:
+            pred = np.asarray(val["pred_mask"])
+            gt = np.asarray(val["gt_mask"])
+            summary[key] = {
+                "shape": list(pred.shape),
+                "viz_idx": val.get("viz_idx"),
+                "pred_class_counts": {int(c): int(n) for c, n in zip(*np.unique(pred, return_counts=True))},
+                "gt_class_counts": {int(c): int(n) for c, n in zip(*np.unique(gt, return_counts=True))},
+            }
+        else:
+            summary[key] = val
+    return summary
+
+
 def infer(model, checkpoint_id, sample_id, file_id, split_type):
     model_rootdir = os.getenv('MODEL_ROOTDIR')
     parameter_path = os.path.join(model_rootdir, model, "train_info.txt")
@@ -36,9 +86,20 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
     dataset_inst.parse(file_id, file_info["path"], file_info["name"], file_info["config"])
     dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
+    # CARRADA is a semantic-segmentation task; inference must be deterministic and spatially
+    # aligned with the displayed frame. __getitem__ applies random hflip/vflip (enabled
+    # unconditionally in prepare_for_train), which would flip the seg masks relative to the
+    # un-augmented feature image shown in the UI. Disable augmentation for inference.
+    if dataset_type == "CARRADA":
+        dataset_inst.transformations = None
     data = dataset_inst[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
     logger.info("Get data sample.")
+    # The model predicts for the LAST frame of the input window: __getitem__[sample_id] loads
+    # frame (sample_id + win_frames - 1), while /feature indexes frames directly. Align the
+    # display frame to the mask's frame so the CARRADA segmentation overlay lines up.
+    win_frames = getattr(dataset_inst, "win_frames", 1)
+    viz_idx = sample_id + win_frames - 1
 
     # Initialize the model
     model_config = parameters["model_config"]
@@ -134,53 +195,67 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             feature = parameters["features"][0]
             input = torch.tensor(data[feature]).unsqueeze(0).to(device).float()
             output = net(input)
-            confmap_pred = output[0].detach().cpu().numpy()
-            if feature == "RA":
-                pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
-            elif feature == "RD":
-                pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
-            else:
-                raise ValueError("Feature type not supported in inference.")
-            # filter invalid predictions
-            mask = pred_objs[:, 0] != -1 
-            pred_objs = pred_objs[mask]
-            # limit conf value
-            mask = pred_objs[:, -1] > 1  
-            pred_objs[mask, -1] = 1
-            # reorganize the items: [row_id, col_id, cls_id, conf_value]
-            pred_objs = pred_objs[:, [1, 2, 0, 3]]
-            pred_objs = {feature: pred_objs.tolist()}
+            # Segmentation readout: CARRADA-trained RECORD is a semantic-segmentation model
+            # (dense masks, wce_w10sdice, mIoU). Argmax the class channels for pred and gt,
+            # mirroring evaluate.RECORD_CARRADA_evaluation. The old detection post-processing
+            # (peak-pick -> points) is kept below for reference but does not fit a seg model.
+            # confmap_pred = output[0].detach().cpu().numpy()
+            # if feature == "RA":
+            #     pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            # elif feature == "RD":
+            #     pred_objs = post_process_single_frame(confmap_pred, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
+            # else:
+            #     raise ValueError("Feature type not supported in inference.")
+            # # filter invalid predictions
+            # mask = pred_objs[:, 0] != -1
+            # pred_objs = pred_objs[mask]
+            # # limit conf value
+            # mask = pred_objs[:, -1] > 1
+            # pred_objs[mask, -1] = 1
+            # # reorganize the items: [row_id, col_id, cls_id, conf_value]
+            # pred_objs = pred_objs[:, [1, 2, 0, 3]]
+            # pred_objs = {feature: pred_objs.tolist()}
+            pred_logits = output[0].detach().cpu().numpy()   # (n_class, H, W)
+            pred_objs = {feature: carrada_seg_readout(pred_logits, data['gt_mask'], viz_idx)}
         elif model_type == "MVRECORD":
             # input = (torch.tensor(data['RD']).unsqueeze(0).to(device).float(), 
             #          torch.tensor(data['RA']).unsqueeze(0).to(device).float(), 
             #          torch.tensor(data['AD']).unsqueeze(0).to(device).float())
             input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}
             output = net(input)
-            # MVRECORD.forward returns per-view maps of shape (B, n_class, H, W); index the
-            # batch dim out so post_process_single_frame gets the 3-D (n_class, H, W) it unpacks
-            # (class_size, height, width = confmaps.shape). Every other branch does output[0].
-            confmap_pred_ra = output['ra'][0].detach().cpu().numpy()
-            confmap_pred_rd = output['rd'][0].detach().cpu().numpy()
-            pred_objs_ra = post_process_single_frame(confmap_pred_ra, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
-            pred_objs_rd = post_process_single_frame(confmap_pred_rd, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
-            pred_objs = {"RA": pred_objs_ra, "RD": pred_objs_rd}
-            # filter invalid predictions
-            mask = pred_objs["RA"][:, 0] != -1 
-            pred_objs["RA"] = pred_objs["RA"][mask]
-            # limit conf value
-            mask = pred_objs["RA"][:, -1] > 1  
-            pred_objs["RA"][mask, -1] = 1
-            # reorganize the items: [row_id, col_id, cls_id, conf_value]
-            pred_objs["RA"] = pred_objs["RA"][:, [1, 2, 0, 3]]
-            # filter invalid predictions
-            mask = pred_objs["RD"][:, 0] != -1 
-            pred_objs["RD"] = pred_objs["RD"][mask]
-            # limit conf value
-            mask = pred_objs["RD"][:, -1] > 1  
-            pred_objs["RD"][mask, -1] = 1
-            # reorganize the items: [row_id, col_id, cls_id, conf_value]
-            pred_objs["RD"] = pred_objs["RD"][:, [1, 2, 0, 3]]
-            pred_objs = {"RA": pred_objs_ra.tolist(), "RD": pred_objs_rd.tolist()}
+            # Segmentation readout: MV-RECORD is a semantic-segmentation model (two dense
+            # decoders RD + RA, wce_w10sdice, mIoU). forward returns per-view maps of shape
+            # (B, n_class, H, W); index [0] and argmax the class channels per view, mirroring
+            # evaluate.MVRECORD_CARRADA_evaluation. Old detection post-processing (peak-pick ->
+            # points) is kept below for reference but does not fit a seg model.
+            # confmap_pred_ra = output['ra'][0].detach().cpu().numpy()
+            # confmap_pred_rd = output['rd'][0].detach().cpu().numpy()
+            # pred_objs_ra = post_process_single_frame(confmap_pred_ra, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.agl_grid) #[B, win_size, max_dets, 4]
+            # pred_objs_rd = post_process_single_frame(confmap_pred_rd, parameters["train_config"], dataset_inst.n_class, dataset_inst.rng_grid, dataset_inst.dpl_grid) #[B, win_size, max_dets, 4]
+            # pred_objs = {"RA": pred_objs_ra, "RD": pred_objs_rd}
+            # # filter invalid predictions
+            # mask = pred_objs["RA"][:, 0] != -1
+            # pred_objs["RA"] = pred_objs["RA"][mask]
+            # # limit conf value
+            # mask = pred_objs["RA"][:, -1] > 1
+            # pred_objs["RA"][mask, -1] = 1
+            # # reorganize the items: [row_id, col_id, cls_id, conf_value]
+            # pred_objs["RA"] = pred_objs["RA"][:, [1, 2, 0, 3]]
+            # # filter invalid predictions
+            # mask = pred_objs["RD"][:, 0] != -1
+            # pred_objs["RD"] = pred_objs["RD"][mask]
+            # # limit conf value
+            # mask = pred_objs["RD"][:, -1] > 1
+            # pred_objs["RD"][mask, -1] = 1
+            # # reorganize the items: [row_id, col_id, cls_id, conf_value]
+            # pred_objs["RD"] = pred_objs["RD"][:, [1, 2, 0, 3]]
+            # pred_objs = {"RA": pred_objs_ra.tolist(), "RD": pred_objs_rd.tolist()}
+            pred_logits_ra = output['ra'][0].detach().cpu().numpy()   # (n_class, H, W)
+            pred_logits_rd = output['rd'][0].detach().cpu().numpy()   # (n_class, H, W)
+            pred_objs = {
+                "RA": carrada_seg_readout(pred_logits_ra, data['ra_mask'], viz_idx),
+                "RD": carrada_seg_readout(pred_logits_rd, data['rd_mask'], viz_idx),
+            }
         elif model_type == "RADDet":
             input = torch.tensor(data['RAD']).unsqueeze(0).to(device).float()
             output = net(input)
@@ -249,7 +324,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
         else:
             raise ValueError(f"Inference of the chosen model type {model_type} is not supported")
     
-    logger.info(f"Prediction result: {pred_objs}")
+    logger.info(f"Prediction result: {summarize_pred_objs(pred_objs)}")
     return pred_objs
 
 

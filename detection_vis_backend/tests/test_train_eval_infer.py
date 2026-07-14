@@ -7,8 +7,40 @@ from unittest.mock import MagicMock
 
 from detection_vis_backend.train.train import train, CreateDataLoaders
 from detection_vis_backend.train.evaluate import FFTRadNet_evaluation
-from detection_vis_backend.train.inference import infer
+from detection_vis_backend.train.inference import infer, carrada_seg_readout
 from detection_vis_backend.train.utils import post_process_single_frame
+
+
+def test_carrada_seg_readout_argmax():
+    """CARRADA RECORD/MVRECORD inference is a segmentation readout: argmax the class channels of
+    the model output and of the (one-hot) gt mask, mirroring RECORD/MVRECORD_CARRADA_evaluation.
+    """
+    n_class, H, W = 4, 3, 3
+    logits = np.zeros((n_class, H, W))
+    logits[2, 0, 0] = 5.0   # cyclist at (0,0)
+    logits[3, 1, 1] = 5.0   # car at (1,1)
+    gt = np.zeros((n_class, H, W))
+    gt[1, 0, 0] = 1.0       # pedestrian at (0,0)
+    gt[3, 2, 2] = 1.0       # car at (2,2)
+
+    out = carrada_seg_readout(logits, gt, viz_idx=7)
+
+    assert out["viz_idx"] == 7
+    pred = np.array(out["pred_mask"])
+    gtm = np.array(out["gt_mask"])
+    assert pred.shape == (H, W) and gtm.shape == (H, W)
+    # argmax picks the class channel; untouched pixels stay background (0)
+    assert pred[0, 0] == 2 and pred[1, 1] == 3 and pred[0, 1] == 0
+    assert gtm[0, 0] == 1 and gtm[2, 2] == 3 and gtm[0, 1] == 0
+
+
+def test_carrada_seg_readout_accepts_label_gt():
+    """gt may already be a 2-D label map (H,W) rather than one-hot; it should pass through."""
+    logits = np.zeros((4, 2, 2))
+    logits[1, 0, 0] = 1.0
+    labels = np.array([[1, 0], [0, 3]])
+    out = carrada_seg_readout(logits, labels, viz_idx=0)
+    assert np.array(out["gt_mask"]).tolist() == [[1, 0], [0, 3]]
 
 
 def test_post_process_requires_batchless_confmap():
