@@ -278,12 +278,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     random.seed(train_config['seed'])
     torch.cuda.manual_seed(train_config['seed'])
 
-    # create experiment model name
-    curr_date = datetime.now()
-    exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
-
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
+
+    # create experiment model name: <model type>___<dataset>___<timestamp>
+    curr_date = datetime.now()
+    exp_name = model_config['class'] + '_' + dataset_type + '_' + curr_date.strftime('%b-%d-%Y_%H:%M:%S')
 
     # Initialize tensorboard
     output_root = Path(os.getenv('MODEL_ROOTDIR'))

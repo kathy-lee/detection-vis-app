@@ -296,9 +296,12 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             cls_id = int(obj[2])
             plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
         elif len(pred_objs["RA"][0]) == 5:
-            rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
+          # box format [x1, y1, x2, y2, cls]; loop over ALL predictions (was missing, so only
+          # one leftover box was drawn) -- mirrors the RD pred branch above.
+          for obj in pred_objs["RA"]:
+            rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
             plt.gca().add_patch(rect)
-            plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')    
+            plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
       st.pyplot(plt)
     elif feature in ('image', 'depth_image'):
       feature_data = get_feature(file_id, feature, frame_id)

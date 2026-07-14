@@ -35,6 +35,23 @@ def carrada_seg_readout(pred_logits, gt_mask, viz_idx):
     pred_mask = np.argmax(pred_logits, axis=0)
     gt = np.asarray(gt_mask)
     gt_labels = np.argmax(gt, axis=0) if gt.ndim == 3 else gt
+
+    # --- TEMP DIAGNOSTIC (remove after debugging the all-background predictions) ---
+    # Does the model have ANY foreground signal, especially where objects actually are?
+    flat = pred_logits.reshape(pred_logits.shape[0], -1)
+    logger.info(f"[seg-diag] per-class mean logit: {np.round(flat.mean(axis=1), 3).tolist()}, "
+                f"max logit: {np.round(flat.max(axis=1), 3).tolist()}")
+    fg = gt_labels > 0
+    if fg.any():
+        fg_pred_vals, fg_pred_cnts = np.unique(pred_mask[fg], return_counts=True)
+        bg_logit = pred_logits[0][fg]
+        best_fg_logit = pred_logits[1:][:, fg].max(axis=0)
+        logger.info(f"[seg-diag] at {int(fg.sum())} gt-foreground px -> pred dist "
+                    f"{dict(zip(fg_pred_vals.tolist(), fg_pred_cnts.tolist()))}; "
+                    f"mean bg logit={bg_logit.mean():.3f}, mean best-fg logit={best_fg_logit.mean():.3f}, "
+                    f"mean margin (bg-fg)={(bg_logit - best_fg_logit).mean():.3f}")
+    # --- END TEMP DIAGNOSTIC ---
+
     return {
         "pred_mask": pred_mask.astype(int).tolist(),
         "gt_mask": np.asarray(gt_labels).astype(int).tolist(),
@@ -262,14 +279,25 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             train_config = parameters["train_config"]
             pred = output['pred'].detach().cpu()
             predicitons = yoloheadToPredictions(pred[0], conf_threshold=train_config["confidence_threshold"])
-            pred_objs = nms(predicitons, train_config["nms_iou3d_threshold"], train_config["input_size"], sigma=0.3, method="nms")
+            # input_size is an architecture property (RAD tensor dims), so it lives in the model
+            # config, not the train config -- train_config has no 'input_size' key.
+            pred_objs = nms(predicitons, train_config["nms_iou3d_threshold"], model_config["input_size"], sigma=0.3, method="nms")
             rd_objs = []
             ra_objs = []
             for i in range(len(pred_objs)):
-                bbox3d = pred_objs[i, :6]
+                bbox3d = pred_objs[i, :6]   # [x=range, y=azimuth, z=doppler, w, h, d] center+size
                 cls = int(pred_objs[i, 7])
-                rd_objs.append([bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5], cls])
-                ra_objs.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
+                # Old output was center+size and range-first, but the frontend box renderer expects
+                # CORNER boxes [x1, y1, x2, y2] with x=horizontal (doppler/azimuth), y=vertical
+                # (range). Convert exactly like RADDet.get_label so predictions render like the gt.
+                # rd_objs.append([bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5], cls])
+                # ra_objs.append([bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4], cls])
+                # RD view: x-axis=doppler (bbox3d[2],[5]), y-axis=range (bbox3d[0],[3])
+                yc, xc, h, w = bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5]
+                rd_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
+                # RA view: x-axis=azimuth (bbox3d[1],[4]), y-axis=range (bbox3d[0],[3])
+                yc, xc, h, w = bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4]
+                ra_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
             pred_objs = {"RD": rd_objs, "RA": ra_objs}
         elif model_type == "DAROD":
             input = torch.tensor(data['RD']).unsqueeze(0).to(device).float()
