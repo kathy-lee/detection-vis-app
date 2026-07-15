@@ -296,8 +296,21 @@ class RaDICaL(Dataset):
                 for f in features:
                     feature_data = function_dict[f](idx)
                     #logging.error(f"raw {f}: {feature_data.shape}")
-                    
-                    if f == 'RD': 
+
+                    # get_image/get_depthimage return a FILE PATH, not pixels -- the /feature
+                    # endpoint hands the path to the UI, which loads it (2_Get_features.py).
+                    # Nothing loaded it here, so the raw path string reached np.hstack, which
+                    # coerced it to a 1-element 1-D array and raised "all the input arrays must
+                    # have same number of dimensions". Mirror the UI's convention: RaDICaL
+                    # stores decoded frames as .npy, other datasets store encoded image files.
+                    if f in ('image', 'depth_image') and isinstance(feature_data, str):
+                        if feature_data.endswith('.npy'):
+                            feature_data = np.load(feature_data)
+                        else:
+                            # imread gives BGR; the .npy frames are RGB, and imageio writes RGB
+                            feature_data = cv2.cvtColor(cv2.imread(feature_data), cv2.COLOR_BGR2RGB)
+
+                    if f == 'RD':
                         #logging.error('RD begin->')
                         feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
                         feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)

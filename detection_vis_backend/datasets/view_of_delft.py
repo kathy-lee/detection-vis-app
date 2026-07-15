@@ -94,7 +94,12 @@ class ViewOfDelft(Dataset):
         with open(self.label_filenames[idx], 'r') as text:
             annos = text.readlines()
 
-        if feature_name == "lidarPC":
+        # The "image" branch below projects the boxes with T_lidar_to_camera and intrinsic, but
+        # this block only loaded them for "lidarPC" -- so get_label("image", ...) raised
+        # UnboundLocalError. The image projection is lidar-frame based, so it needs the lidar
+        # calibration, not the radar one.
+        # if feature_name == "lidarPC":
+        if feature_name in ("lidarPC", "image"):
             with open(self.calib_lidar_filenames[idx], "r") as f:
                 lines = f.readlines()
                 intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)  # Intrinsics
