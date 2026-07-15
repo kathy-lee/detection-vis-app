@@ -11,6 +11,7 @@ from detection_vis_backend.train.evaluate import FFTRadNet_evaluation
 from detection_vis_backend.train.inference import infer, carrada_seg_readout
 from detection_vis_backend.train.utils import post_process_single_frame
 from detection_vis_backend.datasets.utils import flip_horizontal, flip_vertical
+from detection_vis_backend.datasets.dataset import CARRADA
 
 
 def test_carrada_seg_readout_argmax():
@@ -98,6 +99,50 @@ def test_flip_helpers_return_torch_convertible_arrays():
     # and the flip itself is still correct (copy must not change semantics)
     assert np.array_equal(flip_horizontal(img, boxes)[0], np.fliplr(img))
     assert np.array_equal(flip_vertical(img, boxes)[0], np.flipud(img))
+
+
+def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
+    """Regression test for "list indices must be integers or slices, not str" from get_label.
+
+    parse() loads annotations_frame_oriented.json into self.annos, shaped
+        annos[seq][frame] = {obj_id: {'range_angle': {'label': int, 'box': [[..],[..]]}}}
+    but prepare_for_train()'s RadarCrossAttention branch loaded new_gt_anno.json -- shaped
+        annos[seq][frame] = {'cls': [3.0], 'idx': [92.0, 6.0, 132.0, 26.0]}
+    -- over the SAME attribute. get_label() still assumed the frame-oriented schema, so
+    `obj['range_angle']` indexed a list with a string and raised. It only surfaced on frames
+    that actually had objects, because `if objs:` skips empty ones. DatasetFactory caches one
+    instance per file_id, so a single /predict poisoned /feature for the rest of the process.
+
+    The RCA schema now lives in self.rca_annos. This pins that configuring for RCA leaves
+    parse()'s annotations -- and therefore get_label -- intact.
+    """
+    seq = "2019-09-16-12-52-12"
+    frame_oriented = {seq: {"000066": {"000000": {
+        "range_angle": {"label": 3, "box": [[10, 20], [30, 40]]},
+        "range_doppler": {"label": 3, "box": [[10, 20], [30, 40]]},
+    }}}}
+    # the real new_gt_anno.json shape, verified against the dataset on disk
+    rca_anno = {seq: {"tracks": [[0, 1, 2]], "000066": {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}}}
+    (tmp_path / "new_gt_anno.json").write_text(json.dumps(rca_anno))
+
+    ds = CARRADA()
+    ds.root_path = str(tmp_path)
+    ds.seq_name = seq
+    ds.annos = frame_oriented          # as parse() would leave it
+    ds.frame_sync = 3
+
+    ds.prepare_for_train(
+        ["RA"],
+        {"win_size": 1, "gauss_type": "Bivar"},
+        {"class": "RadarCrossAttention", "center_offset": False, "orientation": False},
+    )
+
+    # the bug: this call raised TypeError because self.annos had been replaced
+    gt = ds.get_label("RA", 66)
+    assert gt == [[20, 10, 40, 30, "car"]]
+    # both schemas coexist rather than one overwriting the other
+    assert ds.annos is frame_oriented
+    assert ds.rca_annos[seq]["000066"] == {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}
 
 
 def test_train_accepts_progress_cb():

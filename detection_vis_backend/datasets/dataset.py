@@ -1798,9 +1798,21 @@ class CARRADA(Dataset):
             self.datasamples_length = self.frame_sync - self.win_frames + 1
         elif self.model_type == 'RadarCrossAttention':
             anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
+            # new_gt_anno.json has a DIFFERENT schema from the annotations_frame_oriented.json
+            # that parse() loads into self.annos:
+            #   parse():       annos[seq][frame] = {obj_id: {'range_angle': {'label':.., 'box':..}}}
+            #   new_gt_anno:   annos[seq][frame] = {'cls': [3.0], 'idx': [92.0, 6.0, 132.0, 26.0]}
+            # Assigning it to self.annos clobbered parse()'s data, so get_label() (which assumes
+            # the frame-oriented schema) raised "list indices must be integers or slices, not str"
+            # on any frame that actually had objects. The DatasetFactory caches one instance per
+            # file_id, so the damage outlived the request and broke /feature too. Keep this
+            # schema in its own attribute and leave self.annos meaning one thing for its lifetime.
+            # with open(anno_path, 'r') as f:
+            #     self.annos = json.load(f)
+            # tracks = self.annos[self.seq_name]['tracks']
             with open(anno_path, 'r') as f:
-                self.annos = json.load(f)
-            tracks = self.annos[self.seq_name]['tracks']
+                self.rca_annos = json.load(f)
+            tracks = self.rca_annos[self.seq_name]['tracks']
             # Get data frame intervals in the seq
             intervals = []
             for i, track in enumerate(tracks):
@@ -2011,17 +2023,23 @@ class CARRADA(Dataset):
                 ad_map[i, ::] = ad_map_temp
             # TODO: normalize rd_map, ad_map, rd_map
             raw_index = str(raw_index).zfill(6)
+            # These read the new_gt_anno.json schema, which now lives in self.rca_annos rather
+            # than overwriting parse()'s self.annos.
             if self.gauss_type == "Bivar":
-                gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
-            else:                                        
-                gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
+                # gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])
+                gauss_map = bi_var_gauss(self.rca_annos[self.seq_name][raw_index])
+            else:
+                # gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
+                gauss_map = plain_gauss(self.rca_annos[self.seq_name][raw_index], s_r=15, s_a=15)
             frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
-                center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
-                frame.update({'gt_center_map': center_offset}) 
+                # center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec())
+                center_offset = get_center_map(self.rca_annos[self.seq_name][raw_index], vect=get_co_vec())
+                frame.update({'gt_center_map': center_offset})
             if self.orientation:
-                orient_map = get_orent_map(self.annos[self.seq_name][raw_index])  
-                frame.update({'gt_orent_map': orient_map}) 
+                # orient_map = get_orent_map(self.annos[self.seq_name][raw_index])
+                orient_map = get_orent_map(self.rca_annos[self.seq_name][raw_index])
+                frame.update({'gt_orent_map': orient_map})
             
             for key,value in frame.items():
                 if key != 'image_path':
