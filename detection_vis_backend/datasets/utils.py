@@ -1005,7 +1005,10 @@ def flip_horizontal(img, gt_boxes):
     :return: modified_img = (height, width, depth)
              modified_gt_boxes = (ground_truth_object_count, [y1, x1, y2, x2])
     """
-    flipped_img = np.fliplr(img)
+    # np.fliplr returns a view with negative strides, which torch refuses to convert
+    # ("tensors with negative strides are not currently supported"). Copy, as HFlip/VFlip do.
+    # flipped_img = np.fliplr(img)
+    flipped_img = np.fliplr(img).copy()
     flipped_gt_boxes = np.stack([gt_boxes[..., 0],
                                  1.0 - gt_boxes[..., 3],
                                  gt_boxes[..., 2],
@@ -1021,7 +1024,10 @@ def flip_vertical(img, gt_boxes):
     :return: modified_img = (height, width, depth)
              modified_gt_boxes = (ground_truth_object_count, [y1, x1, y2, x2])
     """
-    flipped_img = np.flipud(img)
+    # np.flipud returns a view with negative strides, which torch refuses to convert
+    # ("tensors with negative strides are not currently supported"). Copy, as HFlip/VFlip do.
+    # flipped_img = np.flipud(img)
+    flipped_img = np.flipud(img).copy()
     flipped_gt_boxes = np.stack([1.0 - gt_boxes[..., 2],
                                  gt_boxes[..., 1],
                                  1.0 - gt_boxes[..., 0],

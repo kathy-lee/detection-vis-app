@@ -3,12 +3,14 @@ import json
 import inspect
 import pytest
 import numpy as np
+import torch
 from unittest.mock import MagicMock
 
 from detection_vis_backend.train.train import train, CreateDataLoaders
 from detection_vis_backend.train.evaluate import FFTRadNet_evaluation
 from detection_vis_backend.train.inference import infer, carrada_seg_readout
 from detection_vis_backend.train.utils import post_process_single_frame
+from detection_vis_backend.datasets.utils import flip_horizontal, flip_vertical
 
 
 def test_carrada_seg_readout_argmax():
@@ -71,6 +73,31 @@ def test_post_process_requires_batchless_confmap():
     # The fix: output[...][0] hands post_process the 3-D map it expects.
     res = post_process_single_frame(confmap, train_cfg, n_class, rng_grid, agl_grid)
     assert res.shape == (train_cfg["max_dets"], 4)
+
+
+def test_flip_helpers_return_torch_convertible_arrays():
+    """Regression test for the DAROD+RADDet inference crash "At least one stride in the given
+    numpy array is negative, and tensors with negative strides are not currently supported".
+
+    RADDet.transform flips via flip_horizontal/flip_vertical. Both returned raw np.fliplr/
+    np.flipud *views*, which carry negative strides, and inference.py then does
+    torch.tensor(data['RD']) -> torch raises. Every other flip helper in datasets/utils.py
+    (HFlip/VFlip) already ended with .copy(); these two did not.
+
+    This pins that the helpers hand back arrays torch will actually accept.
+    """
+    img = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    boxes = np.array([[0.1, 0.2, 0.3, 0.4]])
+
+    for flip in (flip_horizontal, flip_vertical):
+        flipped, _ = flip(img, boxes)
+        assert min(flipped.strides) > 0, f"{flip.__name__} returned negative strides"
+        # the operative check: this is the exact call that raised in infer()
+        torch.tensor(np.expand_dims(flipped, axis=0)).unsqueeze(0).float()
+
+    # and the flip itself is still correct (copy must not change semantics)
+    assert np.array_equal(flip_horizontal(img, boxes)[0], np.fliplr(img))
+    assert np.array_equal(flip_vertical(img, boxes)[0], np.flipud(img))
 
 
 def test_train_accepts_progress_cb():

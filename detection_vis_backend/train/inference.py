@@ -103,12 +103,20 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
     dataset_inst.parse(file_id, file_info["path"], file_info["name"], file_info["config"])
     dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
-    # CARRADA is a semantic-segmentation task; inference must be deterministic and spatially
-    # aligned with the displayed frame. __getitem__ applies random hflip/vflip (enabled
-    # unconditionally in prepare_for_train), which would flip the seg masks relative to the
-    # un-augmented feature image shown in the UI. Disable augmentation for inference.
-    if dataset_type == "CARRADA":
-        dataset_inst.transformations = None
+    # Augmentation is a training-only concern, but prepare_for_train enables it unconditionally
+    # (CARRADA and RADDet both set self.transformations regardless of split type), so it leaks
+    # into inference. That breaks inference two ways:
+    #   - the input gets randomly flipped relative to the un-augmented feature image the UI
+    #     draws gt on, so masks/boxes land in the wrong place;
+    #   - RADDet's transform uses flip_horizontal/flip_vertical, which returned negative-stride
+    #     views and made torch.tensor() raise "negative strides are not currently supported".
+    # Disable augmentation for every dataset that supports it.
+    # if dataset_type == "CARRADA":
+    #     dataset_inst.transformations = None
+    # Set unconditionally: RADDet.prepare_for_train only assigns self.transformations when the
+    # train config carries the key, yet RADDet.transform reads it unconditionally -- so this
+    # also closes a latent AttributeError. Classes that never flip simply ignore the attribute.
+    dataset_inst.transformations = None
     data = dataset_inst[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
     logger.info("Get data sample.")
