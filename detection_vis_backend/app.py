@@ -459,6 +459,11 @@ def _job_inputs(job):
     }
 
 
+# How many finished/failed jobs the Jobs page lists. Matches the previous effective ceiling
+# (10 finished + 10 failed), but now applied to a single time-ordered list.
+RECENT_JOBS_LIMIT = 20
+
+
 def _summarize_job(job):
     func = (job.func_name or "").split(".")[-1]
     kind = "retrain" if "retrain" in func else "train"
@@ -470,6 +475,8 @@ def _summarize_job(job):
         "progress": job.meta.get("progress"),
         "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None,
         "started_at": job.started_at.isoformat() if job.started_at else None,
+        # ended_at is what "recent" is ordered by -- see list_jobs().
+        "ended_at": job.ended_at.isoformat() if job.ended_at else None,
         "inputs": _job_inputs(job),
     }
     if status == "finished":
@@ -503,12 +510,19 @@ def list_jobs():
                 continue
         return out
 
-    # most recent finished/failed first, capped
-    recent_ids = list(reversed(finished.get_job_ids()))[:10] + list(reversed(failed.get_job_ids()))[:10]
+    # Most recent finished/failed first, capped.
+    # This used to concatenate the two registries -- all finished, THEN all failed:
+    #   recent_ids = list(reversed(finished.get_job_ids()))[:10] + list(reversed(failed.get_job_ids()))[:10]
+    # which ordered by CATEGORY, not time, despite the comment claiming otherwise. A job that
+    # had just failed rendered below every past success, so failures sank out of sight as the
+    # finished list grew (and the UI hides them in a collapsed expander). Merge both registries
+    # and sort by when the job actually ended so "recent" means recent.
+    recent = summarize_ids(finished.get_job_ids() + failed.get_job_ids())
+    recent.sort(key=lambda j: j["ended_at"] or "", reverse=True)
     return {
         "running": summarize_ids(started.get_job_ids()),
         "queued": summarize_ids(q.job_ids),
-        "recent": summarize_ids(recent_ids),
+        "recent": recent[:RECENT_JOBS_LIMIT],
     }
 
 

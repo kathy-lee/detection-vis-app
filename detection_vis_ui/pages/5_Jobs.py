@@ -92,7 +92,15 @@ for job in queued:
     render_details(job)
 
 if recent:
-    with st.expander("Recent finished / failed", expanded=False):
+    # Open the section by default when something failed: a failure is the one thing here the
+    # user must act on, and the page force-reruns every few seconds, so anything that needs a
+    # click to reveal is easy to miss entirely.
+    n_failed = sum(1 for j in recent if j["status"] == "failed")
+    title = "Recent finished / failed"
+    if n_failed:
+        title += f" — {n_failed} failed"
+    # with st.expander("Recent finished / failed", expanded=False):
+    with st.expander(title, expanded=bool(n_failed)):
         for job in recent:
             if job["status"] == "finished":
                 st.markdown(f"✅ {_label(job)} → **{job.get('model_name')}**")

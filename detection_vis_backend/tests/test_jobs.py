@@ -116,3 +116,67 @@ def test_run_retraining_sets_parent_id(monkeypatch):
 def test_worker_exposes_main():
     from detection_vis_backend.jobs import worker
     assert callable(worker.main)
+
+
+from datetime import datetime, timezone
+
+
+class _FakeRegistryJob:
+    def __init__(self, jid, status, ended_at):
+        self.id = jid
+        self._status = status
+        self.ended_at = ended_at
+        self.enqueued_at = None
+        self.started_at = None
+        self.meta = {}
+        self.args = [[], [], {}, {}]
+        self.func_name = "detection_vis_backend.jobs.tasks.run_training"
+        self.exc_info = "Traceback (most recent call last):\nTypeError: boom"
+
+    def get_status(self):
+        return self._status
+
+    def return_value(self):
+        return {"model_name": f"model-{self.id}"}
+
+
+def _dt(day, hour):
+    return datetime(2026, 7, day, hour, 0, tzinfo=timezone.utc)
+
+
+def test_recent_jobs_are_ordered_by_end_time_not_by_status(monkeypatch):
+    """Regression test: a job that just failed did not appear on the Jobs page.
+
+    list_jobs built "recent" by concatenating registries -- all finished, THEN all failed:
+        list(reversed(finished.get_job_ids()))[:10] + list(reversed(failed.get_job_ids()))[:10]
+    so ordering was by CATEGORY, not time, despite the comment saying "most recent first".
+    A fresh failure always rendered below every past success, and since the UI hides "recent"
+    in a collapsed expander, failures sank out of sight as the finished list grew.
+
+    Pins the invariant: the newest job comes first, whatever its status.
+    """
+    import detection_vis_backend.app as app
+
+    # the failure is the NEWEST job, but finished jobs outnumber it -- the exact shape of the bug
+    jobs = {
+        "fail-new": _FakeRegistryJob("fail-new", "failed", _dt(15, 7)),
+        "fin-old": _FakeRegistryJob("fin-old", "finished", _dt(13, 7)),
+        "fin-mid": _FakeRegistryJob("fin-mid", "finished", _dt(14, 18)),
+        "fin-newer": _FakeRegistryJob("fin-newer", "finished", _dt(15, 1)),
+    }
+
+    monkeypatch.setattr(app.job_queue, "get_redis", lambda: object())
+    monkeypatch.setattr(app, "Queue", lambda *a, **k: type("Q", (), {"job_ids": []})())
+    monkeypatch.setattr(app, "StartedJobRegistry", lambda *a, **k: type("R", (), {"get_job_ids": lambda self: []})())
+    monkeypatch.setattr(app, "FinishedJobRegistry",
+                        lambda *a, **k: type("R", (), {"get_job_ids": lambda self: ["fin-old", "fin-mid", "fin-newer"]})())
+    monkeypatch.setattr(app, "FailedJobRegistry",
+                        lambda *a, **k: type("R", (), {"get_job_ids": lambda self: ["fail-new"]})())
+    monkeypatch.setattr(app.Job, "fetch", staticmethod(lambda jid, connection=None: jobs[jid]))
+
+    recent = app.list_jobs()["recent"]
+
+    assert [j["job_id"] for j in recent] == ["fail-new", "fin-newer", "fin-mid", "fin-old"]
+    # the thing the user actually needs: the failure is visible at the top, not buried
+    assert recent[0]["status"] == "failed"
+    assert recent[0]["error"] == "TypeError: boom"
