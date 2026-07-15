@@ -785,7 +785,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
         
         if evalImgs:
-            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes)
             stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
             logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
             n_frames_all += n_frame
@@ -794,7 +794,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
             logger.info(f"{seq_name}_rod_res.txt is empty.")
             
     if evalImgs_all:    
-        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
         logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
         result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
@@ -876,7 +876,7 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
         evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
 
         if evalImgs:
-            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+            eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes)
             stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
             logger.info("%s | AP_total: %.4f | AR_total: %.4f" % (seq_name.upper(), stats[0] * 100, stats[1] * 100))
             n_frames_all += n_frame
@@ -885,7 +885,7 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
             logger.info(f"{seq_name}_rod_res.txt is empty.")
 
     if evalImgs_all:    
-        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes, log=False)
+        eval = accumulate(evalImgs_all, n_frames_all, olsThrs, recThrs, n_class, classes)
         stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
         logger.info("%s | AP_total: %.4f | AR_total: %.4f" % ('Overall'.ljust(18), stats[0] * 100, stats[1] * 100))
         result = {'mAP': stats[0], 'mAR': stats[1], 'F1_score': 0, 'mIoU': 0}
@@ -1677,7 +1677,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
     olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
     recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
     evalImgs = evaluate_rampcnn_seq(res_objs, gt_objs, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
-    eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes, log=False)
+    eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes)
     stats = summarize(eval, olsThrs, recThrs, n_class, gl=False)
     logger.info("AP_total: {:.4f} | AR_total: {:.4f}".format(stats[0] * 100, stats[1] * 100))
     result = {'mAP': stats[0], 'mAR': stats[1], 'mIoU': 0}

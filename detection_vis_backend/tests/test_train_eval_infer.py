@@ -145,6 +145,48 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     assert ds.rca_annos[seq]["000066"] == {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}
 
 
+def test_evaluate_module_calls_match_signatures():
+    """Regression test for "accumulate() got an unexpected keyword argument 'log'".
+
+    Commit 472e9fd ("replace print() with logging", 2023-12-19) turned `if log: print(...)` into
+    `logger.debug(...)` and dropped the now-useless `log` param from evaluate_img AND accumulate.
+    It updated evaluate_img's call sites but missed all five of accumulate's, which kept passing
+    log=False -- so accumulate was uncallable for ~2.5 years. Nothing caught it because these
+    eval paths only run during training of specific models; RAMP_CNN was simply the first one
+    exercised.
+
+    Rather than pin the single fixed kwarg, walk evaluate.py and assert no intra-module call
+    passes a keyword its target doesn't accept, so the next partial refactor fails here loudly
+    instead of waiting to surface mid-training run.
+    """
+    import ast
+
+    src_path = os.path.join(os.path.dirname(__file__), "..", "train", "evaluate.py")
+    tree = ast.parse(open(src_path).read())
+
+    # module-level def name -> accepted kwarg names (None == accepts **kwargs, skip checking)
+    sigs = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            if node.args.kwarg is not None:
+                sigs[node.name] = None
+            else:
+                sigs[node.name] = {a.arg for a in node.args.args + node.args.kwonlyargs}
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        allowed = sigs.get(node.func.id, "unknown")
+        if allowed in ("unknown", None):
+            continue
+        for kw in node.keywords:
+            if kw.arg is not None and kw.arg not in allowed:
+                violations.append(f"line {node.lineno}: {node.func.id}() got unexpected kwarg '{kw.arg}'")
+
+    assert not violations, "evaluate.py calls disagree with definitions:\n" + "\n".join(violations)
+
+
 def test_train_accepts_progress_cb():
     params = inspect.signature(train).parameters
     assert "progress_cb" in params
