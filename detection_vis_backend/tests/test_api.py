@@ -220,6 +220,30 @@ def test_get_jobs_unknown_id_404(fake_queue):
     assert resp.status_code == 404
 
 
+def test_read_model_missing_returns_404_not_unbound_local(monkeypatch):
+    """Regression test: GET /model/{id} 500'd with UnboundLocalError for a nonexistent model.
+
+    read_model's `except ValueError` / `except Exception` handlers only logged, so control fell
+    through to `return {"datafiles": parameters[...]}` while the failing try had never bound
+    `parameters`. The client got an opaque 500 instead of a 404, and the real cause ("Model not
+    found") was buried in the backend log.
+
+    Deliberately does not rely on live DB contents: the stale test_read_model pins model_id=123,
+    which no longer exists, so it cannot distinguish "bug fixed" from "model missing".
+    """
+    import detection_vis_backend.app as app_module
+
+    app_module.app.dependency_overrides[app_module.get_db] = lambda: None
+    monkeypatch.setattr(app_module.crud, "get_model", lambda db, id: None)
+    try:
+        response = client.get("/model/999999")
+    finally:
+        app_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Model not found"
+
+
 def test_delete_started_job_returns_409(fake_queue, mock_training):
     # is_async=False jobs finish immediately, so they are not "queued" → cannot cancel
     s = _sample()

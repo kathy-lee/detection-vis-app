@@ -322,12 +322,21 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
     # except MetaflowException as e:
     #     logger.error(f"Metaflow exception occurred: {str(e)}")
+    # Both handlers used to log and swallow, so execution fell through to the return below and
+    # dereferenced `parameters`, which the failing try never bound -> UnboundLocalError -> an
+    # opaque 500 that hid the real cause (e.g. a model id that does not exist). Surface the
+    # error instead, like read_models() above does.
     except ValueError as e:
         logger.error(f"ValueError occurred when trying to get model info: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error(f"Train info file not found when trying to get model info: {str(e)}")
+        raise HTTPException(status_code=404, detail="No train info found for this model.")
     except Exception as e:
         logger.error(f"An unexpected error occurred when trying to get model info: {str(e)}")
-            
-    return {"datafiles": parameters["datafiles"], "features": parameters["features"], 
+        raise HTTPException(status_code=500, detail="An error occurred when trying to get model info.")
+
+    return {"datafiles": parameters["datafiles"], "features": parameters["features"],
             "model_config": parameters["model_config"], "train_config": parameters["train_config"]}
 
 
