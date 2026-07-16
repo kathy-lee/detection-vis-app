@@ -4,6 +4,7 @@ import numpy as np
 
 from torch.utils.data import Dataset
 from loguru import logger
+from detection_vis_backend.datasets.utils import require_shared_instance, require_request_scope
 
 
 class ViewOfDelft(Dataset):
@@ -17,6 +18,7 @@ class ViewOfDelft(Dataset):
         self.features = ['image', 'radarPC', 'lidarPC']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
 
@@ -148,6 +150,7 @@ class ViewOfDelft(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         return 
 
     def __len__(self):

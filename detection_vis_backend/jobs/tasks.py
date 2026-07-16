@@ -24,8 +24,13 @@ def _parse_datafiles(datafiles):
     Folded in from the UI's former pre-train parse loop."""
     factory = DatasetFactory()
     for f in datafiles:
-        inst = factory.get_instance(f["parse"], f["id"])
-        inst.parse(f["id"], f["path"], f["name"], f["config"])
+        # inst = factory.get_instance(f["parse"], f["id"])
+        # inst.parse(f["id"], f["path"], f["name"], f["config"])
+        # parse() writes file state that must persist, so it runs on the shared instance;
+        # get_shared_instance also makes it run once per file_id instead of on every call.
+        factory.get_shared_instance(
+            f["parse"], f["id"],
+            parse_args=(f["id"], f["path"], f["name"], f["config"]))
 
 
 def _make_cb(job):

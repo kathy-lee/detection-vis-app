@@ -4,6 +4,7 @@ import struct
 import cv2
 import imageio
 import io
+import copy
 #import mkl_fft
 import torch
 import math
@@ -29,7 +30,7 @@ from loguru import logger
 
 from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.nuscenes import NuScenes
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx, require_shared_instance, require_request_scope
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -41,15 +42,54 @@ class DatasetFactory:
             cls._instance.instance_dict = {}  # this dictionary stores the instances
         return cls._instance
 
+    # State ownership: the cached instance is written once by parse() and read-only
+    # thereafter; anything a single request configures lives on that request's copy.
+    # See docs/superpowers/specs/2026-07-15-dataset-state-ownership-design.md
+    #
+    # Old: returned the cached instance to EVERY caller, so prepare_for_train's writes
+    # (model_type, transformations, annos...) landed on an object shared process-wide.
+    # Config is keyed by MODEL but the cache is keyed by FILE ID, so loading a different
+    # model silently reconfigured the same object -- three inference bugs on 2026-07-15.
+    #
+    # def get_instance(self, class_name, id):
+    #     if id in self.instance_dict:
+    #         # logger.debug(f"{class_name} instance created already, directly return {id}")
+    #         return self.instance_dict[id]
+    #
+    #     class_obj = globals()[class_name]()
+    #     self.instance_dict[id] = class_obj
+    #     # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
+    #     return class_obj
     def get_instance(self, class_name, id):
-        if id in self.instance_dict:
-            # logger.debug(f"{class_name} instance created already, directly return {id}")
-            return self.instance_dict[id]
-        
-        class_obj = globals()[class_name]()
-        self.instance_dict[id] = class_obj
-        # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
-        return class_obj
+        """A request-scoped copy. Safe default: config writes cannot escape.
+
+        Shares parse output by reference (~280 bytes, ~0.03 ms per copy, constant even
+        against CARRADA's 331 MB), because every prepare_for_train rebinds attributes
+        rather than mutating shared containers -- pinned by
+        tests/test_dataset_state.py::test_config_writes_only_rebind.
+        """
+        inst = copy.copy(self._shared(class_name, id))
+        inst._request_scoped = True
+        return inst
+
+    def get_shared_instance(self, class_name, id, parse_args=None):
+        """The cached instance itself. Only for callers whose writes MUST persist:
+        /parse populates it, and /sync_set|/sync_unset own the single-user view toggle.
+        Mutations here are process-wide and outlive the request.
+
+        If parse_args is given, parses once per file_id and never again -- parse() is
+        expensive (CARRADA 2-20 s / 331 MB) and was previously re-run unguarded.
+        """
+        inst = self._shared(class_name, id)
+        if parse_args is not None and not getattr(inst, "_parsed", False):
+            inst.parse(*parse_args)
+            inst._parsed = True
+        return inst
+
+    def _shared(self, class_name, id):
+        if id not in self.instance_dict:
+            self.instance_dict[id] = globals()[class_name]()
+        return self.instance_dict[id]
 
 # class DatasetFactory:
 #     _instances = {}
@@ -84,6 +124,7 @@ class RaDICaL(Dataset):
 
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         file = os.path.join(file_path, file_name)
         try:
@@ -536,6 +577,7 @@ class RADIal(Dataset):
         self.features = ['image', 'lidarPC', 'adc', 'radarPC']
         
     def parse(self, file_id, file_path, file_name, config, difficult=True):
+        require_shared_instance(self)
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
@@ -641,6 +683,7 @@ class RADIal(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.segmentation_head = True if model_cfg['segmentation_head'] else False
         return
 
@@ -851,6 +894,7 @@ class RADIalRaw(Dataset):
 
 
     def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False):
+        require_shared_instance(self)
         self.sync_mode = sync_mode
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         # 1. Open the REC file
@@ -1351,6 +1395,7 @@ class CRUW(Dataset):
         self.features = ['image', 'RA']
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -1502,6 +1547,7 @@ class CRUW(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.n_class = 3 # dataset.object_cfg.n_class
         self.win_size = train_cfg['win_size'] 
 
@@ -1679,6 +1725,7 @@ class CARRADA(Dataset):
         self.features = ['image', 'RA', 'RD', 'AD', 'RAD']
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -1788,6 +1835,7 @@ class CARRADA(Dataset):
         return frame
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.win_frames = train_cfg['win_size']
         self.features = features
 
@@ -2084,6 +2132,7 @@ class RADDetDataset(Dataset):
 		}
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -2171,6 +2220,7 @@ class RADDetDataset(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.data_stats = {
             "all_classes" : ["person", "bicycle", "car", "motorcycle", "bus", "truck" ],
             "global_mean_log" : 3.2438383,
@@ -2352,6 +2402,7 @@ class Astyx(Dataset):
         self.features = ['image', 'radarPC', 'lidarPC']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         
@@ -2488,6 +2539,7 @@ class Astyx(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         return 
 
     def __len__(self):
@@ -2509,6 +2561,7 @@ class UWCR(Dataset):
         self.features = ['image', 'adc']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -2732,6 +2785,7 @@ class UWCR(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.n_class = 3
         self.class_ids = {'pedestrian': 0, 'cyclist': 1, 'car': 2, 'truck': 2}
         self.win_size = train_cfg['win_size'] 

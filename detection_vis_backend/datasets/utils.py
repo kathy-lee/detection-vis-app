@@ -1141,3 +1141,48 @@ def plain_gauss(anno, s_r=15, s_a=15):
         map[int(cls-1),::] = np.amax((np.stack((map[int(cls-1),::],np.exp(-dist)),axis=0)),axis=0)
 
     return map.astype('float32')
+
+
+# --- dataset state-ownership guards -------------------------------------------------
+# See docs/superpowers/specs/2026-07-15-dataset-state-ownership-design.md
+#
+# DatasetFactory.get_instance() returns a request-scoped copy.copy of the cached
+# instance; get_shared_instance() returns the cached instance itself. The boundary:
+# the cached instance is written once by parse() and read-only thereafter, while
+# anything a single request configures lives on that request's own copy.
+#
+# These guards make both ways of violating it fail loudly at the offending line.
+# There is no project-owned Dataset base class (Dataset is torch.utils.data.Dataset),
+# so each parse/prepare_for_train calls its guard explicitly.
+
+def require_shared_instance(obj):
+    """Raise unless obj is the shared cached instance.
+
+    parse() writes file state that every later reader depends on. On a request copy
+    those writes would land on the copy, vanish when it is garbage-collected, and
+    leave /feature reading an unparsed shared instance (frame_sync == 0) -- silent
+    and hard to trace. Fail instead.
+    """
+    if getattr(obj, "_request_scoped", False):
+        raise RuntimeError(
+            f"{type(obj).__name__}.parse() writes file state and must run on the shared "
+            "instance from DatasetFactory.get_shared_instance(), not on a request copy "
+            "from get_instance(). Writes to a copy are discarded when the request ends."
+        )
+
+
+def require_request_scope(obj):
+    """Raise unless obj is a request-scoped copy.
+
+    prepare_for_train() writes per-request model config (model_type, transformations,
+    n_class, annos...). On the shared instance those writes outlive the request and
+    reconfigure it for every other caller -- the cause of the three inference bugs
+    fixed on 2026-07-15.
+    """
+    if not getattr(obj, "_request_scoped", False):
+        raise RuntimeError(
+            f"{type(obj).__name__}.prepare_for_train() writes per-request config and must "
+            "run on a request copy from DatasetFactory.get_instance(), not on the shared "
+            "instance from get_shared_instance(). Writes to the shared instance leak into "
+            "every other request using this file."
+        )

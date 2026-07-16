@@ -100,8 +100,15 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     file_info = next((d for d in parameters["datafiles"] if d.get("id") == file_id), None)
     logger.info(file_info)
     dataset_type = file_info["parse"]
+    # dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
+    # dataset_inst.parse(file_id, file_info["path"], file_info["name"], file_info["config"])
+    # Mixed case like train.py's CARRADA branch: parse on the shared instance (file state
+    # must persist, and parse-once skips the redundant 2-20s re-parse on every /predict),
+    # then configure a request copy so this model's config cannot leak into other requests.
+    dataset_factory.get_shared_instance(
+        dataset_type, file_id,
+        parse_args=(file_id, file_info["path"], file_info["name"], file_info["config"]))
     dataset_inst = dataset_factory.get_instance(dataset_type, file_id)
-    dataset_inst.parse(file_id, file_info["path"], file_info["name"], file_info["config"])
     dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
     # Augmentation is a training-only concern, but prepare_for_train enables it unconditionally
     # (CARRADA and RADDet both set self.transformations regardless of split type), so it leaks

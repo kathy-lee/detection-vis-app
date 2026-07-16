@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from functools import reduce
 from loguru import logger
 from pyquaternion import Quaternion
+from detection_vis_backend.datasets.utils import require_shared_instance, require_request_scope
 
 
 def transform_matrix(translation: np.ndarray = np.array([0, 0, 0]),
@@ -45,6 +46,7 @@ class NuScenes(Dataset):
         self.features = ['image', 'radarPC', 'lidarPC']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         logger.info("Parsing NuScenes data file:")
         self.config = config
         self.root_path = file_path
@@ -513,6 +515,7 @@ class NuScenes(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         return 
 
     def __len__(self):

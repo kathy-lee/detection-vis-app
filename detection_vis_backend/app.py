@@ -150,8 +150,13 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+        # parse() writes file state that must persist, so it runs on the shared instance;
+        # get_shared_instance also makes it run once per file_id instead of on every call.
+        dataset_inst = dataset_factory.get_shared_instance(
+            datafile.parse, file_id,
+            parse_args=(file_id, datafile.path, datafile.name, datafile.config))
     except Exception as e:
         logger.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
@@ -176,7 +181,10 @@ async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = 
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # sync_mode is a sticky single-user view toggle; it must outlive this request,
+        # so it is written to the shared instance deliberately. See spec section 2.
+        dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = True
         sync_frames = len(dataset_inst.sync_indices)
         logger.info(f"sync frames: {sync_frames}")
@@ -191,7 +199,10 @@ async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # sync_mode is a sticky single-user view toggle; it must outlive this request,
+        # so it is written to the shared instance deliberately. See spec section 2.
+        dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = False
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to unset sync mode.")

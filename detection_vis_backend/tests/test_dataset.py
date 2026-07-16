@@ -65,6 +65,7 @@ def test_ViewOfDelft(db_session: Session):
     assert radar_pc.shape[1] == 7, "Radar point cloud data in View-of-Delft is with N*7 shape."
 
 
+@pytest.mark.skip(reason="NuScenes mini dataset not on this machine (/home/kangle/dataset/nuscences_v1.0_mini)")
 def test_NuScenes(db_session: Session):
     dataset_inst = NuScenes()
     file_id = 111

@@ -204,8 +204,15 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 for file_name in Sequences[split_type]:
                     with get_db() as db:
                         datafile = crud.get_datafile_by_name(db, file_name)
+                    # dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
+                    # dataset_inst.parse(datafile.id, datafile.path, file_name, datafile.config)
+                    # Parse on the shared instance (writes must persist, and parse-once
+                    # skips the redundant re-parse when _parse_datafiles already ran);
+                    # configure a request copy so this model's config cannot leak.
+                    dataset_factory.get_shared_instance(
+                        'CARRADA', datafile.id,
+                        parse_args=(datafile.id, datafile.path, file_name, datafile.config))
                     dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
-                    dataset_inst.parse(datafile.id, datafile.path, file_name, datafile.config)
                     dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
                     dataset_inst_list.append(dataset_inst)
                     for i in range(len(dataset_inst)):

@@ -130,6 +130,10 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     ds.seq_name = seq
     ds.annos = frame_oriented          # as parse() would leave it
     ds.frame_sync = 3
+    # prepare_for_train now guards against running on the shared cached instance
+    # (state-ownership boundary; see test_dataset_state.py). This test plays the
+    # role of a request copy, so mark it as one.
+    ds._request_scoped = True
 
     ds.prepare_for_train(
         ["RA"],
