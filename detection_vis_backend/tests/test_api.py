@@ -104,6 +104,40 @@ def test_read_models():
     assert all(isinstance(item, dict) and 'id' in item and 'name' in item for item in result), "Each item should be a dictionary representation of MLmodel model"
 
 
+def test_blocking_handlers_run_in_threadpool():
+    """
+    FastAPI runs `async def` handlers ON the event loop. These handlers do blocking
+    CPU/disk work with no await (rosbag extraction, video encoding at ~169s, GPU
+    inference), so as coroutines each of them stalls EVERY other request for its whole
+    runtime -- the app-wide freeze. As plain `def` they run in the worker threadpool
+    and only their own caller waits.
+    """
+    import inspect
+    from detection_vis_backend.app import app as fastapi_app
+
+    BLOCKING_PATHS = {
+        "/download",
+        "/parse/{file_id}",
+        "/sync_check/{file_id}",
+        "/sync_set/{file_id}",
+        "/sync_unset/{file_id}",
+        "/feature/{file_id}/{feature_name}/size",
+        "/feature/{file_id}/{feature_name}/{id}",
+        "/video/{file_id}",
+        "/predict/{model_id}",
+        "/predict_newdata/{model_id}",
+    }
+    offenders = sorted(
+        route.path for route in fastapi_app.routes
+        if getattr(route, "path", None) in BLOCKING_PATHS
+        and inspect.iscoroutinefunction(route.endpoint)
+    )
+    covered = {route.path for route in fastapi_app.routes} & BLOCKING_PATHS
+    assert covered == BLOCKING_PATHS, f"missing routes: {BLOCKING_PATHS - covered}"
+    assert not offenders, (
+        "blocking handlers still on the event loop (async def): " + ", ".join(offenders))
+
+
 def _discover_readable_model():
     """Pick a real model from the live DB instead of hardcoding an id.
 

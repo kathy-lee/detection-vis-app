@@ -1144,7 +1144,6 @@ def plain_gauss(anno, s_r=15, s_a=15):
 
 
 # --- dataset state-ownership guards -------------------------------------------------
-# See docs/superpowers/specs/2026-07-15-dataset-state-ownership-design.md
 #
 # DatasetFactory.get_instance() returns a request-scoped copy.copy of the cached
 # instance; get_shared_instance() returns the cached instance itself. The boundary:

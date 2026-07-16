@@ -108,7 +108,7 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
 
 
 @app.get("/download")
-async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
     try:
@@ -146,7 +146,7 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
 
 
 @app.get("/parse/{file_id}")
-async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -164,7 +164,7 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/sync_check/{file_id}")
-async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -177,7 +177,7 @@ async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/sync_set/{file_id}")
-async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -195,7 +195,7 @@ async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = 
 
 
 @app.get("/sync_unset/{file_id}")
-async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -211,7 +211,7 @@ async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/feature/{file_id}/{feature_name}/size")
-async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -237,7 +237,7 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
  
 
 @app.get("/feature/{file_id}/{feature_name}/{id}")
-async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -255,7 +255,7 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
     
 
 @app.get("/video/{file_id}")
-async def get_feature_video(file_id: int, feature_list: list[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature_video(file_id: int, feature_list: list[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -376,7 +376,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, split_type: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, split_type: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get para infos
         model = crud.get_model(db, model_id)
@@ -392,10 +392,13 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
 
 
 @app.get("/predict_newdata/{model_id}")
-async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get input data
-        contents = await input_file.read()  # read the file
+        # contents = await input_file.read()  # read the file
+        # Sync handler (threadpool): read via the underlying spooled file instead of the
+        # async UploadFile.read() coroutine.
+        contents = input_file.file.read()  # read the file
         if input_file.filename.endswith('.npy'):
             input_data = np.load(io.BytesIO(contents))
         elif input_file.filename.endswith(('.jpg', '.png')):

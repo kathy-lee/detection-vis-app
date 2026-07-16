@@ -5,6 +5,7 @@ import cv2
 import imageio
 import io
 import copy
+import threading
 #import mkl_fft
 import torch
 import math
@@ -40,11 +41,16 @@ class DatasetFactory:
         if not isinstance(cls._instance, cls):
             cls._instance = super(DatasetFactory, cls).__new__(cls, *args, **kwargs)
             cls._instance.instance_dict = {}  # this dictionary stores the instances
+            
+            # Handlers run in FastAPI's threadpool, so cache access races.
+            # _lock guards instance_dict; per-instance _parse_lock guards parse-once
+            # WITHOUT holding the global lock through a 2-20s parse (which would
+            # otherwise block every other request's cache lookup -- the freeze again).
+            cls._instance._lock = threading.Lock()
         return cls._instance
 
     # State ownership: the cached instance is written once by parse() and read-only
     # thereafter; anything a single request configures lives on that request's copy.
-    # See docs/superpowers/specs/2026-07-15-dataset-state-ownership-design.md
     #
     # Old: returned the cached instance to EVERY caller, so prepare_for_train's writes
     # (model_type, transformations, annos...) landed on an object shared process-wide.
@@ -82,14 +88,28 @@ class DatasetFactory:
         """
         inst = self._shared(class_name, id)
         if parse_args is not None and not getattr(inst, "_parsed", False):
-            inst.parse(*parse_args)
-            inst._parsed = True
+            # Double-checked: take the per-instance lock, then re-test _parsed. Without
+            # this, N threadpool workers hitting an unparsed file all run the 2-20s parse.
+            parse_lock = self._parse_lock_for(inst)
+            with parse_lock:
+                if not getattr(inst, "_parsed", False):
+                    inst.parse(*parse_args)
+                    inst._parsed = True
         return inst
 
+    def _parse_lock_for(self, inst):
+        # Lazily attach under the global lock so instances seeded from outside
+        # _shared() (tests, future code) get a lock exactly once too.
+        with self._lock:
+            if not hasattr(inst, "_parse_lock"):
+                inst._parse_lock = threading.Lock()
+            return inst._parse_lock
+
     def _shared(self, class_name, id):
-        if id not in self.instance_dict:
-            self.instance_dict[id] = globals()[class_name]()
-        return self.instance_dict[id]
+        with self._lock:
+            if id not in self.instance_dict:
+                self.instance_dict[id] = globals()[class_name]()
+            return self.instance_dict[id]
 
 # class DatasetFactory:
 #     _instances = {}

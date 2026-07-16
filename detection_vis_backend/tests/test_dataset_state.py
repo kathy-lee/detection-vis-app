@@ -147,6 +147,71 @@ def test_parse_runs_once_per_file_id():
     assert calls == [("a", "b")], f"parse ran {len(calls)} times, expected once"
 
 
+def test_shared_instance_creation_is_thread_safe():
+    """With handlers in a threadpool, _shared() races: two threads can both
+    see the file_id missing, both construct, and hand different objects to different
+    callers -- one of which is then not the cached instance anyone else sees.
+    """
+    import threading
+    import time
+    import detection_vis_backend.datasets.dataset as ds_mod
+
+    constructions = []
+
+    class FakeSlowCtor:
+        def __init__(self):
+            constructions.append(1)
+            time.sleep(0.05)  # hold the race window open
+
+    ds_mod.FakeSlowCtor = FakeSlowCtor
+    try:
+        factory = _fresh_factory()
+        barrier = threading.Barrier(8)
+        results = []
+
+        def grab():
+            barrier.wait()
+            results.append(factory.get_shared_instance("FakeSlowCtor", 9100))
+
+        threads = [threading.Thread(target=grab) for _ in range(8)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+
+        assert len(constructions) == 1, f"constructed {len(constructions)} times, expected once"
+        assert all(r is results[0] for r in results), "threads got different shared instances"
+    finally:
+        del ds_mod.FakeSlowCtor
+
+
+def test_parse_once_is_thread_safe():
+    """Concurrent get_shared_instance(parse_args=...) for the same file must parse once.
+    Without a lock, every thread sees _parsed unset and re-runs the 2-20s parse.
+    """
+    import threading
+    import time
+
+    factory = _fresh_factory()
+    parse_calls = []
+
+    class FakeParsed:
+        def parse(self, *args):
+            parse_calls.append(args)
+            time.sleep(0.05)  # hold the race window open
+
+    factory.instance_dict[9101] = FakeParsed()
+    barrier = threading.Barrier(8)
+
+    def grab():
+        barrier.wait()
+        factory.get_shared_instance("FakeParsed", 9101, parse_args=("a",))
+
+    threads = [threading.Thread(target=grab) for _ in range(8)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    assert len(parse_calls) == 1, f"parse ran {len(parse_calls)} times, expected once"
+
+
 PARSE_DEFS = {  # module path -> number of parse() defs expected
     "detection_vis_backend/datasets/dataset.py": 8,
     "detection_vis_backend/datasets/view_of_delft.py": 1,
