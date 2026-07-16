@@ -117,10 +117,12 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     parse()'s annotations -- and therefore get_label -- intact.
     """
     seq = "2019-09-16-12-52-12"
-    frame_oriented = {seq: {"000066": {"000000": {
+    # parse() now keeps only its own sequence's slice of the annotation file
+    # (annos[frame] = {...}, no sequence level), so build that shape directly.
+    frame_oriented = {"000066": {"000000": {
         "range_angle": {"label": 3, "box": [[10, 20], [30, 40]]},
         "range_doppler": {"label": 3, "box": [[10, 20], [30, 40]]},
-    }}}}
+    }}}
     # the real new_gt_anno.json shape, verified against the dataset on disk
     rca_anno = {seq: {"tracks": [[0, 1, 2]], "000066": {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}}}
     (tmp_path / "new_gt_anno.json").write_text(json.dumps(rca_anno))
@@ -146,7 +148,8 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     assert gt == [[20, 10, 40, 30, "car"]]
     # both schemas coexist rather than one overwriting the other
     assert ds.annos is frame_oriented
-    assert ds.rca_annos[seq]["000066"] == {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}
+    # rca_annos is likewise the per-sequence slice now
+    assert ds.rca_annos["000066"] == {"cls": [3.0], "idx": [92.0, 6.0, 132.0, 26.0]}
 
 
 def test_evaluate_module_calls_match_signatures():

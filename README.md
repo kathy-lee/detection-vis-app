@@ -24,7 +24,7 @@ Run each in its own terminal:
 
 ## Available datasets
 
-Datasets currently seeded in the DB (via `alembic/script.sql`).
+Datasets currently registered:
 
 | Dataset | Native feature(s) | Link |
 |---|---|---|
@@ -95,6 +95,25 @@ automatically). Insert:
   model in `detection_vis_backend/networks/model_features.json` supports, or the
   train page's compatibility guard will block them.
 
+## Available models
+
+Model architectures currently registered:
+
+| Model | Input feature(s) | Output detection format | Paper & repo |
+|---|---|---|---|
+| FFTRadNet | RD | RA-plane objectness-probability map + range/angle location regression (+ free-space segmentation); single class(vehicle) with fixed box: 4m×1.8m | https://github.com/valeoai/RADIal/tree/main/FFTRadNet |
+| RODNet (CDC, CDCv2, HG, HGv2, HGwI, HGwIv2) | RA | RA per-class confidence map (peak-picked) | https://github.com/yizhou-wang/RODNet |
+| RECORD (RECORD, RECORDNoLstm, RECORDNoLstmMulti, MV-RECORD) | RD or RA (MV-RECORD: RD+RA+AD)| per-class object-confidence map, peak-picked into detections (no regression), on the input feature plane. MV-RECORD: 2 per-class confidence/segmentation maps (RD, RA), each peak-picked into detections (no regression)| https://github.com/colindecourt/record |
+| RADDet | RAD | per-class 3D boxes (center + size) in RA & RD space | https://github.com/ZhangAoCanada/RADDet |
+| DAROD | RD | 2D boxes in RD plane | https://github.com/colindecourt/darod |
+| RAMP_CNN | RD+RA+AD | per-class confidence map in RA plane, peak-picked into detections | https://github.com/Xiangyu-Gao/Radar-multiple-perspective-object-detection |
+| RadarCrossAttention | RD+RA+AD | per-class map + center-offset + orientation in RA plane, peak-pick + offset | https://github.com/ravikothari510/crossattention_radar_detector |
+
+
+Three output paradigms: **fixed-size localizer** (FFTRadNet), **confidence-map peak-pickers**
+(RODNet, RECORD, MVRECORD, RAMP_CNN, RadarCrossAttention — the last also adds center-offset
+and heading), and **true box regressors** (RADDet 3D/YOLO, DAROD 2D/Faster-RCNN).
+
 ## Adding a new model / network
 
 Adding a network architecture is code plus a few config/registry entries,
@@ -145,10 +164,3 @@ network.py  (class NewModel(BaseNetwork))
    (`default_collate` or a custom collate). Required — training indexes
    `collate_func[model_config['class']]` and raises `KeyError` otherwise.
 
-**Gotchas:**
-- The class-name string must be identical across the five places above — a
-  mismatch surfaces as a `KeyError`/`globals()` lookup failure at train time.
-- `NetworkFactory` caches instances by class name (singleton) — **restart the
-  backend** after code changes.
-- `RODNet_*` variants share one `RODNet_model_config.json` (keyed internally by
-  variant); follow that pattern if your model is a family of variants.

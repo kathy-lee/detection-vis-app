@@ -35,6 +35,25 @@ def set_env_vars():
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
 
 
+def test_CARRADA_keeps_only_its_own_sequence_annotations(db_session: Session):
+    """annotations_frame_oriented.json holds ALL 30 sequences (37.7MB on disk, 331MB as
+    Python objects), but an instance only ever reads its own sequence. parse() must keep
+    just self.annos = full[self.seq_name], or every cached CARRADA instance pins ~345MB
+    RSS and the 'original' splitmode (30 instances alive in one ConcatDataset) needs ~10GB.
+    """
+    datafile = crud.get_datafile(db_session, 50)
+    assert datafile is not None and datafile.parse == "CARRADA"
+    inst = CARRADA()
+    inst.parse(50, datafile.path, datafile.name, datafile.config)
+
+    # keyed by frame id directly, not by sequence name
+    assert datafile.name not in inst.annos, "annos still holds the whole 30-sequence dict"
+    assert "000066" in inst.annos, "expected frame keys at the top level"
+    # and get_label still works against the sliced shape
+    gt = inst.get_label("RA", 66)
+    assert isinstance(gt, list)
+
+
 def test_ViewOfDelft(db_session: Session):
     dataset_inst = ViewOfDelft()
     file_id = 110

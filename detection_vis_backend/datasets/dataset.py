@@ -1764,7 +1764,14 @@ class CARRADA(Dataset):
 
         anno_path = os.path.join(self.root_path, 'Carrada', 'annotations_frame_oriented.json')
         with open(anno_path, 'r') as fp:
-            self.annos = json.load(fp)
+            # self.annos = json.load(fp)
+            # The file holds annotations for ALL 30 sequences (37.7MB on disk, ~331MB as
+            # Python objects), but this instance only ever reads its own sequence. Keep
+            # just the slice: the other 29 sequences are garbage-collected right here,
+            # instead of ~345MB RSS pinned per cached instance (~10GB when the 'original'
+            # splitmode holds all 30 instances in one ConcatDataset). A wrong seq_name now
+            # fails loudly here instead of later in get_label.
+            self.annos = json.load(fp)[self.seq_name]
 
     def get_image(self, idx=None, for_visualize=False): 
         #image = np.asarray(Image.open(self.image_filenames[idx]))
@@ -1814,7 +1821,8 @@ class CARRADA(Dataset):
     def get_label(self, feature_name, idx=None):
         # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         frame = "{:06d}".format(idx)
-        objs = self.annos[self.seq_name][frame]
+        # objs = self.annos[self.seq_name][frame]
+        objs = self.annos[frame]  # annos now holds only this instance's sequence
         gt = []
         categories = {0: 'background', 1: 'pedestrian', 2: 'cyclist', 3: 'car'}
         if objs:
@@ -1891,9 +1899,14 @@ class CARRADA(Dataset):
             # with open(anno_path, 'r') as f:
             #     self.annos = json.load(f)
             # tracks = self.annos[self.seq_name]['tracks']
+            # with open(anno_path, 'r') as f:
+            #     self.rca_annos = json.load(f)
+            # tracks = self.rca_annos[self.seq_name]['tracks']
+            # Same slicing as parse()'s annos: the file holds all 30 sequences but this
+            # instance only reads its own, so keep just the slice (7.5MB file, ~14MB loaded).
             with open(anno_path, 'r') as f:
-                self.rca_annos = json.load(f)
-            tracks = self.rca_annos[self.seq_name]['tracks']
+                self.rca_annos = json.load(f)[self.seq_name]
+            tracks = self.rca_annos['tracks']
             # Get data frame intervals in the seq
             intervals = []
             for i, track in enumerate(tracks):
@@ -1979,8 +1992,10 @@ class CARRADA(Dataset):
                     # Get ground truth boxes and labels for DAROD network
                     gt_boxes = []
                     gt_labels = []
-                    if self.annos[self.seq_name][init_frame_name]:
-                        for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    # if self.annos[self.seq_name][init_frame_name]:
+                    #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    if self.annos[init_frame_name]:
+                        for obj_anno in self.annos[init_frame_name].values():
                             #obj_anno['range_doppler']['dense']
                             gt_boxes.append(obj_anno[featurestr]['box'])
                             gt_labels.append(obj_anno[featurestr]['label'])
@@ -2108,18 +2123,18 @@ class CARRADA(Dataset):
             # than overwriting parse()'s self.annos.
             if self.gauss_type == "Bivar":
                 # gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])
-                gauss_map = bi_var_gauss(self.rca_annos[self.seq_name][raw_index])
+                gauss_map = bi_var_gauss(self.rca_annos[raw_index])
             else:
                 # gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
-                gauss_map = plain_gauss(self.rca_annos[self.seq_name][raw_index], s_r=15, s_a=15)
+                gauss_map = plain_gauss(self.rca_annos[raw_index], s_r=15, s_a=15)
             frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
                 # center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec())
-                center_offset = get_center_map(self.rca_annos[self.seq_name][raw_index], vect=get_co_vec())
+                center_offset = get_center_map(self.rca_annos[raw_index], vect=get_co_vec())
                 frame.update({'gt_center_map': center_offset})
             if self.orientation:
                 # orient_map = get_orent_map(self.annos[self.seq_name][raw_index])
-                orient_map = get_orent_map(self.rca_annos[self.seq_name][raw_index])
+                orient_map = get_orent_map(self.rca_annos[raw_index])
                 frame.update({'gt_orent_map': orient_map})
             
             for key,value in frame.items():
