@@ -194,6 +194,68 @@ def test_evaluate_module_calls_match_signatures():
     assert not violations, "evaluate.py calls disagree with definitions:\n" + "\n".join(violations)
 
 
+def _carrada_datafile(fid):
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
+    from data import crud
+    from data.database import get_session_local
+    db = get_session_local()
+    try:
+        f = crud.get_datafile(db, fid)
+        return {"id": f.id, "name": f.name, "path": f.path, "parse": f.parse, "config": f.config}
+    finally:
+        db.close()
+
+
+def _sequence_split_config(split_sequence):
+    return {
+        "win_size": 5, "norm_type": "local", "transformations": [],
+        "dataloader": {
+            "splitmode": "sequence",
+            "split_sequence": split_sequence,
+            "train": {"batch_size": 2, "num_workers": 0},
+            "val": {"batch_size": 2, "num_workers": 0},
+            "test": {"batch_size": 2, "num_workers": 0},
+        },
+    }
+
+
+def test_sequence_split_with_empty_test_bucket(tmp_path):
+    """Regression test: "AssertionError: datasets should not be an empty iterable".
+
+    Sequence splitmode assigns whole files to splits via the UI's per-file radios. With
+    two files the user filled train and val, leaving test as an empty list -- and
+    CreateDataLoaders looped over ALL keys of split_sequence, building ConcatDataset([])
+    for the empty bucket. An empty test split is a legitimate choice (train on one file,
+    validate on the other); it must mean "no test evaluation", not a crash.
+    """
+    from detection_vis_backend.datasets.dataset import DatasetFactory
+
+    f50, f22 = _carrada_datafile(50), _carrada_datafile(22)
+    factory = DatasetFactory()
+    for f in (f50, f22):  # the worker's _parse_datafiles does this before train()
+        factory.get_shared_instance(f["parse"], f["id"],
+                                    parse_args=(f["id"], f["path"], f["name"], f["config"]))
+
+    train_config = _sequence_split_config({"train": [f50], "val": [f22], "test": []})
+    train_loader, val_loader, test_loader = CreateDataLoaders(
+        [f50, f22], ["RA"], {"class": "RECORD"}, train_config, str(tmp_path))
+
+    assert len(train_loader.dataset) > 0
+    assert len(val_loader.dataset) > 0
+    assert test_loader is None, "empty test split should mean no test loader, not a crash"
+
+
+def test_sequence_split_requires_train_and_val(tmp_path):
+    """An empty train or val bucket is nonsense (nothing to train on / validate with)
+    and must fail with a message naming the split, not an opaque assert five layers down.
+    """
+    f50, f22 = _carrada_datafile(50), _carrada_datafile(22)
+    train_config = _sequence_split_config({"train": [f50, f22], "val": [], "test": []})
+    with pytest.raises(ValueError, match="val"):
+        CreateDataLoaders([f50, f22], ["RA"], {"class": "RECORD"}, train_config, str(tmp_path))
+
+
 def test_train_accepts_progress_cb():
     params = inspect.signature(train).parameters
     assert "progress_cb" in params

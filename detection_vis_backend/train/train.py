@@ -85,6 +85,18 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             assert 'val' in train_config['dataloader']['split_sequence']
 
             for split_type in train_config['dataloader']['split_sequence'].keys():
+                # The UI's per-file radios can leave a bucket empty. An empty train/val
+                # is nonsense -- fail with the split's name instead of the opaque
+                # "datasets should not be an empty iterable" assert from ConcatDataset([]).
+                # An empty test is a legitimate choice (e.g. two files: one train, one
+                # val): skip it here, and train() skips the test evaluation.
+                if not train_config['dataloader']['split_sequence'][split_type]:
+                    if split_type in ('train', 'val'):
+                        raise ValueError(
+                            f"Sequence split: no files assigned to '{split_type}'. "
+                            "Assign at least one file to 'train' and one to 'val'.")
+                    logger.info(f"Sequence split: no files assigned to '{split_type}'; skipping it.")
+                    continue  # datasets[split_type] stays None
                 samples_info = []
                 valid_ids = []
                 counter = 0
@@ -254,8 +266,14 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         num_workers=train_config['dataloader']['val']['num_workers'],
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
-    test_loader =  DataLoader(datasets['test'], 
-                        batch_size=train_config['dataloader']['test']['batch_size'], 
+    # test_loader =  DataLoader(datasets['test'], ...)
+    # A sequence split may legitimately have no test files; then there is no test loader
+    # and train() skips the final test evaluation.
+    if datasets['test'] is None:
+        test_loader = None
+    else:
+        test_loader = DataLoader(datasets['test'],
+                        batch_size=train_config['dataloader']['test']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
                         pin_memory=True,
@@ -273,7 +291,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     logger.info(f"      Split Mode: {train_config['dataloader']['splitmode']}")
     logger.info(f"      Training:   {len(datasets['train'])}")
     logger.info(f"      Validation: {len(datasets['val'])}")
-    logger.info(f"      Test:       {len(datasets['test'])}")
+    logger.info(f"      Test:       {len(datasets['test']) if datasets['test'] is not None else 0}")
     return train_loader, val_loader, test_loader
 
 
@@ -451,14 +469,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         df_val_eval.to_csv(val_eval_path, index=False)
 
         logger.info(f'=========== Evaluation on Test data ===========')
-        if callable(eval_func_dict[model_type, dataset_type]):
+        if test_loader is None:
+            # Sequence split with no files assigned to 'test' -- a legitimate choice.
+            logger.info('No files assigned to the test split; skipping test evaluation.')
+        elif callable(eval_func_dict[model_type, dataset_type]):
             eval = eval_func_dict[model_type, dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
             logger.info('Evaluation on Test data finished.')
+            df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
+            df_test_val.to_csv(test_eval_path, index=False)
         else:
             raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
-        
-        df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
-        df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
 
 

@@ -112,6 +112,32 @@ elif st.session_state.split_mode == 'sequence':
           break
 
 
+def check_sequence_split():
+  """Validate the per-file split assignment before submitting a sequence-mode training.
+
+  The radios start unselected, so a file can silently belong to NO split, and nothing
+  forces train/val to be non-empty -- the backend would reject both (or, before that fix,
+  crash with "datasets should not be an empty iterable"). Catch it at the click instead.
+  Returns True when the submission may proceed.
+  """
+  if st.session_state.split_mode != 'sequence':
+    return True
+  split = st.session_state.datafiles_split
+  assigned_ids = {f['id'] for files in split.values() for f in files}
+  unassigned = [f['name'] for f in st.session_state.datafiles_chosen if f['id'] not in assigned_ids]
+  if unassigned:
+    st.warning(f"Not assigned to any split: {', '.join(unassigned)}. "
+               "Assign every chosen file to train, val or test.")
+    return False
+  if not split['train'] or not split['val']:
+    st.warning("Assign at least one file to 'train' and one to 'val'.")
+    return False
+  if not split['test']:
+    st.info("No test file assigned — test evaluation will be skipped.")
+  return True
+
+
+
 train_modes = ["Train from scratch", "Train on a pre-trained model"]
 train_mode = st.radio("Choose a way to train model:", train_modes)
 
@@ -267,6 +293,8 @@ if train_mode == train_modes[0]:
     
     train_action = st.button("Train", key="train_btn")
     if train_action:
+      if not check_sequence_split():
+        st.stop()
       # Parsing of the chosen datafiles now happens inside the training job
       # (jobs/tasks.py:_parse_datafiles), so submit is a single instant enqueue.
       params = {"datafiles_chosen": st.session_state.datafiles_chosen,
@@ -285,7 +313,7 @@ if train_mode == train_modes[0]:
 
         
 
-def check_before_train(new_file_list, old_file_list):  
+def check_before_train(new_file_list, old_file_list):
   new_file_ids = [f['id'] for f in new_file_list]
   old_file_ids = [f['id'] for f in old_file_list]
   return not bool(set(new_file_ids) & set(old_file_ids))
@@ -316,6 +344,8 @@ if train_mode == train_modes[1]:
 
   train_action = st.button("Train", key="train_btn")
   if train_action:
+    if not check_sequence_split():
+      st.stop()
     if not check_before_train(st.session_state.datafiles_chosen, model_paras["datafiles"]):
       st.info("The chosen data file(s) has been trained in this model, please change.")
     else:
