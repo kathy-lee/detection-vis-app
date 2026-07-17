@@ -15,6 +15,7 @@ from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHour
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead, boxDecoder, lossYolo
 from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D, calculate_rpn_actual_outputs, roi_delta, darod_loss
+from detection_vis_backend.networks.radarpillar import RadarPillarBackboneNet, assign_targets, radarpillar_loss
 from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 
@@ -1019,3 +1020,38 @@ class RadarCrossAttention(nn.Module):
         if self.orientation:
             loss += config['losses']['weight'][2] * self.orent_criterion(pred["pred_orent"], target["gt_orent_map"]) 
         return loss    
+
+class RadarPillar(nn.Module):
+    """PointPillars base of RadarPillars (arXiv:2408.05020) on VoD radar.
+
+    Thin app-contract wrapper; all building blocks live in networks/radarpillar.py.
+    Spec: docs/superpowers/specs/2026-07-16-radarpillar-design.md
+    """
+    def __init__(self, **model_cfg):
+        super().__init__()
+        model_cfg.pop("class", None)   # the UI stores the class name inside the config
+        self.model_cfg = model_cfg
+        self.net = RadarPillarBackboneNet(model_cfg)
+        self.loss_cfg = {}
+
+    def forward(self, batch):
+        return self.net(batch["pillars"], batch["coords"], batch["num_points"],
+                        batch_size=int(batch["coords"][:, 0].max().item()) + 1)
+
+    def init_lossfunc(self, train_config, device):
+        self.loss_cfg = train_config.get("losses", {})
+
+    def get_loss(self, pred, batch, config):
+        # raise NotImplementedError("RadarPillar loss lands with plan Task 8")
+        # Target assignment happens here (it needs the anchors, which live with the
+        # network); gt arrives padded from radarpillar_collate (-1 labels = padding).
+        targets = []
+        for b in range(batch["gt_labels"].shape[0]):
+            valid = batch["gt_labels"][b] >= 0
+            targets.append(assign_targets(
+                self.net.anchors_np, self.net.anchor_classes_np,
+                batch["gt_boxes"][b][valid].cpu().numpy(),
+                batch["gt_labels"][b][valid].cpu().numpy(), self.model_cfg))
+        return radarpillar_loss(pred, targets, self.net.anchors_np,
+                                self.net.anchor_classes_np, self.loss_cfg,
+                                next(self.parameters()).device)

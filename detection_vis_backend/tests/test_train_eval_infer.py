@@ -272,3 +272,57 @@ def test_train_calls_progress_cb_per_epoch():
     train(sample["datafiles"], sample["features"], sample["model_config"],
           sample["train_config"], progress_cb=cb)
     assert cb.call_count == int(sample["train_config"]["num_epochs"])
+
+@pytest.mark.skipif(os.getenv("RUN_GPU_TESTS") != "1",
+                    reason="GPU + VoD data; run with RUN_GPU_TESTS=1")
+def test_radarpillar_overfits_one_batch():
+    """Slice-1 exit gate (spec 2026-07-16 SS7): a few hundred steps on ONE real
+    batch must collapse the loss. Catches assignment/encoding/ordering bugs
+    before any real training run."""
+    import json
+    import torch
+    from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
+    from detection_vis_backend.networks.network import NetworkFactory
+    from detection_vis_backend.train.utils import radarpillar_collate
+    from data.database import get_session_local
+    from data import crud
+
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    with open("detection_vis_backend/networks/RadarPillar_model_config.json") as f:
+        model_cfg = json.load(f)
+    with open("detection_vis_backend/train/RadarPillar_train_config.json") as f:
+        train_cfg = json.load(f)
+
+    db = get_session_local()
+    datafile = crud.get_datafile(db, 110)
+    db.close()
+    ds = ViewOfDelft()
+    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    ds._request_scoped = True
+    ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
+    # pick 4 frames that actually contain gt
+    samples = []
+    for i in range(60):
+        s = ds[i]
+        if len(s["gt_boxes"]):
+            samples.append(s)
+        if len(samples) == 4:
+            break
+    assert len(samples) == 4, "need 4 frames with objects in the first 60"
+    batch = radarpillar_collate(samples)
+
+    device = "cuda"
+    net = NetworkFactory().get_instance("RadarPillar", dict(model_cfg, **{"class": "RadarPillar"})).to(device)
+    net.init_lossfunc(train_cfg, device)
+    batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+    opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+    first = None
+    for step in range(300):
+        opt.zero_grad()
+        loss = net.get_loss(net(batch), batch, train_cfg)["loss"]
+        if first is None:
+            first = loss.item()
+        loss.backward()
+        opt.step()
+    final = loss.item()
+    assert final < 0.10 * first, f"loss did not collapse: {first:.3f} -> {final:.3f}"
