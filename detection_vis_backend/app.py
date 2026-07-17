@@ -28,6 +28,14 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.train.train import train
 from detection_vis_backend.train.inference import infer
 
+from rq import Queue
+from rq.job import Job
+from rq.exceptions import NoSuchJobError
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
+from rq.command import send_stop_job_command
+from detection_vis_backend.jobs import queue as job_queue
+from detection_vis_backend.jobs.tasks import run_training, run_retraining
+
 
 
 
@@ -100,7 +108,7 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
 
 
 @app.get("/download")
-async def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
     try:
@@ -138,12 +146,17 @@ async def download_file(file_path: str, file_name: str, skip: int = 0, limit: in
 
 
 @app.get("/parse/{file_id}")
-async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
-        dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+        # parse() writes file state that must persist, so it runs on the shared instance;
+        # get_shared_instance also makes it run once per file_id instead of on every call.
+        dataset_inst = dataset_factory.get_shared_instance(
+            datafile.parse, file_id,
+            parse_args=(file_id, datafile.path, datafile.name, datafile.config))
     except Exception as e:
         logger.error(f"An error occurred during parsing the raw data file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred while parsing the raw data file: {str(e)}")
@@ -151,7 +164,7 @@ async def parse_data(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/sync_check/{file_id}")
-async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -164,11 +177,14 @@ async def check_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/sync_set/{file_id}")
-async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # sync_mode is a sticky single-user view toggle; it must outlive this request,
+        # so it is written to the shared instance deliberately. See spec section 2.
+        dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = True
         sync_frames = len(dataset_inst.sync_indices)
         logger.info(f"sync frames: {sync_frames}")
@@ -179,11 +195,14 @@ async def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = 
 
 
 @app.get("/sync_unset/{file_id}")
-async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
-        dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
+        # sync_mode is a sticky single-user view toggle; it must outlive this request,
+        # so it is written to the shared instance deliberately. See spec section 2.
+        dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = False
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to unset sync mode.")
@@ -192,7 +211,7 @@ async def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session 
 
 
 @app.get("/feature/{file_id}/{feature_name}/size")
-async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -218,7 +237,7 @@ async def get_feature_size(file_id: int, feature_name: str,  skip: int = 0, limi
  
 
 @app.get("/feature/{file_id}/{feature_name}/{id}")
-async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -236,7 +255,7 @@ async def get_feature(file_id: int, feature_name: str, id: int, skip: int = 0, l
     
 
 @app.get("/video/{file_id}")
-async def get_feature_video(file_id: int, feature_list: list[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
+def get_feature_video(file_id: int, feature_list: list[str] = Query(None), skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
     try:
         datafile = crud.get_datafile(db, file_id)
         dataset_factory = DatasetFactory()
@@ -255,18 +274,29 @@ async def get_feature_video(file_id: int, feature_list: list[str] = Query(None),
 #     query_items = {"q": feature_list}
 #     return query_items   
 
-@app.post("/train")
-async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    try: 
-        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info")
-        crud.add_model(db=db, mlmodel=model_meta)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during training: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+# OLD: ran training synchronously inside the request handler (blocked the event loop
+# for the whole run). Replaced by the enqueue version below — training now runs in the
+# RQ worker; this returns a job_id immediately and the UI polls GET /jobs/{id}.
+# @app.post("/train")
+# async def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+#         exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs)
+#         model_meta = schemas.MLModelCreate(name=exp_name,description="info")
+#         crud.add_model(db=db, mlmodel=model_meta)
+#     except Exception as e:
+#         logger.error(f"An unexpected error occurred during training: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+#
+#     #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
+#     return {"model_name": exp_name}
 
-    #exp_name = "FFTRadNet___Aug-12-2023___21:13:46"
-    return {"model_name": exp_name}
+
+@app.post("/train")
+def train_model(datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    job = job_queue.get_queue().enqueue(
+        run_training, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
+        job_timeout=-1, result_ttl=604800, failure_ttl=604800)  # keep finished & failed jobs listed for 7 days
+    return {"job_id": job.id}
 
 
 @app.get("/models", response_model=List[schemas.MLModel])
@@ -303,12 +333,21 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
     # except MetaflowException as e:
     #     logger.error(f"Metaflow exception occurred: {str(e)}")
+    # Both handlers used to log and swallow, so execution fell through to the return below and
+    # dereferenced `parameters`, which the failing try never bound -> UnboundLocalError -> an
+    # opaque 500 that hid the real cause (e.g. a model id that does not exist). Surface the
+    # error instead, like read_models() above does.
     except ValueError as e:
         logger.error(f"ValueError occurred when trying to get model info: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error(f"Train info file not found when trying to get model info: {str(e)}")
+        raise HTTPException(status_code=404, detail="No train info found for this model.")
     except Exception as e:
         logger.error(f"An unexpected error occurred when trying to get model info: {str(e)}")
-            
-    return {"datafiles": parameters["datafiles"], "features": parameters["features"], 
+        raise HTTPException(status_code=500, detail="An error occurred when trying to get model info.")
+
+    return {"datafiles": parameters["datafiles"], "features": parameters["features"],
             "model_config": parameters["model_config"], "train_config": parameters["train_config"]}
 
 
@@ -337,7 +376,7 @@ def read_model(id: int, skip: int = 0, limit: int = 100, db: Session = Depends(g
 
 
 @app.get("/predict/{model_id}")
-async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, split_type: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: int, split_type: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get para infos
         model = crud.get_model(db, model_id)
@@ -353,10 +392,13 @@ async def predict(model_id: int, checkpoint_id: int, sample_id: int, file_id: in
 
 
 @app.get("/predict_newdata/{model_id}")
-async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         # Get input data
-        contents = await input_file.read()  # read the file
+        # contents = await input_file.read()  # read the file
+        # Sync handler (threadpool): read via the underlying spooled file instead of the
+        # async UploadFile.read() coroutine.
+        contents = input_file.file.read()  # read the file
         if input_file.filename.endswith('.npy'):
             input_data = np.load(io.BytesIO(contents))
         elif input_file.filename.endswith(('.jpg', '.png')):
@@ -375,34 +417,176 @@ async def predict_newdata(model_id: int, input_file: UploadFile, skip: int = 0, 
     return None
 
 
+# OLD: ran retraining synchronously in the request handler. Replaced by the enqueue
+# version below. Note the old code had two latent bugs now fixed in jobs/tasks.py:
+#   - parent=model_id was silently dropped (schema field is parent_id)
+#   - checkpoint pattern "epoch"+str(n) missed zero-padded filenames like "epoch09"
+# @app.post("/retrain/{model_id}")
+# async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     try:
+#         model = crud.get_model(db, model_id)
+#         model_rootdir = os.getenv('MODEL_ROOTDIR')
+#         parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
+#         with open(parameter_path, 'r') as f:
+#             parameters = json.load(f)
+#         if not parameters:
+#             raise ValueError("Parameters are empty")
+#
+#
+#         pattern = "epoch" + str(parameters["train_config"]["num_epochs"] - 1)
+#         for file in os.listdir(os.path.join(model_rootdir, model.name)):
+#             if pattern in file and file.endswith(".pth"):
+#                 checkpoint = os.path.join(model_rootdir, model.name, file)
+#         exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
+#         # with open('exp_info.txt', 'r') as f:
+#         #     exp_name = f.read()
+#
+#         model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
+#         crud.add_model(db=db, mlmodel=model_meta)
+#     except Exception as e:
+#         logger.error(f"An unexpected error occurred during training: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+#
+#     return {"model_name": exp_name}
+
+
 @app.post("/retrain/{model_id}")
-async def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):  
-    try: 
-        model = crud.get_model(db, model_id)
-        model_rootdir = os.getenv('MODEL_ROOTDIR')
-        parameter_path = os.path.join(model_rootdir, model.name, "train_info.txt")
-        with open(parameter_path, 'r') as f:
-            parameters = json.load(f)
-        if not parameters:
-            raise ValueError("Parameters are empty")
-        
+def retrain_model(model_id: int, datafiles_chosen: list[Any], features_chosen: list[Any], mlmodel_configs: dict, train_configs: dict, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    job = job_queue.get_queue().enqueue(
+        run_retraining, model_id, datafiles_chosen, features_chosen, mlmodel_configs, train_configs,
+        job_timeout=-1, result_ttl=604800, failure_ttl=604800)  # keep finished & failed jobs listed for 7 days
+    return {"job_id": job.id}
 
-        pattern = "epoch" + str(parameters["train_config"]["num_epochs"] - 1)
-        for file in os.listdir(os.path.join(model_rootdir, model.name)):
-            if pattern in file and file.endswith(".pth"):  
-                checkpoint = os.path.join(model_rootdir, model.name, file)
-        exp_name = train(datafiles_chosen, features_chosen, mlmodel_configs, train_configs, checkpoint)
-        # with open('exp_info.txt', 'r') as f:
-        #     exp_name = f.read()
 
-        model_meta = schemas.MLModelCreate(name=exp_name,description="info",parent=model_id)
-        crud.add_model(db=db, mlmodel=model_meta)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during training: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during training: {str(e)}")
+def _job_inputs(job):
+    """Reconstruct a job's training inputs from its stored enqueue args."""
+    args = list(job.args or [])
+    func = (job.func_name or "").split(".")[-1]
+    if func == "run_retraining":
+        args = args[1:]  # drop leading model_id
+    datafiles, features, model_config, train_config = (args + [None] * 4)[:4]
+    dl = train_config.get("dataloader", {}) if isinstance(train_config, dict) else {}
+    split = {"mode": dl.get("splitmode")}
+    if dl.get("splitmode") == "random":
+        split["ratios"] = dl.get("split_random")
+    elif dl.get("splitmode") == "sequence":
+        seq = dl.get("split_sequence") or {}
+        split["files"] = {k: [f.get("name") for f in v] for k, v in seq.items()}
+    return {
+        "datafiles": [{"name": d.get("name"), "parse": d.get("parse")}
+                      for d in (datafiles or []) if isinstance(d, dict)],
+        "features": features,
+        "split": split,
+        "model_config": model_config,
+        "train_config": train_config,
+    }
 
-    return {"model_name": exp_name}
 
+# How many finished/failed jobs the Jobs page lists. Matches the previous effective ceiling
+# (10 finished + 10 failed), but now applied to a single time-ordered list.
+RECENT_JOBS_LIMIT = 20
+
+
+def _summarize_job(job):
+    func = (job.func_name or "").split(".")[-1]
+    kind = "retrain" if "retrain" in func else "train"
+    status = job.get_status()
+    item = {
+        "job_id": job.id,
+        "type": kind,
+        "status": status,
+        "progress": job.meta.get("progress"),
+        "enqueued_at": job.enqueued_at.isoformat() if job.enqueued_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        # ended_at is what "recent" is ordered by -- see list_jobs().
+        "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+        "inputs": _job_inputs(job),
+    }
+    if status == "finished":
+        item["model_name"] = (job.return_value() or {}).get("model_name")
+    if status == "failed":
+        exc = job.exc_info or ""
+        last = exc.strip().splitlines()[-1] if exc else None
+        # Jobs reconciled on worker boot were interrupted by a killed session
+        # (closed terminal / reboot / crash), not a real training error. Show a
+        # clear reason instead of RQ's raw "AbandonedJobError" wording.
+        if last and "AbandonedJobError" in last:
+            last = "Interrupted: the backend/worker was stopped while this job was running."
+        item["error"] = last
+    return item
+
+
+@app.get("/jobs")
+def list_jobs():
+    conn = job_queue.get_redis()
+    q = Queue(job_queue.QUEUE_NAME, connection=conn)
+    started = StartedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+    finished = FinishedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+    failed = FailedJobRegistry(job_queue.QUEUE_NAME, connection=conn)
+
+    def summarize_ids(ids):
+        out = []
+        for jid in ids:
+            try:
+                out.append(_summarize_job(Job.fetch(jid, connection=conn)))
+            except NoSuchJobError:
+                continue
+        return out
+
+    # Most recent finished/failed first, capped.
+    # This used to concatenate the two registries -- all finished, THEN all failed:
+    #   recent_ids = list(reversed(finished.get_job_ids()))[:10] + list(reversed(failed.get_job_ids()))[:10]
+    # which ordered by CATEGORY, not time, despite the comment claiming otherwise. A job that
+    # had just failed rendered below every past success, so failures sank out of sight as the
+    # finished list grew (and the UI hides them in a collapsed expander). Merge both registries
+    # and sort by when the job actually ended so "recent" means recent.
+    recent = summarize_ids(finished.get_job_ids() + failed.get_job_ids())
+    recent.sort(key=lambda j: j["ended_at"] or "", reverse=True)
+    return {
+        "running": summarize_ids(started.get_job_ids()),
+        "queued": summarize_ids(q.job_ids),
+        "recent": recent[:RECENT_JOBS_LIMIT],
+    }
+
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    try:
+        job = Job.fetch(job_id, connection=job_queue.get_redis())
+    except NoSuchJobError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    status = job.get_status()
+    resp = {"job_id": job_id, "status": status, "progress": job.meta.get("progress")}
+    if status == "finished":
+        resp["model_name"] = (job.return_value() or {}).get("model_name")
+    if status == "failed":
+        exc = job.exc_info or ""
+        resp["error"] = exc.strip().splitlines()[-1] if exc else None
+    return resp
+
+
+@app.delete("/jobs/{job_id}")
+def cancel_job(job_id: str):
+    conn = job_queue.get_redis()
+    try:
+        job = Job.fetch(job_id, connection=conn)
+    except NoSuchJobError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    status = job.get_status()
+    if status == "queued":
+        # Not yet started: just drop it from the queue.
+        job.cancel()
+        return {"status": "canceled"}
+    if status == "started":
+        # Running: ask the worker to stop the job. RQ kills the work-horse, which
+        # destroys its CUDA context and frees the GPU automatically; the worker
+        # itself stays alive for future jobs.
+        try:
+            send_stop_job_command(conn, job_id)
+        except Exception as e:
+            raise HTTPException(status_code=409, detail=f"Could not stop running job: {e}")
+        return {"status": "stopping"}
+    raise HTTPException(status_code=409, detail=f"Job is '{status}' and cannot be canceled")
 
 
 if __name__ == "__main__":

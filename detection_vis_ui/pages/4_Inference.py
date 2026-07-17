@@ -10,6 +10,8 @@ import matplotlib.image as mpimg
 import random
 
 from matplotlib.patches import Rectangle
+from matplotlib.colors import ListedColormap
+import matplotlib.patches as mpatches
 from PIL import Image
 
 from streamlit_ace import st_ace
@@ -29,8 +31,13 @@ st.set_page_config(
 response = requests.get(f"http://{backend_service}:8001/models")  
 models = response.json()
 
+if not models:
+  st.info("No trained models available yet. Train a model first.")
+  st.stop()
+
+# Fall back to the first model if the remembered one no longer exists (e.g. deleted).
 if 'model_chosen' in st.session_state:
-  model_index = next((idx for idx, item in enumerate(models) if item['name'] == st.session_state.model_chosen), -1)
+  model_index = next((idx for idx, item in enumerate(models) if item['name'] == st.session_state.model_chosen), 0)
 else:
   model_index = 0
 model_chosen = st.selectbox("Choose a model", [item["name"] for item in models], index=model_index)
@@ -41,6 +48,9 @@ st.subheader(f"Model: {model_chosen}")
 # show model lineage(datafiles, features, model config, train config, performance)
 
 model_path = os.path.join(model_rootdir, model_chosen)
+if not os.path.isdir(model_path):
+  st.error(f"Model files not found on disk for '{model_chosen}' (the entry may be stale). Please choose another model.")
+  st.stop()
 
 # in default choose the last epoch checkpoint model
 files = [f for f in os.listdir(model_path) if os.path.isfile(os.path.join(model_path, f)) and f.endswith('.pth')]
@@ -117,6 +127,44 @@ def get_feature(file_id, feature, idx):
   # return serialized_feature
   return feature_data
 
+# CARRADA semantic-segmentation classes (0=background is drawn transparent).
+SEG_CLASS_NAMES = ["background", "pedestrian", "cyclist", "car"]
+SEG_CLASS_COLORS = ["red", "lime", "deepskyblue"]   # classes 1,2,3
+
+
+def is_seg_pred(pred):
+  """A segmentation prediction is a dict carrying a dense mask, not a list of detections."""
+  return isinstance(pred, dict) and "pred_mask" in pred
+
+
+def draw_seg_overlay(file_id, feature, seg, xlabel, ylabel, rot_k=0):
+  """Overlay predicted and ground-truth segmentation masks on the matching radar frame.
+
+  seg = {"pred_mask": [[..]], "gt_mask": [[..]], "viz_idx": int}. viz_idx is the frame the masks
+  belong to (last frame of the model's input window); we fetch the radar image at that same
+  frame so the overlay is spatially aligned.
+
+  rot_k rotates the masks by np.rot90(k=rot_k) to match the display orientation of the radar
+  image: the backend returns masks in raw (model) orientation, but get_feature(for_visualize=True)
+  rotates the RD image 180deg (np.rot90(k=2)) for the UI, so RD masks need the same rotation.
+  """
+  feature_data = get_feature(file_id, feature, seg["viz_idx"])
+  img = np.array(feature_data["serialized_feature"])
+  cmap = ListedColormap(SEG_CLASS_COLORS)
+  fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+  for ax, mask, title in ((axes[0], seg["pred_mask"], "Prediction"), (axes[1], seg["gt_mask"], "Ground truth")):
+    mask = np.rot90(np.array(mask), k=rot_k)
+    ax.imshow(img)
+    # Hide background (class 0) so the radar signal shows through; classes 1..3 use the colormap.
+    ax.imshow(np.ma.masked_where(mask == 0, mask), cmap=cmap, alpha=0.5, vmin=1, vmax=3, interpolation="nearest")
+    ax.set_title(f"{feature} {title} (frame {seg['viz_idx']})")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+  handles = [mpatches.Patch(color=SEG_CLASS_COLORS[i], label=SEG_CLASS_NAMES[i + 1]) for i in range(len(SEG_CLASS_COLORS))]
+  fig.legend(handles=handles, loc="lower center", ncol=len(handles))
+  st.pyplot(fig)
+
+
 @st.cache_data
 def show_pred_with_gt(file_id, features, frame_id, pred_objs):
   for feature in pred_objs.keys():
@@ -159,6 +207,11 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
       plt.ylabel('Y(m)')
       st.pyplot(plt)
     elif feature == "RD":
+      if is_seg_pred(pred_objs[feature]):
+        # Semantic-segmentation model (RECORD/MVRECORD + CARRADA): overlay masks, not boxes.
+        # RD display image is rotated 180deg by get_RD(for_visualize=True); rotate masks to match.
+        draw_seg_overlay(file_id, "RD", pred_objs["RD"], "Doppler", "Range", rot_k=2)
+        continue
       feature_data = get_feature(file_id, feature, frame_id)
       serialized_feature = feature_data["serialized_feature"]
       feature_image = np.array(serialized_feature)
@@ -209,6 +262,10 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             plt.text(obj[0], obj[1] - 2, '%s' % obj[4], c='y', fontsize=6)
       st.pyplot(plt, use_container_width=False)
     elif feature == "RA":
+      if is_seg_pred(pred_objs[feature]):
+        # Semantic-segmentation model (RECORD/MVRECORD + CARRADA): overlay masks, not boxes.
+        draw_seg_overlay(file_id, "RA", pred_objs["RA"], "Azimuth", "Range")
+        continue
       feature_data = get_feature(file_id, feature, frame_id)
       serialized_feature = feature_data["serialized_feature"]
       feature_image = np.array(serialized_feature)
@@ -239,9 +296,12 @@ def show_pred_with_gt(file_id, features, frame_id, pred_objs):
             cls_id = int(obj[2])
             plt.text(obj[1] + 2, obj[0] + 2, f'pred:{classes[cls_id]}(conf:{obj[3]:.2f})', color='yellow')
         elif len(pred_objs["RA"][0]) == 5:
-            rect = Rectangle(np.array(obj[:2]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
+          # box format [x1, y1, x2, y2, cls]; loop over ALL predictions (was missing, so only
+          # one leftover box was drawn) -- mirrors the RD pred branch above.
+          for obj in pred_objs["RA"]:
+            rect = Rectangle((obj[0],obj[1]), obj[2]-obj[0], obj[3]-obj[1],linewidth=1, edgecolor='b', facecolor='none')
             plt.gca().add_patch(rect)
-            plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')    
+            plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
       st.pyplot(plt)
     elif feature in ('image', 'depth_image'):
       feature_data = get_feature(file_id, feature, frame_id)

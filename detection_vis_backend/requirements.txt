@@ -15,3 +15,6 @@ scipy
 scikit-learn
 torchvision
 pkbar
+rq
+redis
+fakeredis

@@ -64,7 +64,10 @@
       },
       "win_size": 1,
       "transformations": ["hflip", "vflip"],
-      "norm_type": "tvt"
+      "norm_type": "tvt",
+      "max_dets": 20,
+      "peak_thres": 0.3,
+      "ols_thres": 0.3
     },
 
     "RA": {
@@ -74,7 +77,10 @@
       },
       "win_size": 1,
       "transformations": ["hflip", "vflip"],
-      "norm_type": "tvt"
+      "norm_type": "tvt",
+      "max_dets": 20,
+      "peak_thres": 0.3,
+      "ols_thres": 0.3
     }
   }
   

@@ -104,53 +104,205 @@ def test_read_models():
     assert all(isinstance(item, dict) and 'id' in item and 'name' in item for item in result), "Each item should be a dictionary representation of MLmodel model"
 
 
+def test_blocking_handlers_run_in_threadpool():
+    """
+    FastAPI runs `async def` handlers ON the event loop. These handlers do blocking
+    CPU/disk work with no await (rosbag extraction, video encoding at ~169s, GPU
+    inference), so as coroutines each of them stalls EVERY other request for its whole
+    runtime -- the app-wide freeze. As plain `def` they run in the worker threadpool
+    and only their own caller waits.
+    """
+    import inspect
+    from detection_vis_backend.app import app as fastapi_app
+
+    BLOCKING_PATHS = {
+        "/download",
+        "/parse/{file_id}",
+        "/sync_check/{file_id}",
+        "/sync_set/{file_id}",
+        "/sync_unset/{file_id}",
+        "/feature/{file_id}/{feature_name}/size",
+        "/feature/{file_id}/{feature_name}/{id}",
+        "/video/{file_id}",
+        "/predict/{model_id}",
+        "/predict_newdata/{model_id}",
+    }
+    offenders = sorted(
+        route.path for route in fastapi_app.routes
+        if getattr(route, "path", None) in BLOCKING_PATHS
+        and inspect.iscoroutinefunction(route.endpoint)
+    )
+    covered = {route.path for route in fastapi_app.routes} & BLOCKING_PATHS
+    assert covered == BLOCKING_PATHS, f"missing routes: {BLOCKING_PATHS - covered}"
+    assert not offenders, (
+        "blocking handlers still on the event loop (async def): " + ", ".join(offenders))
+
+
+def _discover_readable_model():
+    """Pick a real model from the live DB instead of hardcoding an id.
+
+    The old tests pinned model_id=123, which rotted the moment that model was
+    deleted (the DB now holds 133+). Walk /models newest-first and return the
+    first whose train_info resolves, together with its info payload.
+    """
+    models = client.get(f"http://{backend_service}:8001/models").json()
+    for model in sorted(models, key=lambda m: m["id"], reverse=True):
+        response = client.get(f"http://{backend_service}:8001/model/{model['id']}")
+        if response.status_code == 200:
+            return model["id"], response.json()
+    pytest.skip("no model in the DB has readable train_info on disk")
+
+
 def test_read_model():
-    model_id = 123
-    response = client.get(f"http://{backend_service}:8001/model/{model_id}")
-    assert response.status_code == 200
-    model_dict = response.json()
-    assert isinstance(model_dict, dict), "Result should be a dictionary"          
+    # model_id = 123   # rotted: hardcoded id no longer in the DB
+    model_id, model_dict = _discover_readable_model()
+    assert isinstance(model_dict, dict), "Result should be a dictionary"
     assert all(key in model_dict for key in ["datafiles", "features", "model_config", "train_config"])
 
 
-def test_train_model():
-    sample_config = json.load("sample_for_train_test.json")
-    params = {
-                "datafiles_chosen": sample_config["datafiles"], 
-                "features_chosen": sample_config["features"], 
-                "mlmodel_configs": sample_config["model_config"], 
-                "train_configs": sample_config["train_config"]
-            }
-    response = client.post(f"http://{backend_service}:8001/train", json=params)
-    assert response.status_code == 200
-    result = response.json()
-    assert isinstance(result, dict) and "model_name" in result.keys()
+# def test_train_model():
+#     sample_config = json.load("sample_for_train_test.json")
+#     params = {
+#                 "datafiles_chosen": sample_config["datafiles"], 
+#                 "features_chosen": sample_config["features"], 
+#                 "mlmodel_configs": sample_config["model_config"], 
+#                 "train_configs": sample_config["train_config"]
+#             }
+#     response = client.post(f"http://{backend_service}:8001/train", json=params)
+#     assert response.status_code == 200
+#     result = response.json()
+#     assert isinstance(result, dict) and "model_name" in result.keys()
 
 
 def test_predict():
-    model_id = 123
-    checkpoint_id = 0
-    file_id = 53
-    split_type = "train"
-    sample_id = 0
-    params = {"checkpoint_id": checkpoint_id, "sample_id": sample_id, "file_id": file_id, "split_type": split_type}
-    response = client.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)  
-    assert response.status_code == 200
+    # model_id = 123; file_id = 53   # rotted: hardcoded pair no longer in the DB
+    # Derive the file from the model's own training data: /predict looks file_id up in
+    # the model's datafiles, so an arbitrary file_id crashes with a mismatched model.
+    model_id, model_info = _discover_readable_model()
+    datafiles = model_info.get("datafiles") or []
+    assert datafiles, f"model {model_id} has no datafiles in train_info"
+    file_id = datafiles[0]["id"]
+
+    params = {"checkpoint_id": 0, "sample_id": 0, "file_id": file_id, "split_type": "train"}
+    response = client.get(f"http://{backend_service}:8001/predict/{model_id}", params=params)
+    assert response.status_code == 200, f"model {model_id} / file {file_id}: {response.text[:200]}"
     prediction = response.json()
-    assert all(isinstance(value, list) for value in prediction.values()), "Prediction objects should be list type."
+    assert isinstance(prediction, dict), "Prediction should be a dict keyed by feature"
+    # Detection models return lists of boxes/points; segmentation models (RECORD/MVRECORD
+    # on CARRADA) return mask dicts. Both are valid shapes for this endpoint.
+    assert all(isinstance(value, (list, dict)) for value in prediction.values())
 
 
 
-def test_retrain_model():
-    sample_config = json.load("sample_for_train_test.json")
-    model_id = sample_config["model_id"]
-    params = {
-                "datafiles_chosen": sample_config["datafiles"], 
-                "features_chosen": sample_config["features"], 
-                "mlmodel_configs": sample_config["model_config"], 
-                "train_configs": sample_config["train_config"]
-            }
-    response = client.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
-    assert response.status_code == 200
-    result = response.json()
-    assert isinstance(result, dict) and "model_name" in result.keys()
+# def test_retrain_model():
+#     sample_config = json.load("sample_for_train_test.json")
+#     model_id = sample_config["model_id"]
+#     params = {
+#                 "datafiles_chosen": sample_config["datafiles"],
+#                 "features_chosen": sample_config["features"],
+#                 "mlmodel_configs": sample_config["model_config"],
+#                 "train_configs": sample_config["train_config"]
+#             }
+#     response = client.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
+#     assert response.status_code == 200
+#     result = response.json()
+#     assert isinstance(result, dict) and "model_name" in result.keys()
+
+
+# --- job-queue endpoint tests (fast; fake queue, mocked training — no GPU/data/DB) ---
+from unittest.mock import MagicMock
+from contextlib import contextmanager
+
+
+@pytest.fixture
+def mock_training(monkeypatch):
+    """Make run_training/run_retraining return fast without GPU/data/DB."""
+    from detection_vis_backend.jobs import tasks
+    monkeypatch.setattr(tasks, "_parse_datafiles", lambda datafiles: None)
+    monkeypatch.setattr(tasks, "train", lambda *a, **k: "FFTRadNet___TEST")
+
+    @contextmanager
+    def _s():
+        yield MagicMock()
+    monkeypatch.setattr(tasks, "_session", _s)
+    monkeypatch.setattr(tasks.crud, "add_model", lambda db, mlmodel: None)
+    monkeypatch.setattr(tasks, "_resolve_last_checkpoint", lambda model_id: "/ckpt.pth")
+
+
+def _sample():
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "sample_for_train_test.json")) as f:
+        return json.load(f)
+
+
+def test_train_returns_job_id_and_job_finishes(fake_queue, mock_training):
+    s = _sample()
+    resp = client.post("/train", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    })
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    assert job_id
+
+    jresp = client.get(f"/jobs/{job_id}")
+    assert jresp.status_code == 200
+    body = jresp.json()
+    assert body["status"] == "finished"
+    assert body["model_name"] == "FFTRadNet___TEST"
+
+
+def test_retrain_returns_job_id(fake_queue, mock_training):
+    s = _sample()
+    model_id = s["model_id"]
+    resp = client.post(f"/retrain/{model_id}", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    })
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    assert job_id
+
+    body = client.get(f"/jobs/{job_id}").json()
+    assert body["status"] == "finished"
+    assert body["model_name"] == "FFTRadNet___TEST"
+
+
+def test_get_jobs_unknown_id_404(fake_queue):
+    resp = client.get("/jobs/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_read_model_missing_returns_404_not_unbound_local(monkeypatch):
+    """Regression test: GET /model/{id} 500'd with UnboundLocalError for a nonexistent model.
+
+    read_model's `except ValueError` / `except Exception` handlers only logged, so control fell
+    through to `return {"datafiles": parameters[...]}` while the failing try had never bound
+    `parameters`. The client got an opaque 500 instead of a 404, and the real cause ("Model not
+    found") was buried in the backend log.
+
+    Deliberately does not rely on live DB contents: the stale test_read_model pins model_id=123,
+    which no longer exists, so it cannot distinguish "bug fixed" from "model missing".
+    """
+    import detection_vis_backend.app as app_module
+
+    app_module.app.dependency_overrides[app_module.get_db] = lambda: None
+    monkeypatch.setattr(app_module.crud, "get_model", lambda db, id: None)
+    try:
+        response = client.get("/model/999999")
+    finally:
+        app_module.app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Model not found"
+
+
+def test_delete_started_job_returns_409(fake_queue, mock_training):
+    # is_async=False jobs finish immediately, so they are not "queued" → cannot cancel
+    s = _sample()
+    job_id = client.post("/train", json={
+        "datafiles_chosen": s["datafiles"], "features_chosen": s["features"],
+        "mlmodel_configs": s["model_config"], "train_configs": s["train_config"],
+    }).json()["job_id"]
+    resp = client.delete(f"/jobs/{job_id}")
+    assert resp.status_code == 409

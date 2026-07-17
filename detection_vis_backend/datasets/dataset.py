@@ -4,6 +4,8 @@ import struct
 import cv2
 import imageio
 import io
+import copy
+import threading
 #import mkl_fft
 import torch
 import math
@@ -29,7 +31,7 @@ from loguru import logger
 
 from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.nuscenes import NuScenes
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx, require_shared_instance, require_request_scope
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -39,17 +41,75 @@ class DatasetFactory:
         if not isinstance(cls._instance, cls):
             cls._instance = super(DatasetFactory, cls).__new__(cls, *args, **kwargs)
             cls._instance.instance_dict = {}  # this dictionary stores the instances
+            
+            # Handlers run in FastAPI's threadpool, so cache access races.
+            # _lock guards instance_dict; per-instance _parse_lock guards parse-once
+            # WITHOUT holding the global lock through a 2-20s parse (which would
+            # otherwise block every other request's cache lookup -- the freeze again).
+            cls._instance._lock = threading.Lock()
         return cls._instance
 
+    # State ownership: the cached instance is written once by parse() and read-only
+    # thereafter; anything a single request configures lives on that request's copy.
+    #
+    # Old: returned the cached instance to EVERY caller, so prepare_for_train's writes
+    # (model_type, transformations, annos...) landed on an object shared process-wide.
+    # Config is keyed by MODEL but the cache is keyed by FILE ID, so loading a different
+    # model silently reconfigured the same object -- three inference bugs on 2026-07-15.
+    #
+    # def get_instance(self, class_name, id):
+    #     if id in self.instance_dict:
+    #         # logger.debug(f"{class_name} instance created already, directly return {id}")
+    #         return self.instance_dict[id]
+    #
+    #     class_obj = globals()[class_name]()
+    #     self.instance_dict[id] = class_obj
+    #     # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
+    #     return class_obj
     def get_instance(self, class_name, id):
-        if id in self.instance_dict:
-            # logger.debug(f"{class_name} instance created already, directly return {id}")
+        """A request-scoped copy. Safe default: config writes cannot escape.
+
+        Shares parse output by reference (~280 bytes, ~0.03 ms per copy, constant even
+        against CARRADA's 331 MB), because every prepare_for_train rebinds attributes
+        rather than mutating shared containers -- pinned by
+        tests/test_dataset_state.py::test_config_writes_only_rebind.
+        """
+        inst = copy.copy(self._shared(class_name, id))
+        inst._request_scoped = True
+        return inst
+
+    def get_shared_instance(self, class_name, id, parse_args=None):
+        """The cached instance itself. Only for callers whose writes MUST persist:
+        /parse populates it, and /sync_set|/sync_unset own the single-user view toggle.
+        Mutations here are process-wide and outlive the request.
+
+        If parse_args is given, parses once per file_id and never again -- parse() is
+        expensive (CARRADA 2-20 s / 331 MB) and was previously re-run unguarded.
+        """
+        inst = self._shared(class_name, id)
+        if parse_args is not None and not getattr(inst, "_parsed", False):
+            # Double-checked: take the per-instance lock, then re-test _parsed. Without
+            # this, N threadpool workers hitting an unparsed file all run the 2-20s parse.
+            parse_lock = self._parse_lock_for(inst)
+            with parse_lock:
+                if not getattr(inst, "_parsed", False):
+                    inst.parse(*parse_args)
+                    inst._parsed = True
+        return inst
+
+    def _parse_lock_for(self, inst):
+        # Lazily attach under the global lock so instances seeded from outside
+        # _shared() (tests, future code) get a lock exactly once too.
+        with self._lock:
+            if not hasattr(inst, "_parse_lock"):
+                inst._parse_lock = threading.Lock()
+            return inst._parse_lock
+
+    def _shared(self, class_name, id):
+        with self._lock:
+            if id not in self.instance_dict:
+                self.instance_dict[id] = globals()[class_name]()
             return self.instance_dict[id]
-        
-        class_obj = globals()[class_name]()
-        self.instance_dict[id] = class_obj
-        # logger.debug(f"{class_name} instance not created yet, will create from file {id}")
-        return class_obj
 
 # class DatasetFactory:
 #     _instances = {}
@@ -84,6 +144,7 @@ class RaDICaL(Dataset):
 
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         file = os.path.join(file_path, file_name)
         try:
@@ -296,8 +357,21 @@ class RaDICaL(Dataset):
                 for f in features:
                     feature_data = function_dict[f](idx)
                     #logging.error(f"raw {f}: {feature_data.shape}")
-                    
-                    if f == 'RD': 
+
+                    # get_image/get_depthimage return a FILE PATH, not pixels -- the /feature
+                    # endpoint hands the path to the UI, which loads it (2_Get_features.py).
+                    # Nothing loaded it here, so the raw path string reached np.hstack, which
+                    # coerced it to a 1-element 1-D array and raised "all the input arrays must
+                    # have same number of dimensions". Mirror the UI's convention: RaDICaL
+                    # stores decoded frames as .npy, other datasets store encoded image files.
+                    if f in ('image', 'depth_image') and isinstance(feature_data, str):
+                        if feature_data.endswith('.npy'):
+                            feature_data = np.load(feature_data)
+                        else:
+                            # imread gives BGR; the .npy frames are RGB, and imageio writes RGB
+                            feature_data = cv2.cvtColor(cv2.imread(feature_data), cv2.COLOR_BGR2RGB)
+
+                    if f == 'RD':
                         #logging.error('RD begin->')
                         feature_data = (feature_data -feature_data.min())/(feature_data.max()-feature_data.min())*255
                         feature_data = cv2.cvtColor(feature_data.astype('uint8'), cv2.COLOR_GRAY2BGR)
@@ -523,6 +597,7 @@ class RADIal(Dataset):
         self.features = ['image', 'lidarPC', 'adc', 'radarPC']
         
     def parse(self, file_id, file_path, file_name, config, difficult=True):
+        require_shared_instance(self)
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
@@ -628,6 +703,7 @@ class RADIal(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.segmentation_head = True if model_cfg['segmentation_head'] else False
         return
 
@@ -778,7 +854,7 @@ class RADIalRaw(Dataset):
     def parse_recording(self, folder):
         recorder_folder_path = Path(folder)
         
-        list_files = [file for file in os.listdir(recorder_folder_path) if os.isfile(os.path.join(recorder_folder_path, file))]
+        list_files = [file for file in os.listdir(recorder_folder_path) if os.path.isfile(os.path.join(recorder_folder_path, file))]
         
         # list the number of sensor recorded
         list_of_sensors = []
@@ -837,7 +913,10 @@ class RADIalRaw(Dataset):
         return dict_sensor
 
 
-    def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False): 
+    def parse(self, file_id, file_path, file_name, config, master=None, tolerance=200000, sync_mode='timestamp', silent=False):
+        require_shared_instance(self)
+        self.sync_mode = sync_mode
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         # 1. Open the REC file
         self.rec_file_name = file_name +'_events_log.rec'
         self.rec_file_path = os.path.join(file_path, file_name, self.rec_file_name)
@@ -855,7 +934,7 @@ class RADIalRaw(Dataset):
         nb_corrupted = 0
         nb_tolerance = 0
 
-        self.dicts = self.parse_recording(os.path.join(file_path, file_name).name)
+        self.dicts = self.parse_recording(os.path.join(file_path, file_name))
         # for Each radar sample, find the clostest sample for each sensor
         if not master:
             # by default, we use the Radar as Matser sensor
@@ -1030,6 +1109,8 @@ class RADIalRaw(Dataset):
             logger.error('Mode not supported')
             return
 
+        # all extracted features share the same number of synchronized frames
+        self.frame_sync = len(self.table)
 
         self.can_frames={'timestamp':[],'ID':[],'data':[]}
         if('can' in self.dicts):
@@ -1066,77 +1147,74 @@ class RADIalRaw(Dataset):
         struct_fmt = '=7f4B'
         struct_len = struct.calcsize(struct_fmt)
         struct_unpack = struct.Struct(struct_fmt).unpack_from
-        for idx in self.table:
+        for sample_id, match in enumerate(self.table):
             # MJPG mode
             if(np.shape(self.dicts['camera']['offset'])[0]>0):
-                offset = int(self.dicts['camera']['offset'][idx])
-                length = int(self.dicts['camera']['datasize'][idx])
+                offset = int(self.dicts['camera']['offset'][match['camera']])
+                length = int(self.dicts['camera']['datasize'][match['camera']])
                 f.seek(offset)
                 data = f.read(length)
                 image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
             # AVI MOde
             else:
-                f.set(cv2.CAP_PROP_POS_FRAMES,idx)
+                f.set(cv2.CAP_PROP_POS_FRAMES, match['camera'])
                 ret, image = f.read()
-            cv2.imwrite(os.path.join(feature_path, "image", f"image_{idx}.jpg"), image)
+            cv2.imwrite(os.path.join(feature_path, "image", f"image_{sample_id}.jpg"), image)
 
             # lidar pc
-            offset = self.dicts['scala']['offset'][idx]
-            datasize = self.dicts['scala']['datasize'][idx]
+            offset = self.dicts['scala']['offset'][match['scala']]
+            datasize = self.dicts['scala']['datasize'][match['scala']]
             fd.seek(offset)
             pts3d=[]
             for i in range(int(datasize/struct_len)):
                 pts3d.append(struct_unpack(fd.read(struct_len)))
             pts3d = np.asarray(pts3d)
-            np.save(os.path.join(feature_path, "lidarpc", f"lidarpc_{idx}.npy"), pts3d)
+            np.save(os.path.join(feature_path, "lidarPC", f"lidarPC_{sample_id}.npy"), pts3d)
 
             # radar adc
-            offset = int(self.dicts['radar_ch0']['offset'][idx])
-            datasize = self.dicts['radar_ch0']['datasize'][idx]
+            offset = int(self.dicts['radar_ch0']['offset'][match['radar_ch0']])
+            datasize = self.dicts['radar_ch0']['datasize'][match['radar_ch0']]
             fd_ch0.seek(offset)
             adc0 = np.fromfile(fd_ch0, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch1']['offset'][idx])
-            datasize = self.dicts['radar_ch1']['datasize'][idx]
+            offset = int(self.dicts['radar_ch1']['offset'][match['radar_ch1']])
+            datasize = self.dicts['radar_ch1']['datasize'][match['radar_ch1']]
             fd_ch1.seek(offset)
             adc1 = np.fromfile(fd_ch1, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch2']['offset'][idx])
-            datasize = self.dicts['radar_ch2']['datasize'][idx]
+            offset = int(self.dicts['radar_ch2']['offset'][match['radar_ch2']])
+            datasize = self.dicts['radar_ch2']['datasize'][match['radar_ch2']]
             fd_ch2.seek(offset)
             adc2 = np.fromfile(fd_ch2, dtype=np.int16, count=int(datasize/2))
 
-            offset = int(self.dicts['radar_ch3']['offset'][idx])
-            datasize = self.dicts['radar_ch3']['datasize'][idx]
+            offset = int(self.dicts['radar_ch3']['offset'][match['radar_ch3']])
+            datasize = self.dicts['radar_ch3']['datasize'][match['radar_ch3']]
             fd_ch3.seek(offset)
             adc3 = np.fromfile(fd_ch3, dtype=np.int16, count=int(datasize/2))
 
-            frame0 = np.reshape(adc0[0::2] + 1j*adc0[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame1 = np.reshape(adc1[0::2] + 1j*adc1[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame2 = np.reshape(adc2[0::2] + 1j*adc2[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
-            frame3 = np.reshape(adc3[0::2] + 1j*adc3[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))   
+            frame0 = np.reshape(adc0[0::2] + 1j*adc0[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame1 = np.reshape(adc1[0::2] + 1j*adc1[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame2 = np.reshape(adc2[0::2] + 1j*adc2[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
+            frame3 = np.reshape(adc3[0::2] + 1j*adc3[1::2], (self.numSamplePerChirp,self.numRxPerChip, self.numChirps), order ='F').transpose((0,2,1))
             adc = np.concatenate([frame3,frame0,frame1,frame2],axis=2)
-            np.save(os.path.join(feature_path, "adc", f"adc_{idx}.npy"), adc)
+            np.save(os.path.join(feature_path, "adc", f"adc_{sample_id}.npy"), adc)
 
         self.AoA_mat = np.load(os.path.join(file_path, "CalibrationTable.npy"),allow_pickle=True).item()
 
-        if(self.method == 'PC'):
-            self.CFAR_fct = CA_CFAR(win_param=(9,9,3,3), threshold=2, rd_size=(self.numSamplePerChirp,16))
-            self.CalibMat = np.rollaxis(self.AoA_mat['Signal'],2,1).reshape(self.AoA_mat['Signal'].shape[0]*self.AoA_mat['Signal'].shape[2],self.AoA_mat['Signal'].shape[1])
-        else:
-            # For RA map estimation, we consider only one elevation, the one parallel to the road plan (index=5)
-            self.CalibMat=self.AoA_mat['Signal'][...,5]
-        
+        # Set up processing artifacts for BOTH radar products so a single instance
+        # can serve range-azimuth maps (get_RA) and radar point clouds (get_radarpointcloud).
+        # Range-Azimuth: one elevation, the one parallel to the road plan (index=5).
+        self.CalibMat_RA = self.AoA_mat['Signal'][...,5]
+        # Point cloud: reshaped calibration matrix + CFAR. Kept on CPU/NumPy because
+        # get_radarpointcloud is NumPy-only (no GPU branch).
+        self.CalibMat_PC = np.rollaxis(self.AoA_mat['Signal'],2,1).reshape(self.AoA_mat['Signal'].shape[0]*self.AoA_mat['Signal'].shape[2],self.AoA_mat['Signal'].shape[1])
+        self.CFAR_fct = CA_CFAR(win_param=(9,9,3,3), threshold=2, rd_size=(self.numSamplePerChirp,16))
+        self.window_np = self.AoA_mat['H'][0]  # NumPy window for the point-cloud path
+
         if(self.device =='cuda'):
-            # if(self.lib=='CuPy'):
-            #     logger.info('CuPy on GPU will be used to execute the processing')
-            #     cp.cuda.Device(0).use()
-            #     self.CalibMat = cp.array(self.CalibMat,dtype='complex64')
-            #     self.window = cp.array(self.AoA_mat['H'][0])
-            # else:
-            logger.info('PyTorch on GPU will be used to execute the processing')
-            self.CalibMat = torch.from_numpy(self.CalibMat).to('cuda')
-            self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')   
+            logger.info('PyTorch on GPU will be used to execute the RA processing')
+            self.CalibMat_RA = torch.from_numpy(self.CalibMat_RA).to('cuda')
+            self.window = torch.from_numpy(self.AoA_mat['H'][0]).to('cuda')
         else:
             logger.info('CPU will be used to execute the processing')
             self.window = self.AoA_mat['H'][0]
@@ -1161,7 +1239,7 @@ class RADIalRaw(Dataset):
                 file = os.path.join(self.feature_path,"image",f"image_{index}.jpg")
                 data = np.asarray(Image.open(file))
             elif f == 'lidarPC':
-                file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{index}.npy")
+                file = os.path.join(self.feature_path,"lidarPC",f"lidarPC_{index}.npy")
                 data = np.load(file)
             elif f == 'adc':
                 file = os.path.join(self.feature_path,"adc",f"adc_{index}.npy")
@@ -1176,12 +1254,15 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
+        range_fft = np.fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        RD_spectrums = np.fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        if for_visualize:
+            # collapse the complex MIMO cube to a real range-Doppler power map for display
+            return np.sum(np.abs(RD_spectrums), axis=2)
         return RD_spectrums
-    
+
     def get_RA(self, idx=None, for_visualize=False):
         file = os.path.join(self.feature_path,"adc",f"adc_{idx}.npy")
         complex_adc = np.load(file)
@@ -1189,10 +1270,10 @@ class RADIalRaw(Dataset):
         complex_adc = complex_adc - np.mean(complex_adc, axis=(0,1))
 
         # 3- Range FFTs
-        range_fft = np.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
+        range_fft = np.fft.fft(np.multiply(complex_adc,self.range_fft_coef),self.numSamplePerChirp,axis=0) # mkl
     
         # 4- Doppler FFts
-        RD_spectrums = np.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
+        RD_spectrums = np.fft.fft(np.multiply(range_fft,self.doppler_fft_coef),self.numChirps,axis=1) # mkl
 
         doppler_indexes = []
         for doppler_bin in range(self.numChirps):
@@ -1206,10 +1287,10 @@ class RADIalRaw(Dataset):
             # Multiply with Hamming window to reduce side lobes
             MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
 
-            Azimuth_spec = np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+            Azimuth_spec = np.abs(self.CalibMat_RA@MIMO_Spectrum.transpose())
             Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
 
-            RA_map = np.sum(np.abs(Azimuth_spec),axis=2)          
+            RA_map = np.sum(np.abs(Azimuth_spec),axis=2)
             return RA_map.transpose()
         else:      
             # if(self.lib=='CuPy'):
@@ -1224,7 +1305,7 @@ class RADIalRaw(Dataset):
             MIMO_Spectrum = torch.from_numpy(MIMO_Spectrum).to('cuda')
             # Multiply with Hamming window to reduce side lobes
             MIMO_Spectrum = torch.transpose(torch.multiply(MIMO_Spectrum,self.window),1,0).cfloat()
-            Azimuth_spec = torch.abs(torch.matmul(self.CalibMat,MIMO_Spectrum))
+            Azimuth_spec = torch.abs(torch.matmul(self.CalibMat_RA,MIMO_Spectrum))
             Azimuth_spec = Azimuth_spec.reshape(self.AoA_mat['Signal'].shape[0],RD_spectrums.shape[0],RD_spectrums.shape[1])
             RA_map = torch.sum(torch.abs(Azimuth_spec),axis=2)
             return RA_map.detach().cpu().numpy().transpose()
@@ -1266,11 +1347,11 @@ class RADIalRaw(Dataset):
 
         # 4- Extract and reshape the Rx * Tx matrix into the MIMO spectrum
         MIMO_Spectrum = RD_spectrums[RangeBin_candidates,doppler_indexes,:].reshape(len(DopplerBin_candidates),-1)
-        MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window)
-        
-        # 5- AoA: maker a cross correlation between the recieved signal vs. the calibration matrix 
+        MIMO_Spectrum = np.multiply(MIMO_Spectrum,self.window_np)
+
+        # 5- AoA: maker a cross correlation between the recieved signal vs. the calibration matrix
         # to identify azimuth and elevation angles
-        ASpec=np.abs(self.CalibMat@MIMO_Spectrum.transpose())
+        ASpec=np.abs(self.CalibMat_PC@MIMO_Spectrum.transpose())
         
         # 6- Extract maximum per (Range,Doppler) bins
         x,y = np.where(np.isnan(ASpec))
@@ -1284,19 +1365,23 @@ class RADIalRaw(Dataset):
         return np.vstack([RangeBin,DopplerBin_candidates,az,el]).transpose()
 
     def get_lidarpointcloud(self, idx=None, for_visualize=False):
-        file = os.path.join(self.feature_path,"lidarpc",f"lidarpc_{idx}.npy")
+        file = os.path.join(self.feature_path,"lidarPC",f"lidarPC_{idx}.npy")
         pc = np.load(file)
         return pc
 
-    def get_image(self, idx=None, for_visualize=False): 
+    def get_image(self, idx=None, for_visualize=False):
         image_path = os.path.join(self.feature_path,"image",f"image_{idx}.jpg")
         #image = np.asarray(Image.open(image_path))
         return image_path
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
-      
+
     def get_spectrogram(self, idx=None, for_visualize=False):
+        return None
+
+    def get_RAD(self, idx=None, for_visualize=False):
+        # RADIal raw data has no range-azimuth-doppler cube feature
         return None
     
     def get_feature(self, feature_name, idx=None, for_visualize=False):
@@ -1330,6 +1415,7 @@ class CRUW(Dataset):
         self.features = ['image', 'RA']
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -1481,6 +1567,7 @@ class CRUW(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.n_class = 3 # dataset.object_cfg.n_class
         self.win_size = train_cfg['win_size'] 
 
@@ -1658,6 +1745,7 @@ class CARRADA(Dataset):
         self.features = ['image', 'RA', 'RD', 'AD', 'RAD']
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -1676,7 +1764,14 @@ class CARRADA(Dataset):
 
         anno_path = os.path.join(self.root_path, 'Carrada', 'annotations_frame_oriented.json')
         with open(anno_path, 'r') as fp:
-            self.annos = json.load(fp)
+            # self.annos = json.load(fp)
+            # The file holds annotations for ALL 30 sequences (37.7MB on disk, ~331MB as
+            # Python objects), but this instance only ever reads its own sequence. Keep
+            # just the slice: the other 29 sequences are garbage-collected right here,
+            # instead of ~345MB RSS pinned per cached instance (~10GB when the 'original'
+            # splitmode holds all 30 instances in one ConcatDataset). A wrong seq_name now
+            # fails loudly here instead of later in get_label.
+            self.annos = json.load(fp)[self.seq_name]
 
     def get_image(self, idx=None, for_visualize=False): 
         #image = np.asarray(Image.open(self.image_filenames[idx]))
@@ -1726,7 +1821,8 @@ class CARRADA(Dataset):
     def get_label(self, feature_name, idx=None):
         # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         frame = "{:06d}".format(idx)
-        objs = self.annos[self.seq_name][frame]
+        # objs = self.annos[self.seq_name][frame]
+        objs = self.annos[frame]  # annos now holds only this instance's sequence
         gt = []
         categories = {0: 'background', 1: 'pedestrian', 2: 'cyclist', 3: 'car'}
         if objs:
@@ -1767,6 +1863,7 @@ class CARRADA(Dataset):
         return frame
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.win_frames = train_cfg['win_size']
         self.features = features
 
@@ -1790,9 +1887,26 @@ class CARRADA(Dataset):
             self.datasamples_length = self.frame_sync - self.win_frames + 1
         elif self.model_type == 'RadarCrossAttention':
             anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
+            # new_gt_anno.json has a DIFFERENT schema from the annotations_frame_oriented.json
+            # that parse() loads into self.annos:
+            #   parse():       annos[seq][frame] = {obj_id: {'range_angle': {'label':.., 'box':..}}}
+            #   new_gt_anno:   annos[seq][frame] = {'cls': [3.0], 'idx': [92.0, 6.0, 132.0, 26.0]}
+            # Assigning it to self.annos clobbered parse()'s data, so get_label() (which assumes
+            # the frame-oriented schema) raised "list indices must be integers or slices, not str"
+            # on any frame that actually had objects. The DatasetFactory caches one instance per
+            # file_id, so the damage outlived the request and broke /feature too. Keep this
+            # schema in its own attribute and leave self.annos meaning one thing for its lifetime.
+            # with open(anno_path, 'r') as f:
+            #     self.annos = json.load(f)
+            # tracks = self.annos[self.seq_name]['tracks']
+            # with open(anno_path, 'r') as f:
+            #     self.rca_annos = json.load(f)
+            # tracks = self.rca_annos[self.seq_name]['tracks']
+            # Same slicing as parse()'s annos: the file holds all 30 sequences but this
+            # instance only reads its own, so keep just the slice (7.5MB file, ~14MB loaded).
             with open(anno_path, 'r') as f:
-                self.annos = json.load(f)
-            tracks = self.annos[self.seq_name]['tracks']
+                self.rca_annos = json.load(f)[self.seq_name]
+            tracks = self.rca_annos['tracks']
             # Get data frame intervals in the seq
             intervals = []
             for i, track in enumerate(tracks):
@@ -1878,8 +1992,10 @@ class CARRADA(Dataset):
                     # Get ground truth boxes and labels for DAROD network
                     gt_boxes = []
                     gt_labels = []
-                    if self.annos[self.seq_name][init_frame_name]:
-                        for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    # if self.annos[self.seq_name][init_frame_name]:
+                    #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    if self.annos[init_frame_name]:
+                        for obj_anno in self.annos[init_frame_name].values():
                             #obj_anno['range_doppler']['dense']
                             gt_boxes.append(obj_anno[featurestr]['box'])
                             gt_labels.append(obj_anno[featurestr]['label'])
@@ -2003,17 +2119,23 @@ class CARRADA(Dataset):
                 ad_map[i, ::] = ad_map_temp
             # TODO: normalize rd_map, ad_map, rd_map
             raw_index = str(raw_index).zfill(6)
+            # These read the new_gt_anno.json schema, which now lives in self.rca_annos rather
+            # than overwriting parse()'s self.annos.
             if self.gauss_type == "Bivar":
-                gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])    
-            else:                                        
-                gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
+                # gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])
+                gauss_map = bi_var_gauss(self.rca_annos[raw_index])
+            else:
+                # gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
+                gauss_map = plain_gauss(self.rca_annos[raw_index], s_r=15, s_a=15)
             frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
             if self.center_offset:
-                center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec()) 
-                frame.update({'gt_center_map': center_offset}) 
+                # center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec())
+                center_offset = get_center_map(self.rca_annos[raw_index], vect=get_co_vec())
+                frame.update({'gt_center_map': center_offset})
             if self.orientation:
-                orient_map = get_orent_map(self.annos[self.seq_name][raw_index])  
-                frame.update({'gt_orent_map': orient_map}) 
+                # orient_map = get_orent_map(self.annos[self.seq_name][raw_index])
+                orient_map = get_orent_map(self.rca_annos[raw_index])
+                frame.update({'gt_orent_map': orient_map})
             
             for key,value in frame.items():
                 if key != 'image_path':
@@ -2045,6 +2167,7 @@ class RADDetDataset(Dataset):
 		}
 
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -2132,6 +2255,7 @@ class RADDetDataset(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.data_stats = {
             "all_classes" : ["person", "bicycle", "car", "motorcycle", "bus", "truck" ],
             "global_mean_log" : 3.2438383,
@@ -2313,6 +2437,7 @@ class Astyx(Dataset):
         self.features = ['image', 'radarPC', 'lidarPC']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         
@@ -2449,6 +2574,7 @@ class Astyx(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         return 
 
     def __len__(self):
@@ -2470,6 +2596,7 @@ class UWCR(Dataset):
         self.features = ['image', 'adc']
         
     def parse(self, file_id, file_path, file_name, config):
+        require_shared_instance(self)
         self.config = config
         self.root_path = file_path
         self.seq_name = file_name
@@ -2693,6 +2820,7 @@ class UWCR(Dataset):
         return gt
     
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        require_request_scope(self)
         self.n_class = 3
         self.class_ids = {'pedestrian': 0, 'cyclist': 1, 'car': 2, 'truck': 2}
         self.win_size = train_cfg['win_size'] 

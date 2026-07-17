@@ -85,6 +85,18 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             assert 'val' in train_config['dataloader']['split_sequence']
 
             for split_type in train_config['dataloader']['split_sequence'].keys():
+                # The UI's per-file radios can leave a bucket empty. An empty train/val
+                # is nonsense -- fail with the split's name instead of the opaque
+                # "datasets should not be an empty iterable" assert from ConcatDataset([]).
+                # An empty test is a legitimate choice (e.g. two files: one train, one
+                # val): skip it here, and train() skips the test evaluation.
+                if not train_config['dataloader']['split_sequence'][split_type]:
+                    if split_type in ('train', 'val'):
+                        raise ValueError(
+                            f"Sequence split: no files assigned to '{split_type}'. "
+                            "Assign at least one file to 'train' and one to 'val'.")
+                    logger.info(f"Sequence split: no files assigned to '{split_type}'; skipping it.")
+                    continue  # datasets[split_type] stays None
                 samples_info = []
                 valid_ids = []
                 counter = 0
@@ -204,8 +216,15 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 for file_name in Sequences[split_type]:
                     with get_db() as db:
                         datafile = crud.get_datafile_by_name(db, file_name)
+                    # dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
+                    # dataset_inst.parse(datafile.id, datafile.path, file_name, datafile.config)
+                    # Parse on the shared instance (writes must persist, and parse-once
+                    # skips the redundant re-parse when _parse_datafiles already ran);
+                    # configure a request copy so this model's config cannot leak.
+                    dataset_factory.get_shared_instance(
+                        'CARRADA', datafile.id,
+                        parse_args=(datafile.id, datafile.path, file_name, datafile.config))
                     dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
-                    dataset_inst.parse(datafile.id, datafile.path, file_name, datafile.config)
                     dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
                     dataset_inst_list.append(dataset_inst)
                     for i in range(len(dataset_inst)):
@@ -247,8 +266,14 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         num_workers=train_config['dataloader']['val']['num_workers'],
                         pin_memory=True,
                         collate_fn=collate_func[model_config['class']])
-    test_loader =  DataLoader(datasets['test'], 
-                        batch_size=train_config['dataloader']['test']['batch_size'], 
+    # test_loader =  DataLoader(datasets['test'], ...)
+    # A sequence split may legitimately have no test files; then there is no test loader
+    # and train() skips the final test evaluation.
+    if datasets['test'] is None:
+        test_loader = None
+    else:
+        test_loader = DataLoader(datasets['test'],
+                        batch_size=train_config['dataloader']['test']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
                         pin_memory=True,
@@ -266,11 +291,11 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     logger.info(f"      Split Mode: {train_config['dataloader']['splitmode']}")
     logger.info(f"      Training:   {len(datasets['train'])}")
     logger.info(f"      Validation: {len(datasets['val'])}")
-    logger.info(f"      Test:       {len(datasets['test'])}")
+    logger.info(f"      Test:       {len(datasets['test']) if datasets['test'] is not None else 0}")
     return train_loader, val_loader, test_loader
 
 
-def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None):   
+def train(datafiles: list, features: list, model_config: dict, train_config: dict, pretrained: str=None, progress_cb=None):
     
     # Setup random seed
     torch.manual_seed(train_config['seed'])
@@ -278,12 +303,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
     random.seed(train_config['seed'])
     torch.cuda.manual_seed(train_config['seed'])
 
-    # create experiment model name
-    curr_date = datetime.now()
-    exp_name = model_config['class'] + '___' + curr_date.strftime('%b-%d-%Y___%H:%M:%S')
-
     # check if all datafiles from the same dataset
     dataset_type = datafiles[0]["parse"]
+
+    # create experiment model name: <model type>___<dataset>___<timestamp>
+    curr_date = datetime.now()
+    exp_name = model_config['class'] + '_' + dataset_type + '_' + curr_date.strftime('%b-%d-%Y_%H:%M:%S')
 
     # Initialize tensorboard
     output_root = Path(os.getenv('MODEL_ROOTDIR'))
@@ -305,7 +330,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         df_val_eval = pd.DataFrame(columns=['Epoch', 'loss', 'mAP', 'mAR', 'mIoU'])
 
         # set device
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
         # if device == 'cuda:0':
         #     torch.cuda.empty_cache()
@@ -358,6 +383,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         for epoch in range(startEpoch, num_epochs):
             kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=20, always_stateful=False)
             logger.info(f'Epoch {epoch+1}/{num_epochs}')
+            # report the epoch as running so the UI shows progress during (not only after) it
+            if progress_cb is not None:
+                progress_cb(epoch + 1, num_epochs, None, 'running')
             ###################
             ## Training loop ##
             ###################
@@ -413,7 +441,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
             
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
-            
+
+            if progress_cb is not None:
+                progress_cb(epoch + 1, num_epochs, float(eval['loss']), 'train')
+
             writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], global_step)
             writer.add_scalar('Loss/test', eval['loss'], global_step)
             writer.add_scalar('Metrics/mAP', eval['mAP'], global_step)
@@ -438,14 +469,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         df_val_eval.to_csv(val_eval_path, index=False)
 
         logger.info(f'=========== Evaluation on Test data ===========')
-        if callable(eval_func_dict[model_type, dataset_type]):
+        if test_loader is None:
+            # Sequence split with no files assigned to 'test' -- a legitimate choice.
+            logger.info('No files assigned to the test split; skipping test evaluation.')
+        elif callable(eval_func_dict[model_type, dataset_type]):
             eval = eval_func_dict[model_type, dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
             logger.info('Evaluation on Test data finished.')
+            df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
+            df_test_val.to_csv(test_eval_path, index=False)
         else:
             raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
-        
-        df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
-        df_test_val.to_csv(test_eval_path, index=False)       
     return exp_name
 
 

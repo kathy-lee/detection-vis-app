@@ -3,6 +3,7 @@ import streamlit as st
 import requests
 import os
 import json
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,6 +15,21 @@ from streamlit_ace import st_ace
 
 backend_service = os.getenv('BACKEND_SERVICE', 'localhost')
 model_rootdir = os.getenv('MODEL_ROOTDIR')
+
+
+def _load_model_features():
+  """model name -> feature codes it consumes. Single source of truth for both
+  the model dropdown (model_zoo) and the feature-compatibility guard."""
+  with open(os.path.join('detection_vis_backend', 'networks', 'model_features.json'), 'r') as f:
+    return json.load(f)
+
+MODEL_FEATURES = _load_model_features()
+
+
+def go_to_jobs_button(key):
+    """Jump to the Jobs page, which is the single place to monitor all jobs."""
+    if st.button("View jobs ▸", key=key):
+        switch_page("jobs")
 
 st.set_page_config(
     page_title = "Have fun ",
@@ -94,6 +110,32 @@ elif st.session_state.split_mode == 'sequence':
         if f in st.session_state.datafiles_split[split]:
           st.session_state.datafiles_split[split].remove(f)
           break
+
+
+def check_sequence_split():
+  """Validate the per-file split assignment before submitting a sequence-mode training.
+
+  The radios start unselected, so a file can silently belong to NO split, and nothing
+  forces train/val to be non-empty -- the backend would reject both (or, before that fix,
+  crash with "datasets should not be an empty iterable"). Catch it at the click instead.
+  Returns True when the submission may proceed.
+  """
+  if st.session_state.split_mode != 'sequence':
+    return True
+  split = st.session_state.datafiles_split
+  assigned_ids = {f['id'] for files in split.values() for f in files}
+  unassigned = [f['name'] for f in st.session_state.datafiles_chosen if f['id'] not in assigned_ids]
+  if unassigned:
+    st.warning(f"Not assigned to any split: {', '.join(unassigned)}. "
+               "Assign every chosen file to train, val or test.")
+    return False
+  if not split['train'] or not split['val']:
+    st.warning("Assign at least one file to 'train' and one to 'val'.")
+    return False
+  if not split['test']:
+    st.info("No test file assigned — test evaluation will be skipped.")
+  return True
+
 
 
 train_modes = ["Train from scratch", "Train on a pre-trained model"]
@@ -197,11 +239,41 @@ def find_default_configs(dataset, feature, model):
 
 
 # Optinon 1: Train from scratch
-model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD", "RAMP_CNN", "RadarCrossAttention"]   # This will be changed when streamlit support selectbox with None as default option
+# model_zoo = ["Choose a model type", "FFTRadNet", "RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "RADDet", "DAROD", "RAMP_CNN", "RadarCrossAttention"]   # This will be changed when streamlit support selectbox with None as default option
+model_zoo = ["Choose a model type"] + list(MODEL_FEATURES.keys())   # derived from model_features.json (single source of truth)
 
 if train_mode == train_modes[0]:
   model = st.selectbox("Choose a model type:", model_zoo, index=0)
-  if model != model_zoo[0]:  
+  if model != model_zoo[0]:
+    # Feature-compatibility guard: every chosen input feature must be one this
+    # model can consume (see networks/model_features.json). Sound subset check —
+    # never blocks a valid combo; catches feeding a model a feature it can't read.
+    # supported = MODEL_FEATURES.get(model, [])   # old flat schema: value was the feature list
+    supported = MODEL_FEATURES.get(model, {}).get("features", [])   # value is now a dict; features live under "features"
+    incompatible = [f for f in (st.session_state.features_chosen or []) if f not in supported]
+    if incompatible:
+      st.info(
+        f"**{model}** can't train on the selected feature(s): {', '.join(incompatible)}. "
+        f"It supports: {', '.join(supported)}. "
+        "Adjust your feature selection on the Get features page, or pick another model."
+      )
+      st.stop()
+
+    # Dataset-compatibility guard: the model must actually support the dataset the
+    # chosen files come from (see networks/model_features.json "datasets"). This is
+    # stronger than the feature check — e.g. FFTRadNet needs RADIal's specific MIMO
+    # geometry, so an RD map from another dataset won't work even if it "is RD".
+    # Skipped when a model has no "datasets" list yet (not-yet-confirmed models are
+    # left un-gated rather than wrongly blocked).
+    compatible_datasets = MODEL_FEATURES.get(model, {}).get("datasets", [])
+    if compatible_datasets and dataset_name not in compatible_datasets:
+      st.info(
+        f"**{model}** can't train on the **{dataset_name}** dataset. "
+        f"It supports: {', '.join(compatible_datasets)}. "
+        "Choose files from a supported dataset, or pick another model."
+      )
+      st.stop()
+
     st.write("Model description")
 
     model_configs, train_configs = find_default_configs(dataset_name, st.session_state.features_chosen, model)
@@ -221,42 +293,27 @@ if train_mode == train_modes[0]:
     
     train_action = st.button("Train", key="train_btn")
     if train_action:
-      with st.spinner(text="Training model in progress..."):
-        # find the chosen data files which are not parsed yet, and parse them
-        for f in st.session_state.datafiles_chosen:
-          datafile_parsed = f"parse_{f['id']}"
-          if datafile_parsed not in st.session_state:
-            st.session_state[datafile_parsed] = False
-            response = requests.get(f"http://{backend_service}:8001/parse/{f['id']}")
-            if response.status_code != 204:
-              st.info(f"An error occurred in parsing data file {f['name']}.")
-              st.stop()
-            else:
-              st.session_state[datafile_parsed] = True
-        params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
-                  "features_chosen": st.session_state.features_chosen, 
-                  "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
-        response = requests.post(f"http://{backend_service}:8001/train", json=params)
-      if response.status_code != 200:
-        st.info("An error occurred in training.")
+      if not check_sequence_split():
         st.stop()
-      else:
-        res = response.json()
-        st.session_state.model_chosen = res["model_name"]
-        # show evaluation result
-        st.write("Model Evaluation Result:")
-        st.write("Val dataset")
-        val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
-        st.table(val_eval)
-        st.write("Test dataset")
-        test_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "test_eval.csv"))
-        st.table(test_eval)         
+      # Parsing of the chosen datafiles now happens inside the training job
+      # (jobs/tasks.py:_parse_datafiles), so submit is a single instant enqueue.
+      params = {"datafiles_chosen": st.session_state.datafiles_chosen,
+                "features_chosen": st.session_state.features_chosen,
+                "mlmodel_configs": st.session_state.model_configs,
+                "train_configs": st.session_state.train_configs}
+      response = requests.post(f"http://{backend_service}:8001/train", json=params)
+      if response.status_code != 200:
+        st.info("An error occurred in submitting training.")
+        st.stop()
+      st.session_state.train_job_id = response.json()["job_id"]
+      st.success("Training job submitted. Track its progress on the Jobs page.")
+
+    go_to_jobs_button("view_jobs_train")
       
 
         
 
-def check_before_train(new_file_list, old_file_list):  
+def check_before_train(new_file_list, old_file_list):
   new_file_ids = [f['id'] for f in new_file_list]
   old_file_ids = [f['id'] for f in old_file_list]
   return not bool(set(new_file_ids) & set(old_file_ids))
@@ -287,29 +344,23 @@ if train_mode == train_modes[1]:
 
   train_action = st.button("Train", key="train_btn")
   if train_action:
+    if not check_sequence_split():
+      st.stop()
     if not check_before_train(st.session_state.datafiles_chosen, model_paras["datafiles"]):
       st.info("The chosen data file(s) has been trained in this model, please change.")
     else:
-      with st.spinner(text="Training model in progress..."):
-        params = {"datafiles_chosen": st.session_state.datafiles_chosen, 
-                  "features_chosen": st.session_state.features_chosen, 
-                  "mlmodel_configs": st.session_state.model_configs, 
-                  "train_configs": st.session_state.train_configs}
-        response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
+      params = {"datafiles_chosen": st.session_state.datafiles_chosen,
+                "features_chosen": st.session_state.features_chosen,
+                "mlmodel_configs": st.session_state.model_configs,
+                "train_configs": st.session_state.train_configs}
+      response = requests.post(f"http://{backend_service}:8001/retrain/{model_id}", json=params)
       if response.status_code != 200:
-        st.info("An error occurred in training.")
+        st.info("An error occurred in submitting retraining.")
         st.stop()
-      else:
-        res = response.json()
-        st.session_state.model_chosen = res["model_name"]
-        # show evaluation result
-        st.write("Model Evaluation Result:")
-        st.write("Val dataset")
-        val_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "val_eval.csv"))
-        st.table(val_eval)
-        st.write("Test dataset")
-        test_eval = pd.read_csv(os.path.join(model_rootdir, st.session_state.model_chosen, "test_eval.csv"))
-        st.table(test_eval)
+      st.session_state.retrain_job_id = response.json()["job_id"]
+      st.success("Retraining job submitted. Track its progress on the Jobs page.")
+
+  go_to_jobs_button("view_jobs_retrain")
 
 infer_action = st.button("Go to inference", key="inference_btn")
 if infer_action:

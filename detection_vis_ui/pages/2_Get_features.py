@@ -72,12 +72,19 @@ datafile_chosen = {}
 datafile_chosen = datafiles_chosen[st.session_state.datafile_chosen]
 #st.write(datafile_chosen)
 
+# show what kind of data the selected file natively has (per the DB flags),
+# not the derived features (e.g. RA/RD/... are computed from ADC, see above).
+native = [f for f in featureset if datafile_chosen[f]]
+if native:
+  st.write("**Data types available in this file:** " + ", ".join(native))
+else:
+  st.info("This data file has no recognized data types.")
 
 # parse the chosen data file
 datafile_parsed = f"parse_{datafile_chosen['id']}"
 if datafile_parsed not in st.session_state:
   st.session_state[datafile_parsed] = False
-  with st.spinner(text="Parsing data file in progress..."):
+  with st.spinner(text="Parsing data file..."):
     response = requests.get(f"http://{backend_service}:8001/parse/{datafile_chosen['id']}")
   if response.status_code != 204:
     st.info("An error occurred in parsing data file.")
@@ -108,12 +115,19 @@ def unset_sync(file_id):
   return True if response.status_code == 204 else False
 
 sync_frames = check_sync(datafile_chosen["id"])
-st.write(f"sync_frames: {sync_frames}")
+st.write(f"Synchronized frames: {sync_frames}")
 st.session_state.frame_id = 0
 
 def set_sync_mode():
   st.session_state.frame_sync = st.session_state['sync_checkbox']
-  return 
+  return
+
+if sync_frames == 0:
+  st.info(
+    "This file's sensor streams were recorded at different rates, so they don't share "
+    "a common frame index. You can select **frame sync mode** below to align them by timestamp — each "
+    "frame is matched to the nearest-in-time frame of every other stream."
+  )
 
 st.checkbox("frame sync mode", value=st.session_state.frame_sync, key='sync_checkbox', on_change=set_sync_mode)
 if st.session_state['sync_checkbox']:
@@ -306,11 +320,16 @@ def show_feature(file_id, feature, counter, frame_id, config=None):
           plt.text(obj[0], obj[1] -5, '%s' % obj[4], c='y')
     st.pyplot(plt)
   elif feature in ('image', 'depth_image'):
-    feature_image = mpimg.imread(serialized_feature)
+    # RaDICaL stores decoded frames as .npy arrays; other datasets store encoded
+    # image files (jpg/png). Load accordingly.
+    if isinstance(serialized_feature, str) and serialized_feature.endswith('.npy'):
+      feature_image = np.load(serialized_feature)
+    else:
+      feature_image = mpimg.imread(serialized_feature)
     plt.figure(figsize=(8,6))
     plt.imshow(feature_image) #, aspect='auto'
     plt.title(f"index: {st.session_state[counter]}, shape: {feature_image.shape}", y=1.0)
-    img_height, img_width, _ = feature_image.shape
+    img_height, img_width = feature_image.shape[:2]  # depth frames are 2D (H, W), RGB is (H, W, 3)
     if feature_data["gt_label"]:
       objs = feature_data["gt_label"]
       if len(objs[0]) > 5:
@@ -350,11 +369,19 @@ if 'frame_slider' in st.session_state:
   st.session_state.frame_id = st.session_state['frame_slider']
 
 
+# Defaults so these are always defined even when their sidebar block below is skipped
+# (e.g. a natively-shown feature), avoiding NameErrors where they're referenced later.
+fft_config = "Not interested"
+tfa_config = "Not interested"
+aoa_config = "Not interested"
+cfar_config = "Not interested"
+
+
 if "RD" in features and not features_show[features.index("RD")]:
   if "fft_cfg" not in st.session_state:
     st.session_state.fft_cfg = 0
   fft_config_list = ["Not interested", "No windowing", "Hamming windowing", "Hanning windowing"]
-  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT?", fft_config_list, index = st.session_state.fft_cfg)
+  fft_config = st.sidebar.radio("How would you like to do Range&Doppler-FFT to get Range-Doppler(RD) spectrum?", fft_config_list, index = st.session_state.fft_cfg)
   st.session_state.fft_cfg = fft_config_list.index(fft_config)
 
 
@@ -367,27 +394,15 @@ if "spectrogram" in features and not features_show[features.index("spectrogram")
 
 
 feature = "RA"
-counter = f"counter_{feature}" 
+counter = f"counter_{feature}"
 if feature in features:
   if not features_show[features.index(feature)]:
     if "aoa_cfg" not in st.session_state:
       st.session_state.aoa_cfg = 0
     aoa_config_list = ["Not interested", "Barlett", "Capon"]
-    aoa_config = st.sidebar.radio("How would you like to do AoA estimation?", aoa_config_list, index=st.session_state.aoa_cfg)
+    aoa_config = st.sidebar.radio("How would you like to do AoA estimation to get Range-Azimuth(RA)?", aoa_config_list, index=st.session_state.aoa_cfg)
     st.session_state.aoa_cfg = aoa_config_list.index(aoa_config)
-    #
-    if aoa_config in ("Barlett", "Capon"):
-      expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-      if counter not in st.session_state:
-        st.session_state[counter] = st.session_state.frame_id
-      with expander_RA:
-        show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
-  else:
-    expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-    if counter not in st.session_state:
-      st.session_state[counter] = st.session_state.frame_id
-    with expander_RA:
-      show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
+  # NOTE: the RA figure is rendered below the RD figure (see the RA render block after RD).
 
 
 if "noise_cfg" not in st.session_state:
@@ -401,7 +416,12 @@ if "radarPC" in features and not features_show[features.index("radarPC")]:
   if "cfar_cfg" not in st.session_state:
     st.session_state.cfar_cfg = 0
   cfar_config_list = ["Not interested", "CA-CFAR", "CASO-CFAR", "CAGO-CFAR", "OS-CFAR"]
-  cfar_config = st.sidebar.radio("How would you like to do CFAR detection?", cfar_config_list, index=st.session_state.cfar_cfg)
+  cfar_config = st.sidebar.radio(
+    "Through which CFAR method would you like to extract the radar point cloud (CFAR)?", cfar_config_list,
+    index=st.session_state.cfar_cfg,
+    help="CFAR detection extracts the radar point cloud from the range-Doppler map. "
+         "Pick a CFAR variant to compute and display it."
+  )
   st.session_state.cfar_cfg = cfar_config_list.index(cfar_config)
 
 
@@ -451,20 +471,24 @@ if feature in features and (features_show[features.index("RD")] or fft_config in
     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=cfg)
 
 
-# feature = "RA" 
-# counter = f"counter_{feature}"  
-# if aoa_config in ("Barlett", "Capon"):
-#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-#   if counter not in st.session_state:
-#     st.session_state[counter] = st.session_state.frame_id
-#   with expander_RA:
-#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
-# elif feature in features:
-#   expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
-#   if counter not in st.session_state:
-#     st.session_state[counter] = st.session_state.frame_id
-#   with expander_RA:
-#     show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
+# RA figure rendered here so it appears below the RD figure. The AoA sidebar config
+# (aoa_config) is computed further up; here we only render.
+feature = "RA"
+counter = f"counter_{feature}"
+if feature in features:
+  if not features_show[features.index(feature)]:
+    if aoa_config in ("Barlett", "Capon"):
+      expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+      if counter not in st.session_state:
+        st.session_state[counter] = st.session_state.frame_id
+      with expander_RA:
+        show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=aoa_config)
+  else:
+    expander_RA = st.expander("Range-Azimuth(RA) feature", expanded=True)
+    if counter not in st.session_state:
+      st.session_state[counter] = st.session_state.frame_id
+    with expander_RA:
+      show_feature(datafile_chosen['id'], feature, counter, st.session_state.frame_id, config=None)
 
 
 feature = "spectrogram" 
@@ -578,7 +602,13 @@ st.multiselect("Which features would you like to select as train input?", featur
 
 button_click = st.button("Go to train", key='switch_train_page')
 if button_click:
-  if st.session_state.features_chosen:
+  unlabeled = [f["name"] for f in st.session_state.datafiles_chosen if not f.get("labeled")]
+  if unlabeled:
+    st.info(
+      "These data files have no label info and can't be used for training: "
+      f"{', '.join(unlabeled)}. Please choose labeled data."
+    )
+  elif st.session_state.features_chosen:
     #check_datafiles(st.session_state.datafiles_chosen)
     switch_page("train model")
   else:
