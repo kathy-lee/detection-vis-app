@@ -168,7 +168,9 @@ def draw_vod_3d_panels(file_id, pred_objs):
   plt.imshow(img)
   plt.title(f"index: {viz_idx} — pred solid, gt dashed")
   for obj in feature_data.get("gt_label") or []:
-    xs, ys = obj[0:16:2], obj[1:16:2]
+    # get_label("image") rows are planar [x1..x8, y1..y8, cls] (corners_img.flatten()
+    # of a (2,8) array), unlike the backend's interleaved prediction rows
+    xs, ys = obj[0:8], obj[8:16]
     _draw_projected_box(xs, ys, "red", linestyle="--")
   for row in pred_objs.get("image_boxes") or []:
     xs, ys = row[0:16:2], row[1:16:2]
