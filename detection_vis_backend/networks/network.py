@@ -1042,7 +1042,6 @@ class RadarPillar(nn.Module):
         self.loss_cfg = train_config.get("losses", {})
 
     def get_loss(self, pred, batch, config):
-        # raise NotImplementedError("RadarPillar loss lands with plan Task 8")
         # Target assignment happens here (it needs the anchors, which live with the
         # network); gt arrives padded from radarpillar_collate (-1 labels = padding).
         targets = []
@@ -1052,6 +1051,8 @@ class RadarPillar(nn.Module):
                 self.net.anchors_np, self.net.anchor_classes_np,
                 batch["gt_boxes"][b][valid].cpu().numpy(),
                 batch["gt_labels"][b][valid].cpu().numpy(), self.model_cfg))
+        # radarpillar_loss returns component losses; the app contract
+        # (train loop's loss.backward(), eval's loss.item()) is a scalar.
         return radarpillar_loss(pred, targets, self.net.anchors_np,
                                 self.net.anchor_classes_np, self.loss_cfg,
-                                next(self.parameters()).device)
+                                next(self.parameters()).device)["loss"]

@@ -436,3 +436,81 @@ def radarpillar_loss(pred, targets, anchors_np, anchor_classes_np, loss_cfg, dev
             loss_cfg.get("box_weight", 2.0) * loss_box +
             loss_cfg.get("dir_weight", 0.2) * loss_dir)
     return {"loss": loss, "loss_cls": loss_cls, "loss_box": loss_box, "loss_dir": loss_dir}
+
+
+def _limit_period(val, offset, period):
+    return val - torch.floor(val / period + offset) * period
+
+
+def decode_predictions(pred, anchors_t, model_cfg):
+    """Raw head outputs -> decoded boxes + sigmoid scores, with the reference's
+    direction-bin correction (anchor_head_template.generate_predicted_boxes):
+    yaw = limit_period(yaw - DIR_OFFSET, DIR_LIMIT_OFFSET=0, pi) + DIR_OFFSET + pi*bin.
+    """
+    boxes = decode_boxes(pred["box_preds"], anchors_t.unsqueeze(0))
+    dir_offset = model_cfg.get("dir_offset", 0.78539)
+    dir_labels = pred["dir_preds"].argmax(dim=-1)
+    period = np.pi   # 2pi / 2 bins
+    dir_rot = _limit_period(boxes[..., 6] - dir_offset, 0.0, period)
+    boxes = boxes.clone()
+    boxes[..., 6] = dir_rot + dir_offset + period * dir_labels.to(boxes.dtype)
+    return boxes, torch.sigmoid(pred["cls_preds"])
+
+
+def rotated_nms(boxes, scores, iou_thresh, pre_max, post_max):
+    """Greedy NMS on exact rotated BEV IoU; returns kept indices into `boxes`.
+    CPU is fine: candidates are capped at pre_max=4096 and VoD scenes hold tens
+    of objects."""
+    order = np.argsort(-scores)[:pre_max]
+    keep = []
+    while len(order) and len(keep) < post_max:
+        i = order[0]
+        keep.append(int(i))
+        if len(order) == 1:
+            break
+        ious = rotated_iou_bev(boxes[i:i + 1], boxes[order[1:]])[0]
+        order = order[1:][ious <= iou_thresh]
+    return np.array(keep, dtype=np.int64)
+
+
+def postprocess(pred, anchors_t, model_cfg, train_cfg):
+    """Per-class score threshold + rotated NMS, per the reference
+    model_nms_utils.multi_classes_nms (MULTI_CLASSES_NMS: True)."""
+    boxes_b, scores_b = decode_predictions(pred, anchors_t, model_cfg)
+    score_thresh = train_cfg.get("confidence_threshold", 0.1)
+    results = []
+    for b in range(boxes_b.shape[0]):
+        boxes = boxes_b[b].detach().cpu().numpy()
+        scores = scores_b[b].detach().cpu().numpy()
+        out_boxes, out_labels, out_scores = [], [], []
+        for k in range(scores.shape[1]):
+            mask = scores[:, k] >= score_thresh
+            if not mask.any():
+                continue
+            kept = rotated_nms(boxes[mask], scores[mask, k],
+                               train_cfg.get("nms_iou_threshold", 0.1),
+                               train_cfg.get("nms_pre_max", 4096),
+                               train_cfg.get("nms_post_max", 500))
+            out_boxes.append(boxes[mask][kept])
+            out_scores.append(scores[mask, k][kept])
+            out_labels.append(np.full(len(kept), k, dtype=np.int64))
+        if out_boxes:
+            results.append({"boxes": np.concatenate(out_boxes),
+                            "labels": np.concatenate(out_labels),
+                            "scores": np.concatenate(out_scores)})
+        else:
+            results.append({"boxes": np.zeros((0, 7), np.float32),
+                            "labels": np.zeros((0,), np.int64),
+                            "scores": np.zeros((0,), np.float32)})
+    return results
+
+
+def box_corners_3d(box):
+    """(7,) box -> (8,3) radar-frame corners, bottom 4 then top 4, yaw-rotated."""
+    x, y, z, l, w, h, yaw = box[:7]
+    xc = np.array([l, l, -l, -l, l, l, -l, -l]) / 2.0
+    yc = np.array([w, -w, -w, w, w, -w, -w, w]) / 2.0
+    zc = np.array([-h, -h, -h, -h, h, h, h, h]) / 2.0
+    c, s = np.cos(yaw), np.sin(yaw)
+    corners = np.stack([c * xc - s * yc + x, s * xc + c * yc + y, zc + z], axis=-1)
+    return corners

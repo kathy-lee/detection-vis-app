@@ -183,7 +183,7 @@ def set_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depend
         dataset_factory = DatasetFactory()
         # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         # sync_mode is a sticky single-user view toggle; it must outlive this request,
-        # so it is written to the shared instance deliberately. See spec section 2.
+        # so it is written to the shared instance deliberately.
         dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = True
         sync_frames = len(dataset_inst.sync_indices)
@@ -201,7 +201,7 @@ def unset_sync(file_id: int, skip: int = 0, limit: int = 100, db: Session = Depe
         dataset_factory = DatasetFactory()
         # dataset_inst = dataset_factory.get_instance(datafile.parse, file_id)
         # sync_mode is a sticky single-user view toggle; it must outlive this request,
-        # so it is written to the shared instance deliberately. See spec section 2.
+        # so it is written to the shared instance deliberately.
         dataset_inst = dataset_factory.get_shared_instance(datafile.parse, file_id)
         dataset_inst.sync_mode = False
     except Exception as e:

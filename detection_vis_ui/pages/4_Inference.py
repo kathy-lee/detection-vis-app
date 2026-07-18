@@ -95,8 +95,14 @@ for idx,tab in enumerate(tabs):
       val_eval = pd.read_csv(os.path.join(model_path, "val_eval.csv"))
       st.table(val_eval)
       st.write("Test dataset")
-      test_eval = pd.read_csv(os.path.join(model_path, "test_eval.csv"))
-      st.table(test_eval)
+      test_eval_path = os.path.join(model_path, "test_eval.csv")
+      if os.path.exists(test_eval_path):
+        test_eval = pd.read_csv(test_eval_path)
+        st.table(test_eval)
+      else:
+        # A sequence split with no test files, or the official ViewOfDelft split
+        # (no test labels), skips the test evaluation -- there is nothing to show.
+        st.info("No test evaluation: this training run used a split without test data.")
 
 # # Get sample split info of the chosen model
 # with open(os.path.join(model_path, "samples_split.txt"), 'r') as f:
@@ -130,6 +136,75 @@ def get_feature(file_id, feature, idx):
 # CARRADA semantic-segmentation classes (0=background is drawn transparent).
 SEG_CLASS_NAMES = ["background", "pedestrian", "cyclist", "car"]
 SEG_CLASS_COLORS = ["red", "lime", "deepskyblue"]   # classes 1,2,3
+
+# ViewOfDelft 3D detection (RadarPillar): backend sends projected/BEV corners.
+VOD_CLASS_NAMES = ["Car", "Pedestrian", "Cyclist"]
+VOD_CLASS_COLORS = ["deepskyblue", "lime", "orange"]
+
+
+def _draw_projected_box(xs, ys, color, linestyle="-", linewidth=1.2):
+  """Draw an 8-corner projected 3D box: bottom face, top face, four pillars.
+  Corner order matches box_corners_3d (bottom 4 then top 4)."""
+  bottom = [0, 1, 2, 3, 0]
+  top = [4, 5, 6, 7, 4]
+  plt.plot([xs[i] for i in bottom], [ys[i] for i in bottom], color=color, ls=linestyle, lw=linewidth)
+  plt.plot([xs[i] for i in top], [ys[i] for i in top], color=color, ls=linestyle, lw=linewidth)
+  for i in range(4):
+    plt.plot([xs[i], xs[i + 4]], [ys[i], ys[i + 4]], color=color, ls=linestyle, lw=linewidth)
+
+
+def draw_vod_3d_panels(file_id, pred_objs):
+  """Two panels for RadarPillar on ViewOfDelft: predicted 3D boxes projected on
+  the camera image (gt dashed red, from the /feature gt payload) and a BEV plot
+  of the radar points with pred vs gt rectangles. All geometry comes projected
+  from the backend (the frontend has no calib access)."""
+  viz_idx = pred_objs["viz_idx"]
+
+  # --- camera panel ---
+  feature_data = get_feature(file_id, "image", viz_idx)
+  image_path = feature_data["serialized_feature"]
+  img = np.load(image_path) if str(image_path).endswith(".npy") else mpimg.imread(image_path)
+  plt.figure(figsize=(10, 5))
+  plt.imshow(img)
+  plt.title(f"index: {viz_idx} — pred solid, gt dashed")
+  for obj in feature_data.get("gt_label") or []:
+    xs, ys = obj[0:16:2], obj[1:16:2]
+    _draw_projected_box(xs, ys, "red", linestyle="--")
+  for row in pred_objs.get("image_boxes") or []:
+    xs, ys = row[0:16:2], row[1:16:2]
+    cls_id, score = int(row[16]), row[17]
+    _draw_projected_box(xs, ys, VOD_CLASS_COLORS[cls_id])
+    plt.text(min(xs), min(ys) - 4, f"{VOD_CLASS_NAMES[cls_id]} {score:.2f}",
+             color=VOD_CLASS_COLORS[cls_id], fontsize=8)
+  plt.axis("off")
+  st.pyplot(plt)
+  plt.close()
+
+  # --- BEV panel (x forward plotted upward, y left on the horizontal axis) ---
+  pc_data = get_feature(file_id, "radarPC", viz_idx)
+  pts = np.array(pc_data["serialized_feature"])
+  plt.figure(figsize=(7, 7))
+  if pts.size:
+    plt.scatter(pts[:, 1], pts[:, 0], s=2, c="gray", label="radar points")
+  for obj in pc_data.get("gt_label") or []:
+    corners = np.array(obj[:24], dtype=float).reshape(8, 3)[:4]
+    closed = np.vstack([corners, corners[:1]])
+    plt.plot(closed[:, 1], closed[:, 0], "r--", lw=1.2)
+  for row in pred_objs.get("bev_boxes") or []:
+    xs, ys = row[0:8:2], row[1:8:2]
+    cls_id, score = int(row[8]), row[9]
+    plt.plot(list(ys) + [ys[0]], list(xs) + [xs[0]],
+             color=VOD_CLASS_COLORS[cls_id], lw=1.4)
+  handles = [mpatches.Patch(color=VOD_CLASS_COLORS[i], label=VOD_CLASS_NAMES[i]) for i in range(3)]
+  handles.append(mpatches.Patch(color="red", label="ground truth"))
+  plt.legend(handles=handles, loc="upper right", fontsize=8)
+  plt.xlabel("y [m] (left)")
+  plt.ylabel("x [m] (forward)")
+  plt.gca().invert_xaxis()
+  plt.grid(True, alpha=0.3)
+  plt.title("Bird's-eye view — pred solid, gt dashed")
+  st.pyplot(plt)
+  plt.close()
 
 
 def is_seg_pred(pred):
@@ -167,6 +242,10 @@ def draw_seg_overlay(file_id, feature, seg, xlabel, ylabel, rot_k=0):
 
 @st.cache_data
 def show_pred_with_gt(file_id, features, frame_id, pred_objs):
+  # RadarPillar (ViewOfDelft) sends 3D-box display geometry, not per-feature maps.
+  if isinstance(pred_objs, dict) and "bev_boxes" in pred_objs:
+    draw_vod_3d_panels(file_id, pred_objs)
+    return
   for feature in pred_objs.keys():
     if feature == "lidarPC" or feature == "radarPC":
       feature_data = get_feature(file_id, feature, frame_id)

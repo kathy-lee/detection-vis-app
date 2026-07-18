@@ -270,3 +270,158 @@ def test_loss_penalizes_wrong_boxes_more():
     l_good = radarpillar_loss(dict(base, box_preds=good), [tgt], anchors, classes, _loss_cfg(), "cpu")["loss_box"]
     l_bad = radarpillar_loss(dict(base, box_preds=bad), [tgt], anchors, classes, _loss_cfg(), "cpu")["loss_box"]
     assert l_bad > l_good
+
+
+def test_decode_dir_correction_recovers_flipped_heading():
+    """A heading in the second half-circle must be recovered by the direction bin:
+    yaw_out = limit_period(yaw - off, 0, pi) + off + pi * bin (reference
+    anchor_head_template.generate_predicted_boxes)."""
+    import torch
+    from detection_vis_backend.networks.radarpillar import encode_boxes, decode_predictions
+    anchors, classes = _grid()
+    idx = np.where((classes == 0) & (np.abs(anchors[:, 6]) < 1e-6))[0][100]
+    gt = anchors[idx:idx + 1].copy()
+    gt[0, 6] = np.pi * 0.9            # heading in the second half-circle
+    deltas = encode_boxes(gt, anchors[idx:idx + 1])
+    A = anchors.shape[0]
+    box_preds = torch.zeros((1, A, 7))
+    box_preds[0, idx] = torch.from_numpy(deltas[0])
+    cls_preds = torch.full((1, A, 3), -12.0)
+    cls_preds[0, idx, 0] = 12.0
+    # dir bin for yaw 0.9pi, offset ~pi/4: ((0.9pi - pi/4) mod 2pi) = 0.65pi < pi -> bin 0
+    dir_preds = torch.zeros((1, A, 2))
+    dir_preds[0, idx, 0] = 10.0
+    boxes, scores = decode_predictions(
+        {"cls_preds": cls_preds, "box_preds": box_preds, "dir_preds": dir_preds},
+        torch.from_numpy(anchors), MODEL_CFG_DIR)
+    diff = (boxes[0, idx, 6].item() - gt[0, 6]) % (2 * np.pi)
+    assert min(diff, 2 * np.pi - diff) < 1e-4
+    assert scores[0, idx, 0] > 0.99   # sigmoid of 12
+
+
+def test_rotated_nms_keeps_best_and_disjoint():
+    from detection_vis_backend.networks.radarpillar import rotated_nms
+    boxes = np.stack([_box(10, 10, 4, 2, 0.0), _box(10.2, 10, 4, 2, 0.05), _box(40, -5, 4, 2, 1.0)])
+    scores = np.array([0.9, 0.6, 0.8], dtype=np.float32)
+    keep = rotated_nms(boxes, scores, iou_thresh=0.1, pre_max=4096, post_max=500)
+    assert list(keep) == [0, 2]   # overlapping lower-score suppressed; disjoint kept
+
+
+def test_postprocess_thresholds_and_labels():
+    import torch
+    from detection_vis_backend.networks.radarpillar import postprocess
+    anchors, classes = _grid()
+    A = anchors.shape[0]
+    car_idx = np.where((classes == 0) & (np.abs(anchors[:, 6]) < 1e-6))[0][100]
+    ped_idx = np.where((classes == 1) & (np.abs(anchors[:, 6]) < 1e-6))[0][200]
+    cls_preds = torch.full((1, A, 3), -12.0)
+    cls_preds[0, car_idx, 0] = 12.0     # confident Car
+    cls_preds[0, ped_idx, 1] = -1.0     # sigmoid ~0.27 Pedestrian
+    pred = {"cls_preds": cls_preds, "box_preds": torch.zeros((1, A, 7)),
+            "dir_preds": torch.zeros((1, A, 2))}
+    tcfg = {"confidence_threshold": 0.1, "nms_iou_threshold": 0.1,
+            "nms_pre_max": 4096, "nms_post_max": 500}
+    out = postprocess(pred, torch.from_numpy(anchors), MODEL_CFG_DIR, tcfg)[0]
+    assert 0 in out["labels"] and 1 in out["labels"]     # both above 0.1
+    tcfg["confidence_threshold"] = 0.5
+    out = postprocess(pred, torch.from_numpy(anchors), MODEL_CFG_DIR, tcfg)[0]
+    assert set(out["labels"].tolist()) == {0}            # ped filtered at 0.5
+
+
+def test_infer_readout_geometry():
+    """Backend-computed display geometry (the frontend has no calib access):
+    each image box row = 8 projected corners + cls + score (18 values), each BEV
+    box row = 4 corners + cls + score (10 values). Uses the real VoD calib of
+    file 110 and an UNTRAINED net on CPU -- geometry must be structurally valid
+    regardless of prediction quality. Mirrors the infer() branch: collate ->
+    net(input) -> postprocess -> radarpillar_display_geometry."""
+    import os, json, torch
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
+    from detection_vis_backend.networks.network import NetworkFactory
+    from detection_vis_backend.networks.radarpillar import postprocess
+    from detection_vis_backend.train.utils import radarpillar_collate
+    from detection_vis_backend.train.inference import radarpillar_display_geometry
+    from data.database import get_session_local
+    from data import crud
+
+    model_cfg = json.load(open("detection_vis_backend/networks/RadarPillar_model_config.json"))
+    train_cfg = json.load(open("detection_vis_backend/train/RadarPillar_train_config.json"))
+    # untrained net emits ~0.5 sigmoid everywhere; keep the readout fast and non-empty
+    train_cfg = dict(train_cfg, confidence_threshold=0.0, nms_pre_max=256, nms_post_max=3)
+
+    db = get_session_local()
+    datafile = crud.get_datafile(db, 110)
+    db.close()
+    ds = ViewOfDelft()
+    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    ds._request_scoped = True
+    ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
+
+    net = NetworkFactory().get_instance("RadarPillar", dict(model_cfg, **{"class": "RadarPillar"}))
+    net.eval()
+    batch = radarpillar_collate([ds[0]])
+    with torch.no_grad():
+        res = postprocess(net(batch), net.net.anchors, model_cfg, train_cfg)[0]
+    out = radarpillar_display_geometry(res, ds, 0)
+
+    assert out["viz_idx"] == 0
+    assert len(out["bev_boxes"]) > 0
+    for row in out["bev_boxes"]:
+        assert len(row) == 10
+        xs, ys = row[0:8:2], row[1:8:2]
+        # corners stay near the configured range (box diagonal margin)
+        assert min(xs) > -6 and max(xs) < 51.2 + 6
+        assert min(ys) > -25.6 - 6 and max(ys) < 25.6 + 6
+    for row in out["image_boxes"]:
+        assert len(row) == 18
+        assert all(np.isfinite(v) for v in row)
+
+
+def test_radarpillar_evaluation_writes_kitti_files_and_scores(tmp_path):
+    """Adapter contract (slice 3): one KITTI prediction file per val frame with
+    16-field lines (the devkit parser zeroes scores on any other width), devkit
+    result keys, and the standard eval-function return shape. Untrained CPU net
+    with a high confidence threshold keeps the detection set tiny."""
+    import os, json, torch
+    from torch.utils.data import DataLoader, Subset
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
+    from detection_vis_backend.networks.network import NetworkFactory
+    from detection_vis_backend.train.evaluate import RadarPillar_evaluation, eval_func_dict
+    from detection_vis_backend.train.utils import radarpillar_collate
+    from data.database import get_session_local
+    from data import crud
+
+    assert callable(eval_func_dict["RadarPillar", "ViewOfDelft"])
+
+    model_cfg = json.load(open("detection_vis_backend/networks/RadarPillar_model_config.json"))
+    train_cfg = json.load(open("detection_vis_backend/train/RadarPillar_train_config.json"))
+    # untrained net: keep detections sparse and NMS cheap
+    train_cfg = dict(train_cfg, confidence_threshold=0.9, nms_pre_max=64, nms_post_max=8)
+
+    db = get_session_local()
+    datafile = crud.get_datafile(db, 110)
+    db.close()
+    ds = ViewOfDelft()
+    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    ds._request_scoped = True
+    ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
+
+    net = NetworkFactory().get_instance("RadarPillar", dict(model_cfg, **{"class": "RadarPillar"}))
+    net.init_lossfunc(train_cfg, "cpu")
+
+    loader = DataLoader(Subset(ds, [0, 1, 2]), batch_size=2, collate_fn=radarpillar_collate)
+    result = RadarPillar_evaluation(net, loader, train_cfg, ["radarPC"], str(tmp_path), "val", "cpu")
+
+    assert set(result) >= {"mAP", "mAR", "mIoU", "loss"}
+    pred_dir = tmp_path / "vod_eval_val"
+    files = sorted(os.listdir(pred_dir))
+    assert len(files) == 3, "one file per val frame, even if empty"
+    for fn in files:
+        assert len(os.path.splitext(fn)[0]) == 5 and fn.endswith(".txt")
+        for line in (pred_dir / fn).read_text().splitlines():
+            parts = line.split(" ")
+            assert len(parts) == 16
+            assert parts[0] in ("Car", "Pedestrian", "Cyclist")
+            float(parts[15])

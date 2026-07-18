@@ -163,8 +163,7 @@ class ViewOfDelft(Dataset):
 
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         require_request_scope(self)
-        # return
-        # RadarPillar (spec 2026-07-16): request-scoped training config only --
+        # request-scoped training config only 
         # everything here lives on the factory's request copy, never the shared
         # instance (state-ownership boundary).
         self.model_type = model_cfg.get("class", "RadarPillar")

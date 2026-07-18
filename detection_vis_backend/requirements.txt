@@ -18,3 +18,4 @@ pkbar
 rq
 redis
 fakeredis
+numba

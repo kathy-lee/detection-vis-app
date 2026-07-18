@@ -1828,10 +1828,115 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
 
 
 
+def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
+    """Official VoD devkit evaluation (KITTI-style 3D AP, R11, rotated IoU;
+    tudelft-iv/view-of-delft-dataset, copied under train/vod_evaluation).
+
+    Radar-frame detections are converted back to KITTI camera frame -- the exact
+    inverse of ViewOfDelft._gt_boxes_radar, mirroring the reference
+    generate_prediction_dicts (fthbng77/RadarPillar vod_dataset.py:300-375):
+    bottom-center through R0_ext @ V2C_ext, dims written h w l, ry = -yaw - pi/2,
+    alpha = -arctan2(-y, x) + ry. The projected image bbox is required: the
+    devkit ignores detections whose bbox height is under 40 px
+    (kitti_official_evaluate.clean_data). Every val frame gets a file, even if
+    empty -- the devkit derives the frame list from the prediction directory.
+    Returned mAP/AP values are in PERCENT (Table I convention, e.g. 46.7),
+    unlike the other models' 0-1 fractions.
+    """
+    from detection_vis_backend.networks.radarpillar import postprocess, box_corners_3d
+    from detection_vis_backend.train.vod_evaluation import Evaluation
+
+    net.eval()
+    running_loss = 0.0
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    batch_size = train_config['dataloader'][eval_type]['batch_size']
+
+    # Unwrap Subset / random_split / ConcatDataset nesting to the ViewOfDelft
+    # instance (frame_ids index into it; calib + label paths live on it).
+    dataset = dataloader.dataset
+    while not hasattr(dataset, 'label_filenames'):
+        if hasattr(dataset, 'dataset'):
+            dataset = dataset.dataset
+        elif hasattr(dataset, 'datasets'):
+            dataset = dataset.datasets[0]
+        else:
+            raise ValueError("RadarPillar_evaluation: no ViewOfDelft dataset inside the loader")
+
+    img = cv2.imread(dataset.image_filenames[0])
+    img_h, img_w = img.shape[:2]
+
+    pred_dir = os.path.join(output_dir, f'vod_eval_{eval_type}')
+    os.makedirs(pred_dir, exist_ok=True)
+    for stale in os.listdir(pred_dir):          # fresh prediction set every epoch
+        os.remove(os.path.join(pred_dir, stale))
+
+    class_names = ["Car", "Pedestrian", "Cyclist"]
+    model_cfg = dict(net.model_cfg)
+
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device)   # dtype-preserving: coords/labels stay int
+        with torch.set_grad_enabled(False):
+            outputs = net(data)
+        if eval_type == 'val':
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * batch_size
+
+        results = postprocess(outputs, net.net.anchors, model_cfg, train_config)
+        for b, res in enumerate(results):
+            frame_idx = data['frame_ids'][b]
+            frame_name = os.path.basename(dataset.label_filenames[frame_idx])[:-4]
+            intrinsic, R0_ext, V2C_ext = dataset._calib_radar(frame_idx)
+            cam_from_radar = R0_ext @ V2C_ext
+            lines = []
+            for k in range(len(res['boxes'])):
+                x, y, z, l, w, h, yaw = [float(v) for v in res['boxes'][k]]
+                bottom = cam_from_radar @ np.array([x, y, z - h / 2.0, 1.0], dtype=np.float32)
+                ry = -yaw - np.pi / 2
+                alpha = -np.arctan2(-y, x) + ry
+                corners = box_corners_3d(np.array([x, y, z, l, w, h, yaw]))
+                cam = (cam_from_radar @ np.concatenate([corners, np.ones((8, 1))], axis=1).T).T[:, :3]
+                if cam[:, 2].min() < 0.1:
+                    continue                     # corner at/behind the image plane: unprojectable
+                uvw = (intrinsic @ np.concatenate([cam, np.ones((8, 1))], axis=1).T).T
+                us, vs = uvw[:, 0] / uvw[:, 2], uvw[:, 1] / uvw[:, 2]
+                u0, v0 = max(float(us.min()), 0.0), max(float(vs.min()), 0.0)
+                u1 = min(float(us.max()), img_w - 1.0)
+                v1 = min(float(vs.max()), img_h - 1.0)
+                lines.append('%s -1 -1 %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f'
+                             % (class_names[int(res['labels'][k])], alpha, u0, v0, u1, v1,
+                                h, w, l, bottom[0], bottom[1], bottom[2], ry, float(res['scores'][k])))
+            with open(os.path.join(pred_dir, frame_name + '.txt'), 'w') as f:
+                f.write('\n'.join(lines) + ('\n' if lines else ''))
+
+        if eval_type == 'val':
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+
+    gt_dir = os.path.join(dataset.root_path, 'radar', 'training', 'label_2')
+    vod_result = Evaluation(test_annotation_file=gt_dir).evaluate(
+        result_path=pred_dir, current_class=[0, 1, 2])
+    ea, roi = vod_result['entire_area'], vod_result['roi']
+    mAP = (ea['Car_3d_all'] + ea['Pedestrian_3d_all'] + ea['Cyclist_3d_all']) / 3
+    mAP_roi = (roi['Car_3d_all'] + roi['Pedestrian_3d_all'] + roi['Cyclist_3d_all']) / 3
+    logger.info('------- VoD official metric (3D AP, percent) ------------')
+    logger.info(f"  Entire area: Car {ea['Car_3d_all']:.2f} | Ped {ea['Pedestrian_3d_all']:.2f} | "
+                f"Cyc {ea['Cyclist_3d_all']:.2f} | mAP {mAP:.2f}")
+    logger.info(f"  Driving corridor: Car {roi['Car_3d_all']:.2f} | Ped {roi['Pedestrian_3d_all']:.2f} | "
+                f"Cyc {roi['Cyclist_3d_all']:.2f} | mAP {mAP_roi:.2f}")
+
+    result = {'mAP': mAP, 'mAR': 0.0, 'mIoU': 0.0}
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
+
+
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention" ] + RODNet_subtypes + RECORD_subtypes
-dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR"]
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention", "RadarPillar" ] + RODNet_subtypes + RECORD_subtypes
+dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
 eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
 for i in RODNet_subtypes:
@@ -1845,3 +1950,4 @@ eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
 eval_func_dict["DAROD", "CARRADA"] = DAROD_evaluation
 eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
 eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation
+eval_func_dict["RadarPillar", "ViewOfDelft"] = RadarPillar_evaluation

@@ -276,7 +276,7 @@ def test_train_calls_progress_cb_per_epoch():
 @pytest.mark.skipif(os.getenv("RUN_GPU_TESTS") != "1",
                     reason="GPU + VoD data; run with RUN_GPU_TESTS=1")
 def test_radarpillar_overfits_one_batch():
-    """Slice-1 exit gate (spec 2026-07-16 SS7): a few hundred steps on ONE real
+    """Slice-1 exit gate: a few hundred steps on ONE real
     batch must collapse the loss. Catches assignment/encoding/ordering bugs
     before any real training run."""
     import json
@@ -319,10 +319,107 @@ def test_radarpillar_overfits_one_batch():
     first = None
     for step in range(300):
         opt.zero_grad()
-        loss = net.get_loss(net(batch), batch, train_cfg)["loss"]
+        loss = net.get_loss(net(batch), batch, train_cfg)
         if first is None:
             first = loss.item()
         loss.backward()
         opt.step()
     final = loss.item()
     assert final < 0.10 * first, f"loss did not collapse: {first:.3f} -> {final:.3f}"
+
+
+@pytest.mark.skipif(os.getenv("RUN_GPU_TESTS") != "1",
+                    reason="GPU + VoD data; run with RUN_GPU_TESTS=1")
+def test_radarpillar_overfit_model_reproduces_gt():
+    """Slice-2 exit gate: the overfit model, run through
+    decode + direction correction + NMS, must reproduce its own memorized gt --
+    every gt matched by a same-class prediction at rotated IoU > 0.7, score > 0.5.
+    A wrong dir correction or head-ordering bug cannot pass this."""
+    import json
+    import torch
+    from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
+    from detection_vis_backend.networks.network import NetworkFactory
+    from detection_vis_backend.train.utils import radarpillar_collate
+    from detection_vis_backend.networks.radarpillar import postprocess, rotated_iou_bev
+    from data.database import get_session_local
+    from data import crud
+
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    with open("detection_vis_backend/networks/RadarPillar_model_config.json") as f:
+        model_cfg = json.load(f)
+    with open("detection_vis_backend/train/RadarPillar_train_config.json") as f:
+        train_cfg = json.load(f)
+
+    db = get_session_local()
+    datafile = crud.get_datafile(db, 110)
+    db.close()
+    ds = ViewOfDelft()
+    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    ds._request_scoped = True
+    ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
+    samples = []
+    for i in range(60):
+        s = ds[i]
+        if len(s["gt_boxes"]):
+            samples.append(s)
+        if len(samples) == 4:
+            break
+    assert len(samples) == 4
+    batch = radarpillar_collate(samples)
+
+    device = "cuda"
+    net = NetworkFactory().get_instance("RadarPillar", dict(model_cfg, **{"class": "RadarPillar"})).to(device)
+    net.init_lossfunc(train_cfg, device)
+    batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+    opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+    # 300 steps localize near-perfectly but focal loss (alpha 0.25) raises
+    # confidence slowly on a 4-sample overfit; 800 steps clear score>0.5.
+    for step in range(800):
+        opt.zero_grad()
+        loss = net.get_loss(net(batch), batch, train_cfg)
+        loss.backward()
+        opt.step()
+
+    net.eval()
+    with torch.no_grad():
+        results = postprocess(net(batch), net.net.anchors, model_cfg, train_cfg)
+    for b in range(len(results)):
+        valid = batch["gt_labels"][b] >= 0
+        gts = batch["gt_boxes"][b][valid].cpu().numpy()
+        gt_labels = batch["gt_labels"][b][valid].cpu().numpy()
+        res = results[b]
+        for g, gl in zip(gts, gt_labels):
+            same = res["boxes"][(res["labels"] == gl) & (res["scores"] > 0.5)]
+            assert len(same), f"sample {b}: gt of class {gl} has no confident prediction"
+            iou = rotated_iou_bev(g[None], same)[0]
+            assert iou.max() > 0.7, f"sample {b}: best IoU {iou.max():.2f} for class {gl}"
+
+
+def test_ViewOfDelft_original_split_loaders(tmp_path):
+    """splitmode 'original' = the official ImageSets split: 5139 train / 1296 val,
+    no test labels -> test bucket empty (skip-test handling applies)."""
+    os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
+    from detection_vis_backend.datasets.dataset import DatasetFactory
+    from data.database import get_session_local
+    from data import crud
+
+    db = get_session_local()
+    datafile = crud.get_datafile(db, 110)
+    db.close()
+    factory = DatasetFactory()
+    factory.get_shared_instance(
+        "ViewOfDelft", 110,
+        parse_args=(110, datafile.path, datafile.name, datafile.config))
+
+    model_config = json.load(open("detection_vis_backend/networks/RadarPillar_model_config.json"))
+    model_config["class"] = "RadarPillar"
+    train_config = json.load(open("detection_vis_backend/train/RadarPillar_train_config.json"))
+    train_config["dataloader"]["splitmode"] = "original"
+
+    datafiles = [{"parse": "ViewOfDelft", "id": 110, "name": datafile.name, "path": datafile.path}]
+    train_loader, val_loader, test_loader = CreateDataLoaders(
+        datafiles, ["radarPC"], model_config, train_config, str(tmp_path))
+
+    assert len(train_loader.dataset) == 5139
+    assert len(val_loader.dataset) == 1296
+    assert test_loader is None

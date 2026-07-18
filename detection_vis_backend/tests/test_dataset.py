@@ -85,7 +85,7 @@ def test_ViewOfDelft(db_session: Session):
 
 
 def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
-    """RadarPillar training support (spec 2026-07-16 / plan Task 6): __getitem__
+    """RadarPillar training support: __getitem__
     yields pillar tensors + radar-frame gt boxes for the configured radar variant."""
     # mirrors RadarPillar_model_config.json (Task 7); inlined so this test does not
     # depend on task execution order
