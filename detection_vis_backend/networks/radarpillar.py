@@ -194,8 +194,15 @@ def pillarize(points, model_cfg):
             (points[:, 2] >= z0) & (points[:, 2] < z1))
     pts = points[keep]
     nx = int(round((x1 - x0) / vx))
+    ny = int(round((y1 - y0) / vy))
     ix = ((pts[:, 0] - x0) / vx).astype(np.int64)
     iy = ((pts[:, 1] - y0) / vy).astype(np.int64)
+    # A point epsilon below the range bound passes the float64 keep-filter but the
+    # float32 division can round up to exactly nx/ny (51.199997f/0.16f == 320.0f),
+    # which would index off the BEV canvas in PillarScatter. The reference voxel
+    # generator (spconv point_to_voxel) discards such points; do the same.
+    inb = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    pts, ix, iy = pts[inb], ix[inb], iy[inb]
     key = iy * nx + ix
     uniq, inverse = np.unique(key, return_inverse=True)
     P = min(len(uniq), model_cfg["max_pillars"])

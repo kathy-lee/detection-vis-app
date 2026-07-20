@@ -190,7 +190,9 @@ def test_predict():
     assert isinstance(prediction, dict), "Prediction should be a dict keyed by feature"
     # Detection models return lists of boxes/points; segmentation models (RECORD/MVRECORD
     # on CARRADA) return mask dicts. Both are valid shapes for this endpoint.
-    assert all(isinstance(value, (list, dict)) for value in prediction.values())
+    # viz_idx (CARRADA seg readout, RadarPillar display geometry) is a scalar frame index.
+    assert all(isinstance(value, (list, dict))
+               for key, value in prediction.items() if key != "viz_idx")
 
 
 

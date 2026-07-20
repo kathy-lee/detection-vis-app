@@ -195,6 +195,30 @@ def test_pillarize_groups_points_and_offsets():
     assert np.all(two[2:] == 0.0)
 
 
+def test_pillarize_boundary_point_never_indexes_off_grid():
+    """A point epsilon below the upper range bound passes the float64 keep-filter
+    but the float32 division (51.199997f / 0.16f) rounds UP to exactly 320.0,
+    yielding ix == nx. That coord later drives the BEV scatter
+    (canvas[b, :, iy, ix]) and fires a CUDA device-side assert -- this killed the
+    first slice-3.5 gate run at epoch 1 (augmentation re-randomizes coordinates
+    every epoch, so boundary hits are re-rolled ~7.7M times per epoch).
+    The reference voxel generator (spconv, used by OpenPCDet) discards points
+    whose computed voxel index falls outside the grid; pillarize must do the same.
+    """
+    from detection_vis_backend.networks.radarpillar import pillarize
+    x_edge = np.nextafter(np.float32(51.2), np.float32(0))    # 51.199997 < 51.2
+    y_edge = np.nextafter(np.float32(25.6), np.float32(0))    # 25.599998 < 25.6
+    pts = np.zeros((3, 7), dtype=np.float32)
+    pts[0, :4] = [x_edge, 0.00, -1.0, 5.0]
+    pts[1, :4] = [40.0, y_edge, 0.0, 1.0]
+    pts[2, :4] = [1.0, 0.0, -1.0, 2.0]                        # ordinary in-range point
+    out = pillarize(pts, PILLAR_CFG)
+    nx = ny = 320
+    assert (out["coords"][:, 0] < nx).all(), f"ix off grid: {out['coords'][:, 0].max()}"
+    assert (out["coords"][:, 1] < ny).all(), f"iy off grid: {out['coords'][:, 1].max()}"
+    assert (out["coords"] >= 0).all()
+
+
 def test_collate_prepends_batch_index_and_pads_gt():
     import torch
     from detection_vis_backend.train.utils import radarpillar_collate
@@ -425,3 +449,43 @@ def test_radarpillar_evaluation_writes_kitti_files_and_scores(tmp_path):
             assert len(parts) == 16
             assert parts[0] in ("Car", "Pedestrian", "Cyclist")
             float(parts[15])
+
+
+def test_vod_augmentation_transform_invariants():
+    """Ports of fthbng77 augmentor_utils.py. The invariant that matters: a point
+    inside a gt box stays inside after every world transform (points and boxes
+    move together); radar feature columns (rcs, v_r, v_r_comp, time) are untouched."""
+    from detection_vis_backend.datasets.vod_augmentation import (
+        random_flip_along_x, global_rotation, global_scaling, VodAugmentor)
+
+    rng = np.random.default_rng(0)
+    # float32 like the real pipeline (the augmentor standardizes to float32,
+    # and the identity check compares exactly)
+    box = np.array([[10.0, 2.0, -0.5, 4.0, 1.8, 1.5, 0.4]], dtype=np.float32)
+    # a point just inside the box + one far away
+    pts = np.array([[10.5, 2.2, -0.4, 5.0, -1.0, 0.5, 0.9],
+                    [30.0, -8.0, 0.0, 2.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    def inside(box7, p):
+        c, s = np.cos(-box7[6]), np.sin(-box7[6])
+        dx, dy = p[0] - box7[0], p[1] - box7[1]
+        lx, ly = c * dx - s * dy, s * dx + c * dy
+        return abs(lx) <= box7[3] / 2 + 1e-6 and abs(ly) <= box7[4] / 2 + 1e-6
+
+    for fn in (lambda b, p: random_flip_along_x(b, p, np.random.default_rng(1)),
+               lambda b, p: global_rotation(b, p, [-0.785, 0.785], rng),
+               lambda b, p: global_scaling(b, p, [0.95, 1.05], rng)):
+        b2, p2 = fn(box.copy(), pts.copy())
+        assert inside(b2[0], p2[0]), "in-box point escaped the transformed box"
+        assert np.allclose(p2[:, 3:7], pts[:, 3:7]), "radar feature columns modified"
+
+    # flip determinism: y and yaw negate together when the coin says flip
+    b2, p2 = random_flip_along_x(box.copy(), pts.copy(), np.random.default_rng(1))
+    if b2[0, 1] != box[0, 1]:
+        assert b2[0, 1] == -box[0, 1] and b2[0, 6] == -box[0, 6] and p2[0, 1] == -pts[0, 1]
+
+    # pipeline: disabled config is identity
+    aug = VodAugmentor({"random_world_flip": False, "random_world_rotation": False,
+                        "random_world_scaling": False})
+    p3, b3 = aug(pts.copy(), box.copy())
+    assert np.array_equal(p3, pts) and np.array_equal(b3, box)

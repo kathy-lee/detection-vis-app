@@ -423,3 +423,11 @@ def test_ViewOfDelft_original_split_loaders(tmp_path):
     assert len(train_loader.dataset) == 5139
     assert len(val_loader.dataset) == 1296
     assert test_loader is None
+
+    # train subset augments, val subset must not: the two Subsets are backed by
+    # DIFFERENT request copies of the dataset (slice 3.5)
+    train_ds = train_loader.dataset.dataset   # Subset -> ViewOfDelft copy
+    val_ds = val_loader.dataset.dataset
+    assert train_ds is not val_ds
+    assert train_ds.transformations is not None
+    assert val_ds.transformations is None

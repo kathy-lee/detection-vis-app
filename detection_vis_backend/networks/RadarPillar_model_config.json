@@ -3,7 +3,7 @@
     "voxel_size": [0.16, 0.16, 5.0],
     "max_points_per_pillar": 32,
     "max_pillars": 16000,
-    "point_features": ["x", "y", "z", "rcs"],
+    "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
     "vfe_channels": 64,
     "head_stride": 2,
     "dir_offset": 0.78539,

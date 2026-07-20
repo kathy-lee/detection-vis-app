@@ -94,7 +94,7 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
         "voxel_size": [0.16, 0.16, 5.0],
         "max_points_per_pillar": 32,
         "max_pillars": 16000,
-        "point_features": ["x", "y", "z", "rcs"],
+        "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
         "head_stride": 2,
         "dir_offset": 0.78539,
         "anchor_rotations": [0.0, 1.57],
@@ -109,7 +109,25 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
     inst = ViewOfDelft()
     inst.parse(110, datafile.path, datafile.name, datafile.config)
     inst._request_scoped = True   # simulate the factory's request copy
-    inst.prepare_for_train(["radarPC"], {"radar_variant": "radar_5frames"}, model_cfg)
+    train_cfg_stub = {
+        "radar_variant": "radar_5frames",
+        "fov_points_only": True,
+        "augmentation": {"random_world_flip": True, "random_world_rotation": True,
+                         "random_world_scaling": True},
+    }
+    inst.prepare_for_train(["radarPC"], train_cfg_stub, model_cfg, splittype="val")
+
+    # val (and None) splittype must not augment: repeated reads are identical
+    assert inst.transformations is None
+    s1, s2 = inst[0], inst[0]
+    assert np.array_equal(s1["pillars"], s2["pillars"])
+
+    # a train-split copy carries the augmentor
+    inst_train = ViewOfDelft()
+    inst_train.parse(110, datafile.path, datafile.name, datafile.config)
+    inst_train._request_scoped = True
+    inst_train.prepare_for_train(["radarPC"], train_cfg_stub, model_cfg, splittype="train")
+    assert inst_train.transformations is not None
 
     assert len(inst) == inst.frame_sync
     sample = inst[0]

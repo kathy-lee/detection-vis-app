@@ -170,6 +170,18 @@ class ViewOfDelft(Dataset):
         self.radar_variant = train_cfg.get("radar_variant", "radar_5frames")
         self.pillar_cfg = model_cfg
         self.datasamples_length = self.frame_sync
+        self.splittype = splittype
+        # FOV_POINTS_ONLY: True (official PP-Radar dataset config)
+        self.fov_points_only = bool(train_cfg.get("fov_points_only", False))
+        # Train-time world augmentation (fthbng77 vod_radarpillar_rot.yaml:24-32).
+        # Stored in self.transformations: inference.py nulls exactly this attribute,
+        # so /predict can never see augmented input.
+        aug_cfg = train_cfg.get("augmentation")
+        if splittype == "train" and aug_cfg:
+            from detection_vis_backend.datasets.vod_augmentation import VodAugmentor
+            self.transformations = VodAugmentor(aug_cfg)
+        else:
+            self.transformations = None
         return
 
     def __len__(self):
@@ -225,8 +237,30 @@ class ViewOfDelft(Dataset):
         from detection_vis_backend.networks.radarpillar import pillarize
         pts = np.fromfile(self.radar_variant_filenames[self.radar_variant][index],
                           dtype=np.float32).reshape(-1, 7)
-        sample = pillarize(pts, self.pillar_cfg)
+        # gt loads BEFORE pillarize since slice 3.5: the augmentor transforms
+        # points and boxes jointly (reference order: augment, then
+        # mask_points_and_boxes_outside_range, then voxelize).
         gt_boxes, gt_labels = self._gt_boxes_radar(index)
+        if getattr(self, "fov_points_only", False):
+            # FOV_POINTS_ONLY: True (official PP-Radar dataset config): keep only
+            # points that project into the camera image.
+            intrinsic, R0_ext, V2C_ext = self._calib_radar(index)
+            cam_from_radar = R0_ext @ V2C_ext
+            hom = np.concatenate([pts[:, :3], np.ones((len(pts), 1), np.float32)], axis=1)
+            cam = (cam_from_radar @ hom.T).T[:, :3]
+            uvw = (intrinsic @ np.concatenate([cam, np.ones((len(cam), 1), np.float32)], axis=1).T).T
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u, v = uvw[:, 0] / uvw[:, 2], uvw[:, 1] / uvw[:, 2]
+            img_w, img_h = 1936, 1216   # VoD camera resolution (all frames)
+            keep = (cam[:, 2] > 0) & (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+            pts = pts[keep]
+        if getattr(self, "transformations", None) is not None and len(gt_boxes):
+            pts, gt_boxes = self.transformations(pts, gt_boxes)
+        if getattr(self, "splittype", None) == "train":
+            # shuffle_points (train: True) -- unbiases truncation at max pillars/points
+            pts = pts[np.random.permutation(len(pts))]
+        sample = pillarize(pts, self.pillar_cfg)
+        # gt_boxes, gt_labels = self._gt_boxes_radar(index)   # pre-3.5 position
         x0, y0, z0, x1, y1, z1 = self.pillar_cfg["point_cloud_range"]
         if len(gt_boxes):
             keep = ((gt_boxes[:, 0] >= x0) & (gt_boxes[:, 0] <= x1) &

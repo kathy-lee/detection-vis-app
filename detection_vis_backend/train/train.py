@@ -253,16 +253,18 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             datasets['val'] = Subset(dataset, split_samples_info['val'])
             datasets['test'] = Subset(dataset, split_samples_info['test'])
         elif dataset_type == "ViewOfDelft":
-            # Official split from ImageSets (5,139 train / 1,296 val). label_2 holds
-            # exactly the train+val frames; the official test split ships no labels,
-            # so the test bucket stays empty and train() skips the test evaluation
-            # (the 2026-07-16 skip-test handling).
-            dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-            dataset.prepare_for_train(features, train_config, model_config)
-            frame_names = [os.path.basename(f)[:-4] for f in dataset.label_filenames]
-            name_to_idx = {n: i for i, n in enumerate(frame_names)}
-            imagesets_dir = os.path.join(dataset.root_path, 'radar', 'ImageSets')
+            # Official split from ImageSets (5,139 train / 1,296 val). One request
+            # copy PER SPLIT (slice 3.5): the train copy carries the augmentor, the
+            # val copy is clean (augmentation is train-only, and the reference's
+            # shuffle_points is train-only too). label_2 holds exactly the train+val
+            # frames; the official test split ships no labels, so the test bucket
+            # stays empty and train() skips the test evaluation (2026-07-16 handling).
             for split_type, txt_name in (('train', 'train.txt'), ('val', 'val.txt')):
+                dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+                dataset.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                frame_names = [os.path.basename(f)[:-4] for f in dataset.label_filenames]
+                name_to_idx = {n: i for i, n in enumerate(frame_names)}
+                imagesets_dir = os.path.join(dataset.root_path, 'radar', 'ImageSets')
                 with open(os.path.join(imagesets_dir, txt_name)) as f:
                     ids = [name_to_idx[line.strip()] for line in f if line.strip() in name_to_idx]
                 split_samples_info[split_type] = ids
