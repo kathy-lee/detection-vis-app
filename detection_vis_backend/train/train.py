@@ -66,7 +66,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'DAROD': DAROD_collate,
         'RAMP_CNN': default_collate,
         'RadarCrossAttention': default_collate,
-        'RadarPillar': radarpillar_collate
+        'RadarPillar': radarpillar_collate,
+        'PointPillar': radarpillar_collate
     }
     logger.info("Preparing train/val/test dataloaders...")
     dataset_factory = DatasetFactory()
@@ -435,14 +436,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             for iter, data in enumerate(train_loader):
                 for key in data:
                     if isinstance(data[key], torch.Tensor):
-                        if model_type == 'RadarPillar':
+                        if model_type in ('RadarPillar', 'PointPillar'):
                             # pillar coords / gt_labels are integer tensors (scatter
                             # indexing, class ids) -- .float() would corrupt them
                             data[key] = data[key].to(device)
                         else:
                             data[key] = data[key].to(device).float()
 
-                if model_type == 'RadarPillar':
+                if model_type in ('RadarPillar', 'PointPillar'):
                     inputs = data          # the collated dict IS the network input
                 elif len(features) == 1:
                     inputs = data[features[0]]

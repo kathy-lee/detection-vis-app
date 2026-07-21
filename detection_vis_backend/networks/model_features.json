@@ -175,6 +175,18 @@
     "input_size": null,
     "notes": "Cross-attention over RD/RA/AD; no spatial size or in_channels pinned in model config (CONFIRM)."
   },
+  "PointPillar": {
+    "features": [
+      "radarPC"
+    ],
+    "datasets": [
+      "ViewOfDelft"
+    ],
+    "in_channels": null,
+    "win_size": 1,
+    "input_size": null,
+    "notes": "PointPillars baseline on VoD radar (N*7), the slice-3.5 reference at 52.27 mAP entire area. Same code path as RadarPillar with the RadarPillars extras switched off in config. Sensor-agnostic by design: 'lidarPC' becomes valid here once the VoD LiDAR data path lands (spec slice 5)."
+  },
   "RadarPillar": {
     "features": [
       "radarPC"

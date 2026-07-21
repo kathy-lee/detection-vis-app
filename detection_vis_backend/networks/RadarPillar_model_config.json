@@ -4,7 +4,9 @@
     "max_points_per_pillar": 32,
     "max_pillars": 16000,
     "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
-    "vfe_channels": 64,
+    "velocity_decomposition": true,
+    "vfe_channels": 32,
+    "attention": {"enabled": true, "embed_dim": 32, "num_heads": 1, "dropout": 0.0, "ffn_hidden": 32},
     "head_stride": 2,
     "dir_offset": 0.78539,
     "anchor_rotations": [0.0, 1.57],
@@ -14,5 +16,5 @@
         "Cyclist":    {"sizes": [1.76, 0.6, 1.73], "z_bottom": -0.6, "match_threshold": 0.5,  "unmatch_threshold": 0.35}
     },
     "backbone": {"layer_nums": [3, 5, 5], "strides": [2, 2, 2],
-                 "channels": [64, 128, 256], "up_channels": [128, 128, 128]}
+                 "channels": [32, 32, 32], "up_channels": [32, 32, 32]}
 }

@@ -2,6 +2,13 @@
 RadarPillars (Musiat et al., IROS 2024, arXiv:2408.05020), targeting the
 View-of-Delft radar point cloud. Design: docs/superpowers/specs/2026-07-16-radarpillar-design.md
 
+Shared by BOTH registered models: `PointPillar` (the baseline -- these blocks with
+RadarPillars' extras switched off) and `RadarPillar` (extras on). The "radarpillar"
+prefix throughout names the paper this was ported from, not the model that is running;
+the reference does the same, configuring RadarPillars under `MODEL.NAME: PointPillar`
+(vod_radarpillar_rot.yaml:35). A rename to neutral `pillar_*` names is a worthwhile
+cleanup, deliberately deferred out of slice 4 to keep this diff behavioural-only.
+
 Ported by READING the reference implementation (fthbng77/RadarPillar, an OpenPCDet
 fork, Apache-2.0) -- conventions verified against these files, cited per function:
   tools/cfgs/vod_models/vod_radarpillar_rot.yaml     (ranges, anchors, thresholds)
@@ -177,6 +184,17 @@ def generate_anchors(model_cfg):
 POINT_COLUMNS = {"x": 0, "y": 1, "z": 2, "rcs": 3, "v_r": 4, "v_r_comp": 5, "time": 6}
 
 
+def pillar_feature_dim(model_cfg):
+    """D of the pillar tensor: raw features + optional (vx, vy) + 6 decoration offsets.
+
+    Single source of truth -- pillarize() and RadarPillarBackboneNet must agree or
+    the VFE's Linear gets the wrong in_features and every forward pass fails.
+    """
+    return (len(model_cfg["point_features"])
+            + (2 if model_cfg.get("velocity_decomposition", False) else 0)
+            + 6)
+
+
 def pillarize(points, model_cfg):
     """Group points into BEV pillars with PointPillars feature decoration.
 
@@ -188,7 +206,14 @@ def pillarize(points, model_cfg):
     vx, vy = model_cfg["voxel_size"][0], model_cfg["voxel_size"][1]
     K = model_cfg["max_points_per_pillar"]
     feats = [POINT_COLUMNS[f] for f in model_cfg["point_features"]]
-    D = len(feats) + 6
+    # D = len(feats) + 6                      # replaced in slice 4 (velocity pair)
+    D = pillar_feature_dim(model_cfg)
+    n_raw = len(feats)
+    # RadarPillars decomposes the COMPENSATED radial velocity (paper Table II best
+    # row; reference vod_radarpillar_rot.yaml VELOCITY_COMP_INDEX: 5 == v_r_comp).
+    vel_decomp = bool(model_cfg.get("velocity_decomposition", False))
+    vcol = POINT_COLUMNS[model_cfg.get("velocity_comp_feature", "v_r_comp")]
+    n_base = n_raw + (2 if vel_decomp else 0)
     keep = ((points[:, 0] >= x0) & (points[:, 0] < x1) &
             (points[:, 1] >= y0) & (points[:, 1] < y1) &
             (points[:, 2] >= z0) & (points[:, 2] < z1))
@@ -216,14 +241,20 @@ def pillarize(points, model_cfg):
         group = pts[sel]
         coords[p] = (uniq[p] % nx, uniq[p] // nx)         # (ix, iy)
         num_points[p] = n
-        pillars[p, :n, :len(feats)] = group[:, feats]
+        pillars[p, :n, :n_raw] = group[:, feats]
+        if vel_decomp:
+            # reference pillar_vfe.py:176 -- the +1e-6 keeps atan2(0, 0) well defined
+            phi = np.arctan2(group[:, 1], group[:, 0] + 1e-6)
+            pillars[p, :n, n_raw] = group[:, vcol] * np.cos(phi)
+            pillars[p, :n, n_raw + 1] = group[:, vcol] * np.sin(phi)
         mean = group[:, :3].mean(axis=0)
-        pillars[p, :n, len(feats):len(feats) + 3] = group[:, :3] - mean
+        # pillars[p, :n, len(feats):len(feats) + 3] = group[:, :3] - mean   # pre-slice-4
+        pillars[p, :n, n_base:n_base + 3] = group[:, :3] - mean
         cx = x0 + (coords[p, 0] + 0.5) * vx
         cy = y0 + (coords[p, 1] + 0.5) * vy
-        pillars[p, :n, len(feats) + 3] = group[:, 0] - cx
-        pillars[p, :n, len(feats) + 4] = group[:, 1] - cy
-        pillars[p, :n, len(feats) + 5] = group[:, 2] - cz
+        pillars[p, :n, n_base + 3] = group[:, 0] - cx
+        pillars[p, :n, n_base + 4] = group[:, 1] - cy
+        pillars[p, :n, n_base + 5] = group[:, 2] - cz
     return {"pillars": pillars, "coords": coords, "num_points": num_points}
 
 
@@ -305,6 +336,53 @@ class PillarVFE(nn.Module):
         return torch.nan_to_num(x, neginf=0.0)
 
 
+class PillarAttention(nn.Module):
+    """Masked self-attention over each sample's non-empty pillars.
+
+    Port of reference pcdet/models/backbones_3d/pillar_attention.py (paper Fig. 3):
+    gather the valid pillars of every sample into a padded (B, max_P, E) block, run
+    one transformer layer with a key_padding_mask so empty slots contribute nothing,
+    then scatter the rows back in their original order. 4D-radar sparsity keeps this
+    to ~1-2k tokens per sample, which is why the dense padding is affordable.
+
+    Two deliberate deviations from the reference, both no-ops at the shipped
+    E == C == 32 config (vod_radarpillar_rot.yaml:48-54):
+      * a post-MLP back to C, which the paper's Fig. 3 describes and the reference
+        omits -- without it, E != C would feed the scatter canvas the wrong width;
+      * padded rows are zeroed after attention, because an all-masked query row
+        softmaxes to NaN and autograd would carry that into every parameter.
+    """
+    def __init__(self, channels, embed_dim=32, num_heads=1, dropout=0.0, ffn_hidden=32):
+        super().__init__()
+        self.pre = nn.Linear(channels, embed_dim) if channels != embed_dim else nn.Identity()
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout,
+                                          batch_first=True)
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.ffn = nn.Sequential(nn.Linear(embed_dim, ffn_hidden), nn.GELU(),
+                                 nn.Linear(ffn_hidden, embed_dim))
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.post = nn.Linear(embed_dim, channels) if channels != embed_dim else nn.Identity()
+
+    def forward(self, features, coords, batch_size):
+        counts = [int((coords[:, 0] == b).sum()) for b in range(batch_size)]
+        max_p = max(counts)
+        padded = features.new_zeros(batch_size, max_p, features.shape[-1])
+        pad_mask = torch.ones(batch_size, max_p, dtype=torch.bool, device=features.device)
+        for b in range(batch_size):
+            sel = coords[:, 0] == b
+            padded[b, :counts[b]] = features[sel]
+            pad_mask[b, :counts[b]] = False
+        x = self.pre(padded)
+        attn_out, _ = self.attn(x, x, x, key_padding_mask=pad_mask)
+        attn_out = attn_out.masked_fill(pad_mask.unsqueeze(-1), 0.0)
+        x = self.norm1(x + attn_out)
+        x = self.norm2(x + self.ffn(x))
+        x = self.post(x)
+        # collate concatenates samples in batch order, so slicing back in the same
+        # order restores the row order PillarScatter indexes positionally
+        return torch.cat([x[b, :counts[b]] for b in range(batch_size)], dim=0)
+
+
 class PillarScatter(nn.Module):
     """Scatter pillar features onto the dense BEV canvas (PointPillarScatter)."""
     def __init__(self, nx, ny, channels):
@@ -380,9 +458,18 @@ class RadarPillarBackboneNet(nn.Module):
         x0, y0, _, x1, y1, _ = model_cfg["point_cloud_range"]
         vx, vy = model_cfg["voxel_size"][0], model_cfg["voxel_size"][1]
         self.nx, self.ny = int(round((x1 - x0) / vx)), int(round((y1 - y0) / vy))
-        D = len(model_cfg["point_features"]) + 6
+        # D = len(model_cfg["point_features"]) + 6      # replaced in slice 4
+        D = pillar_feature_dim(model_cfg)
         C = model_cfg.get("vfe_channels", 64)
         self.vfe = PillarVFE(D, C)
+        # RadarPillars' PillarAttention sits between VFE and scatter (paper Fig. 3);
+        # absent/disabled config keeps the slice-3.5 forward path byte-identical.
+        attn_cfg = model_cfg.get("attention", {}) or {}
+        self.attention = PillarAttention(
+            C, embed_dim=attn_cfg.get("embed_dim", C),
+            num_heads=attn_cfg.get("num_heads", 1),
+            dropout=attn_cfg.get("dropout", 0.0),
+            ffn_hidden=attn_cfg.get("ffn_hidden", C)) if attn_cfg.get("enabled", False) else None
         self.scatter = PillarScatter(self.nx, self.ny, C)
         self.backbone = BEVBackbone(C, model_cfg["backbone"])
         self.head = RadarPillarHead(self.backbone.out_channels)
@@ -392,6 +479,8 @@ class RadarPillarBackboneNet(nn.Module):
 
     def forward(self, pillars, coords, num_points, batch_size):
         feats = self.vfe(pillars, num_points)
+        if self.attention is not None:
+            feats = self.attention(feats, coords, batch_size)
         bev = self.scatter(feats, coords, batch_size)
         return self.head(self.backbone(bev))
 

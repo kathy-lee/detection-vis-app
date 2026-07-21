@@ -95,6 +95,7 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
         "max_points_per_pillar": 32,
         "max_pillars": 16000,
         "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
+        "velocity_decomposition": True,
         "head_stride": 2,
         "dir_offset": 0.78539,
         "anchor_rotations": [0.0, 1.57],
@@ -132,7 +133,8 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
     assert len(inst) == inst.frame_sync
     sample = inst[0]
     P, K, D = sample["pillars"].shape
-    assert K == model_cfg["max_points_per_pillar"] and D == len(model_cfg["point_features"]) + 6
+    # D = raw features + (vx, vy) from velocity decomposition + 6 decoration offsets
+    assert K == model_cfg["max_points_per_pillar"] and D == len(model_cfg["point_features"]) + 2 + 6
     assert sample["coords"].shape == (P, 2)
     assert sample["gt_boxes"].ndim == 2 and sample["gt_boxes"].shape[1] == 7
     assert set(np.unique(sample["gt_labels"])).issubset({0, 1, 2})

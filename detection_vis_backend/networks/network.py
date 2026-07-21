@@ -1021,18 +1021,47 @@ class RadarCrossAttention(nn.Module):
             loss += config['losses']['weight'][2] * self.orent_criterion(pred["pred_orent"], target["gt_orent_map"]) 
         return loss    
 
-class RadarPillar(nn.Module):
+class PointPillar(nn.Module):
     """PointPillars base of RadarPillars (arXiv:2408.05020) on VoD radar.
 
     Thin app-contract wrapper; all building blocks live in networks/radarpillar.py.
+    This is the slice-3.5 reference architecture (52.27 mAP entire area).
     Spec: docs/superpowers/specs/2026-07-16-radarpillar-design.md
+
+    Renamed from RadarPillar in slice 4: this class was always the PointPillars base
+    (see the docstring's first line, unchanged since slice 1) and was only called
+    RadarPillar because nothing yet needed to tell the two apart.
     """
+    # RadarPillars' extras (velocity decomposition, PillarAttention) are config-gated
+    # inside RadarPillarBackboneNet, so the two models differ only by config. This flag
+    # lets each class check that the config it was handed matches the name it is
+    # reported under -- a "baseline" number produced with attention on would silently
+    # invalidate the slice-4 comparison.
+    EXTRAS_EXPECTED = False
+
     def __init__(self, **model_cfg):
         super().__init__()
         model_cfg.pop("class", None)   # the UI stores the class name inside the config
         self.model_cfg = model_cfg
         self.net = RadarPillarBackboneNet(model_cfg)
         self.loss_cfg = {}
+        self._warn_on_name_config_mismatch(model_cfg)
+
+    def _warn_on_name_config_mismatch(self, model_cfg):
+        enabled = []
+        if model_cfg.get("velocity_decomposition", False):
+            enabled.append("velocity_decomposition")
+        if (model_cfg.get("attention") or {}).get("enabled", False):
+            enabled.append("attention")
+        name = type(self).__name__
+        # a warning, not an exception: model config is user-editable JSON in the UI,
+        # and "what if I add attention to the baseline?" is a legitimate experiment
+        if self.EXTRAS_EXPECTED and not enabled:
+            logger.warning(f"{name} built with no RadarPillars extras enabled -- "
+                           f"this is the PointPillars baseline architecture.")
+        elif not self.EXTRAS_EXPECTED and enabled:
+            logger.warning(f"{name} built with RadarPillars extras enabled: {enabled} -- "
+                           f"this is no longer the PointPillars baseline.")
 
     def forward(self, batch):
         return self.net(batch["pillars"], batch["coords"], batch["num_points"],
@@ -1056,3 +1085,15 @@ class RadarPillar(nn.Module):
         return radarpillar_loss(pred, targets, self.net.anchors_np,
                                 self.net.anchor_classes_np, self.loss_cfg,
                                 next(self.parameters()).device)["loss"]
+
+
+class RadarPillar(PointPillar):
+    """RadarPillars (arXiv:2408.05020) = the PointPillars base plus radial-velocity
+    decomposition, PillarAttention and uniform C=32 scaling -- all three config-gated
+    in RadarPillarBackboneNet, so this subclass adds no computation. It names the
+    configuration and, via EXTRAS_EXPECTED, warns when the config contradicts the name.
+
+    The reference does the same, configuring RadarPillars under MODEL.NAME: PointPillar
+    (fthbng77 vod_radarpillar_rot.yaml:35) -- the extras are components, not a detector.
+    """
+    EXTRAS_EXPECTED = True

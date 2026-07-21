@@ -353,7 +353,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_labels = pred_labels - 1
             pred_objs = [list(pred_boxes[i]) + [pred_labels[i], pred_scores[i]] for i in range(len(pred_boxes))]
             pred_objs = {"RD": pred_objs}
-        elif model_type == "RadarPillar":
+        elif model_type in ("RadarPillar", "PointPillar"):
             input = radarpillar_collate([dataset_inst[sample_id]])
             input = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in input.items()}
             output = net(input)

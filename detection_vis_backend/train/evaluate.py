@@ -1935,7 +1935,7 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
 
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention", "RadarPillar" ] + RODNet_subtypes + RECORD_subtypes
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
 eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
@@ -1951,3 +1951,4 @@ eval_func_dict["DAROD", "CARRADA"] = DAROD_evaluation
 eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
 eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation
 eval_func_dict["RadarPillar", "ViewOfDelft"] = RadarPillar_evaluation
+eval_func_dict["PointPillar", "ViewOfDelft"] = RadarPillar_evaluation

@@ -1,0 +1,56 @@
+{
+    "num_epochs": 80,
+    "seed": 3407,
+    "radar_variant": "radar_5frames",
+    "augmentation": {
+        "random_world_flip": true,
+        "random_world_rotation": true,
+        "random_world_scaling": true,
+        "rot_range": [-0.78539816, 0.78539816],
+        "scale_range": [0.95, 1.05]
+    },
+    "fov_points_only": true,
+    "optimizer": {
+        "type": "AdamW",
+        "lr": 0.003,
+        "weight_decay": 0.01
+    },
+    "scheduler": {
+        "type": "OneCycleLR",
+        "max_lr": 0.003,
+        "pct_start": 0.4,
+        "div_factor": 10
+    },
+    "grad_norm_clip": 10,
+    "losses": {
+        "cls_weight": 1.0,
+        "box_weight": 2.0,
+        "dir_weight": 0.2,
+        "focal_alpha": 0.25,
+        "focal_gamma": 2.0
+    },
+    "confidence_threshold": 0.1,
+    "nms_iou_threshold": 0.1,
+    "dataloader": {
+        "splitmode": "random",
+        "split_random": [
+            0.8,
+            0.1,
+            0.1
+        ],
+        "train": {
+            "batch_size": 8,
+            "num_workers": 4
+        },
+        "val": {
+            "batch_size": 8,
+            "num_workers": 4
+        },
+        "test": {
+            "batch_size": 8,
+            "num_workers": 4
+        }
+    },
+    "nms_pre_max": 4096,
+    "nms_post_max": 500
+}

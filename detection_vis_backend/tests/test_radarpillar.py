@@ -219,6 +219,57 @@ def test_pillarize_boundary_point_never_indexes_off_grid():
     assert (out["coords"] >= 0).all()
 
 
+VEL_CFG = dict(PILLAR_CFG,
+               point_features=["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
+               velocity_decomposition=True)
+
+
+def test_pillar_feature_dim_counts_velocity_pair():
+    from detection_vis_backend.networks.radarpillar import pillar_feature_dim
+    assert pillar_feature_dim(PILLAR_CFG) == 4 + 6            # x,y,z,rcs + 6 offsets
+    assert pillar_feature_dim(dict(VEL_CFG, velocity_decomposition=False)) == 7 + 6
+    assert pillar_feature_dim(VEL_CFG) == 7 + 2 + 6           # + (vx, vy)
+
+
+def test_pillarize_decomposes_compensated_radial_velocity():
+    """RadarPillars' first contribution: v_r_comp is projected onto x/y using the
+    point's azimuth phi = atan2(y, x), giving vx = v*cos(phi), vy = v*sin(phi)
+    (reference pillar_vfe.py:176,196-200; paper Table II -- the best row decomposes
+    the COMPENSATED radial velocity, worth +3.8 mAP). The pair is appended directly
+    after the raw features, before the 6 cluster/center offsets.
+    """
+    from detection_vis_backend.networks.radarpillar import pillarize
+    pts = np.zeros((2, 7), dtype=np.float32)
+    # point A at 45 deg (x == y), v_r_comp = 2.0 -> vx = vy = 2/sqrt(2) = sqrt(2)
+    pts[0, :3] = [10.0, 10.0, -1.0]
+    pts[0, 5] = 2.0
+    # point B straight ahead on the x axis (phi = 0) -> vx = v, vy = 0
+    pts[1, :3] = [20.0, 0.0, -1.0]
+    pts[1, 5] = -3.0
+    out = pillarize(pts, VEL_CFG)
+    assert out["pillars"].shape[2] == 15
+    rows = {int(c[0]): p[0] for c, p in zip(out["coords"], out["pillars"])}
+    a = rows[int(10.0 / 0.16)]
+    b = rows[int(20.0 / 0.16)]
+    assert a[7] == pytest.approx(np.sqrt(2.0), abs=1e-4)   # vx
+    assert a[8] == pytest.approx(np.sqrt(2.0), abs=1e-4)   # vy
+    assert b[7] == pytest.approx(-3.0, abs=1e-4)
+    assert b[8] == pytest.approx(0.0, abs=1e-4)
+    # raw features untouched, offsets still last: single-point pillar -> cluster == 0
+    assert b[5] == pytest.approx(-3.0, abs=1e-6)           # raw v_r_comp column
+    assert np.allclose(b[9:12], 0.0)                       # cluster offsets
+
+
+def test_pillarize_without_velocity_flag_is_unchanged():
+    """The flag defaults off so slice-3.5 configs and old checkpoints keep their D."""
+    from detection_vis_backend.networks.radarpillar import pillarize
+    pts = np.zeros((1, 7), dtype=np.float32)
+    pts[0, :3] = [10.0, 10.0, -1.0]
+    pts[0, 5] = 2.0
+    out = pillarize(pts, dict(VEL_CFG, velocity_decomposition=False))
+    assert out["pillars"].shape[2] == 13
+
+
 def test_collate_prepends_batch_index_and_pads_gt():
     import torch
     from detection_vis_backend.train.utils import radarpillar_collate
@@ -489,3 +540,108 @@ def test_vod_augmentation_transform_invariants():
                         "random_world_scaling": False})
     p3, b3 = aug(pts.copy(), box.copy())
     assert np.array_equal(p3, pts) and np.array_equal(b3, box)
+
+
+def _attn_batch(counts, channels, seed=0):
+    """Build (features, coords) for samples with the given pillar counts."""
+    import torch
+    g = torch.Generator().manual_seed(seed)
+    feats = torch.randn(sum(counts), channels, generator=g)
+    coords = torch.zeros(sum(counts), 3, dtype=torch.long)
+    row = 0
+    for b, c in enumerate(counts):
+        coords[row:row + c, 0] = b
+        coords[row:row + c, 1] = torch.arange(c)      # distinct ix per pillar
+        row += c
+    return feats, coords
+
+
+def test_pillar_attention_preserves_shape_and_row_order():
+    import torch
+    from detection_vis_backend.networks.radarpillar import PillarAttention
+    attn = PillarAttention(32, embed_dim=32, num_heads=1, ffn_hidden=32).eval()
+    feats, coords = _attn_batch([5, 3], 32)
+    with torch.no_grad():
+        out = attn(feats, coords, batch_size=2)
+    assert out.shape == feats.shape
+
+
+def test_pillar_attention_ignores_padding_across_ragged_batch():
+    """The key_padding_mask must make a sample's output independent of how many
+    pillars its batch-mates have -- otherwise attention leaks across samples and
+    training silently depends on batch composition (reference
+    pillar_attention.py:59-73 builds exactly this mask).
+    """
+    import torch
+    from detection_vis_backend.networks.radarpillar import PillarAttention
+    torch.manual_seed(0)
+    attn = PillarAttention(32, embed_dim=32, num_heads=1, ffn_hidden=32).eval()
+    feats, coords = _attn_batch([5, 3], 32)
+    with torch.no_grad():
+        batched = attn(feats, coords, batch_size=2)
+        alone = attn(feats[:5], coords[:5], batch_size=1)     # sample 0 by itself
+    assert torch.allclose(batched[:5], alone, atol=1e-5)
+
+
+def test_pillar_attention_gradients_are_finite_with_ragged_batch():
+    """Fully padded query rows attend over an all-masked key set, which makes
+    softmax produce NaN. Those rows are dropped from the output, but autograd
+    still propagates the NaN into every parameter unless they are zeroed first.
+    """
+    import torch
+    from detection_vis_backend.networks.radarpillar import PillarAttention
+    attn = PillarAttention(32, embed_dim=32, num_heads=1, ffn_hidden=32)
+    feats, coords = _attn_batch([9, 1], 32)      # maximally ragged
+    attn(feats, coords, batch_size=2).sum().backward()
+    grads = [p.grad for p in attn.parameters() if p.grad is not None]
+    assert grads, "expected the attention layer to receive gradients"
+    assert all(torch.isfinite(g).all() for g in grads)
+
+
+def test_pillar_attention_maps_back_to_input_channels_when_embed_differs():
+    """Paper Fig. 3: the hidden dim E is 'controlled by a MLP before and after the
+    layer'. The reference implementation omits the post-MLP (harmless there because
+    its config runs E == C == 32); we keep both so E is a free knob and the scatter
+    canvas always receives C channels.
+    """
+    import torch
+    from detection_vis_backend.networks.radarpillar import PillarAttention
+    attn = PillarAttention(32, embed_dim=128, num_heads=4, ffn_hidden=128).eval()
+    feats, coords = _attn_batch([4, 4], 32)
+    with torch.no_grad():
+        assert attn(feats, coords, batch_size=2).shape == (8, 32)
+
+
+def test_net_attention_is_optional_and_off_by_default():
+    from detection_vis_backend.networks.radarpillar import RadarPillarBackboneNet
+    cfg = dict(PILLAR_CFG, vfe_channels=32,
+               backbone={"layer_nums": [3, 5, 5], "strides": [2, 2, 2],
+                         "channels": [32, 32, 32], "up_channels": [32, 32, 32]})
+    assert RadarPillarBackboneNet(cfg).attention is None
+    on = RadarPillarBackboneNet(dict(cfg, attention={"enabled": True, "embed_dim": 32,
+                                                     "num_heads": 1, "ffn_hidden": 32}))
+    assert on.attention is not None
+
+
+def test_shipped_config_matches_radarpillars_reference():
+    """Pins the three slice-4 mechanisms to the reference's shipped values: paper
+    SS IV-A p.5 ("backbone size of C = 32 for all encoder stages, a hidden dimension
+    of E = 32 ... and v_r,x, v_r,y as additional features") and
+    vod_radarpillar_rot.yaml:37-67. Note E = 128 appears in the paper's Table IV as
+    the ablation's best hidden dim -- it is NOT the shipped model (SS IV-C).
+    """
+    import json, os
+    from detection_vis_backend.networks.radarpillar import pillar_feature_dim
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "networks", "RadarPillar_model_config.json")
+    with open(path) as f:
+        cfg = json.load(f)
+    assert cfg["velocity_decomposition"] is True
+    assert cfg["attention"] == {"enabled": True, "embed_dim": 32, "num_heads": 1,
+                                "dropout": 0.0, "ffn_hidden": 32}
+    assert cfg["vfe_channels"] == 32
+    assert cfg["backbone"]["channels"] == [32, 32, 32]
+    assert cfg["backbone"]["up_channels"] == [32, 32, 32]
+    assert cfg["backbone"]["layer_nums"] == [3, 5, 5]          # unchanged from PP
+    assert cfg["backbone"]["strides"] == [2, 2, 2]
+    assert pillar_feature_dim(cfg) == 15                        # 7 raw + vx,vy + 6
