@@ -319,13 +319,21 @@ def decode_boxes(deltas, anchors):
     return xp.stack(out, -1) if xp is torch else np.stack(out, -1).astype(np.float32)
 
 
+# OpenPCDet configures every BatchNorm with eps=1e-3, momentum=0.01 (reference
+# pillar_vfe.py:23 and pcdet BaseBEVBackbone), NOT PyTorch's defaults
+# (eps=1e-5, momentum=0.1). The faster default momentum makes eval-time running
+# stats noisier; matching the reference here removes that source of mAP drift.
+_BN_ARGS = dict(eps=1e-3, momentum=0.01)
+
+
 class PillarVFE(nn.Module):
     """Simplified PointNet over each pillar: Linear+BN+ReLU then masked max
     (reference pillar_vfe.py PFNLayer with USE_NORM, last_layer max-pool)."""
     def __init__(self, in_dim, out_dim=64):
         super().__init__()
         self.linear = nn.Linear(in_dim, out_dim, bias=False)
-        self.bn = nn.BatchNorm1d(out_dim)
+        # self.bn = nn.BatchNorm1d(out_dim)  # PyTorch defaults (eps=1e-5, momentum=0.1)
+        self.bn = nn.BatchNorm1d(out_dim, **_BN_ARGS)
 
     def forward(self, pillars, num_points):
         P, K, D = pillars.shape
@@ -407,17 +415,17 @@ class BEVBackbone(nn.Module):
         for n, stride, out_ch, up_ch in zip(cfg["layer_nums"], cfg["strides"],
                                             cfg["channels"], cfg["up_channels"]):
             layers = [nn.Conv2d(ch, out_ch, 3, stride=stride, padding=1, bias=False),
-                      nn.BatchNorm2d(out_ch), nn.ReLU()]
+                      nn.BatchNorm2d(out_ch, **_BN_ARGS), nn.ReLU()]
             for _ in range(n):
                 layers += [nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
-                           nn.BatchNorm2d(out_ch), nn.ReLU()]
+                           nn.BatchNorm2d(out_ch, **_BN_ARGS), nn.ReLU()]
             self.blocks.append(nn.Sequential(*layers))
             total_stride *= stride
             up_stride = total_stride // first_stride   # upsample strides [1, 2, 4]
             self.ups.append(nn.Sequential(
                 nn.ConvTranspose2d(out_ch, up_ch, up_stride, stride=up_stride, bias=False)
                 if up_stride > 1 else nn.Conv2d(out_ch, up_ch, 1, bias=False),
-                nn.BatchNorm2d(up_ch), nn.ReLU()))
+                nn.BatchNorm2d(up_ch, **_BN_ARGS), nn.ReLU()))
             ch = out_ch
         self.out_channels = sum(cfg["up_channels"])
 
