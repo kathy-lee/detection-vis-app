@@ -2849,7 +2849,10 @@ class UWCR(Dataset):
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
         radar_npy_win_va = np.zeros((self.win_size * 2, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
-        confmap_gt = np.zeros((self.win_size, self.n_class + 1, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize']), dtype=np.float32)
+        # confmaps are rendered in the range-angle plane, so the buffer must be
+        # (rsize, asize) -- not (asize, vsize), which only worked because UWCR
+        # happens to set ramap_rsize == ramap_asize == ramap_vsize == 128
+        confmap_gt = np.zeros((self.win_size, self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize']), dtype=np.float32)
         obj_info = []
         for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
             # load ra slice

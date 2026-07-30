@@ -156,13 +156,17 @@
       "RA",
       "AD"
     ],
-    "in_channels": null,
+    "in_channels": {
+      "RA": 2,
+      "RD": 1,
+      "AD": 1
+    },
     "win_size": 16,
     "input_size": [
       128,
       128
     ],
-    "notes": "ramap_rsize=128, ramap_asize=128 over a 16-frame window; consumes RD/RA/AD. in_channels not declared in model config (CONFIRM)."
+    "notes": "ramap_rsize=128, ramap_asize=128 over a 16-frame window; consumes RD/RA/AD. in_channels is per view and is NOT in the model config - it is hardcoded in each encoder's conv1a (ramp_cnn.py): RA=2 (real+imag), RD=1, AD=1 (magnitude). Input temporal axis is 2*win (=32), not win: each frame yields two temporal samples (RA chirps 0 and 128; RD/AD two overlapping 128-chirp Doppler windows [0:128] and [127:255], because the 128-point Doppler FFT cannot take all 255 chirps at once). Encoder strides depth /8, decoder upsamples x4, net /2, so output depth is win and matches the (3,win,128,128) label. Per-view spatial axes differ (RA range*angle, RD range*velocity, AD angle*velocity) and coincide at 128 only because UWCR uses 128 range/angle/velocity bins; ramap_vsize comes from the dataset radar config, not this file. Inputs are not normalized. The paper (arXiv 2011.08981) states 128x128x128x16 and documents neither the chirp split nor the /2; both match the reference implementation upstream (slice3d.py, dataLoader/CRDatasets.py)."
   },
   "RadarCrossAttention": {
     "features": [
