@@ -543,3 +543,40 @@ def test_radarpillar_extends_pointpillar_and_guards_name_config_mismatch():
     assert RadarPillar(**extras_on) is not None
     assert PointPillar(**extras_on) is not None      # warns: extras on a baseline name
     assert RadarPillar(**base_cfg) is not None       # warns: no extras under the RadarPillars name
+
+
+def test_model_features_datasets_match_wired_eval_pairs():
+    """model_features.json's "datasets" is what the UI's train guard allows
+    (3_Train_model.py: `dataset_name not in compatible_datasets` -> st.stop()).
+    It must equal the pairs eval_func_dict actually registers, or the UI either
+    blocks a trainable pair or waves through one that dies at eval time.
+
+    A model with no "datasets" key is un-gated -- the guard skips it -- so a
+    missing key silently permits every dataset. Assert the key exists too.
+    """
+    from detection_vis_backend.train.evaluate import eval_func_dict, network_types
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "networks", "model_features.json")) as f:
+        features = json.load(f)
+
+    # the dropdown is built from this file's keys, so they must be real networks
+    assert set(features) == set(network_types), (
+        f"only in model_features.json: {sorted(set(features) - set(network_types))}; "
+        f"only in network_types: {sorted(set(network_types) - set(features))}"
+    )
+
+    wired = {}
+    for (model, dataset), fn in eval_func_dict.items():
+        if fn is not None:
+            wired.setdefault(model, set()).add(dataset)
+
+    for model in sorted(features):
+        assert "datasets" in features[model], (
+            f"{model} has no 'datasets' key -- the UI guard skips it, so every "
+            f"dataset is permitted for it"
+        )
+        assert set(features[model]["datasets"]) == wired.get(model, set()), (
+            f"{model}: model_features.json says {sorted(features[model]['datasets'])}, "
+            f"eval_func_dict registers {sorted(wired.get(model, set()))}"
+        )

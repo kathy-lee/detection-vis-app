@@ -32,7 +32,7 @@ Datasets currently registered:
 | RADIal | radar ADC, lidar point cloud, image | https://github.com/valeoai/RADIal |
 | CRUW (ROD2021) | radar RA, image | https://www.cruwdataset.org/rod2021 |
 | CARRADA | radar RAD, image | https://github.com/valeoai/carrada_dataset |
-| RADDet | radar RAD, image | https://github.com/ZhangAoCanada/RADDet |
+| RADDetDataset | radar RAD, image | https://github.com/ZhangAoCanada/RADDet |
 | UWCR | radar ADC | https://github.com/Xiangyu-Gao/Raw_ADC_radar_dataset_for_automotive_object_detection |
 | Astyx | radar/lidar point cloud, image | (no valid link for now) |
 | ViewOfDelft | radar/lidar point cloud, image | https://intelligent-vehicles.org/datasets/view-of-delft/ |
