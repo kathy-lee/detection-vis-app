@@ -686,3 +686,29 @@ def orent(orent_map, r, a, velo=0, pred=False):
             angle = angle-360
         return angle
     return angle
+
+
+def radarpillar_collate(batch):
+    """Collate for RadarPillar (ViewOfDelft): concat pillar tensors with a batch
+    index; pad gt to the batch max. Lives here with the other collate functions
+    (FFTRadNet_collate, DAROD_collate) -- train.py's collate_func dict imports
+    from this module.
+    """
+    pillars = torch.from_numpy(np.concatenate([s["pillars"] for s in batch]))
+    num_points = torch.from_numpy(np.concatenate([s["num_points"] for s in batch]))
+    coords = []
+    for b, s in enumerate(batch):
+        c = np.pad(s["coords"], ((0, 0), (1, 0)), constant_values=b)
+        coords.append(c)
+    coords = torch.from_numpy(np.concatenate(coords))
+    m = max(1, max(len(s["gt_boxes"]) for s in batch))
+    gt_boxes = torch.zeros(len(batch), m, 7)
+    gt_labels = torch.full((len(batch), m), -1, dtype=torch.int64)
+    for b, s in enumerate(batch):
+        n = len(s["gt_boxes"])
+        if n:
+            gt_boxes[b, :n] = torch.from_numpy(s["gt_boxes"])
+            gt_labels[b, :n] = torch.from_numpy(s["gt_labels"])
+    return {"pillars": pillars, "coords": coords, "num_points": num_points,
+            "gt_boxes": gt_boxes, "gt_labels": gt_labels,
+            "frame_ids": [s["frame_id"] for s in batch]}

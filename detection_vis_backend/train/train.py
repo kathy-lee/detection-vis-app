@@ -23,7 +23,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate 
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
 from data import crud, schemas
 from data.database import SessionLocal
@@ -65,8 +65,10 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'RADDet': default_collate,
         'DAROD': DAROD_collate,
         'RAMP_CNN': default_collate,
-        'RadarCrossAttention': default_collate
-    }  
+        'RadarCrossAttention': default_collate,
+        'RadarPillar': radarpillar_collate,
+        'PointPillar': radarpillar_collate
+    }
     logger.info("Preparing train/val/test dataloaders...")
     dataset_factory = DatasetFactory()
     dataset_type = datafiles[0]["parse"]
@@ -250,7 +252,25 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
             datasets['train'] = Subset(dataset, split_samples_info['train'])
             datasets['val'] = Subset(dataset, split_samples_info['val'])
-            datasets['test'] = Subset(dataset, split_samples_info['test'])   
+            datasets['test'] = Subset(dataset, split_samples_info['test'])
+        elif dataset_type == "ViewOfDelft":
+            # Official split from ImageSets (5,139 train / 1,296 val). One request
+            # copy PER SPLIT (slice 3.5): the train copy carries the augmentor, the
+            # val copy is clean (augmentation is train-only, and the reference's
+            # shuffle_points is train-only too). label_2 holds exactly the train+val
+            # frames; the official test split ships no labels, so the test bucket
+            # stays empty and train() skips the test evaluation (2026-07-16 handling).
+            for split_type, txt_name in (('train', 'train.txt'), ('val', 'val.txt')):
+                dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+                dataset.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                frame_names = [os.path.basename(f)[:-4] for f in dataset.label_filenames]
+                name_to_idx = {n: i for i, n in enumerate(frame_names)}
+                imagesets_dir = os.path.join(dataset.root_path, 'radar', 'ImageSets')
+                with open(os.path.join(imagesets_dir, txt_name)) as f:
+                    ids = [name_to_idx[line.strip()] for line in f if line.strip() in name_to_idx]
+                split_samples_info[split_type] = ids
+                datasets[split_type] = Subset(dataset, ids)
+            datasets['test'] = None
         else:
             raise ValueError(f"{dataset_type} Dataset doesn't provide default data split.")
     
@@ -346,16 +366,37 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
         # Optimizer
         lr = float(train_config['optimizer']['lr'])
-        gamma = float(train_config['lr_scheduler']['gamma'])
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
-        if train_config['lr_scheduler']['type'] == 'step':
+        num_epochs = int(train_config['num_epochs'])
+        # gamma = float(train_config['lr_scheduler']['gamma'])  # moved into the branches:
+        # the RadarPillar config has no 'lr_scheduler' key (it uses 'scheduler'/OneCycleLR)
+        if train_config['optimizer'].get('type') == 'AdamW':
+            optimizer = optim.AdamW(filter(lambda p: p.requires_grad, net.parameters()),
+                                    lr=lr, weight_decay=float(train_config['optimizer'].get('weight_decay', 0.01)))
+        else:
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
+
+        # RadarPillar reference recipe (fthbng77/RadarPillar kitti_pointpillar.yaml:145-164,
+        # adam_onecycle): OneCycleLR stepped per iteration, MOMS [0.95, 0.85] -> torch
+        # max_momentum/base_momentum. Other models keep the 'lr_scheduler' path unchanged.
+        step_scheduler_per_iter = False
+        if train_config.get('scheduler', {}).get('type') == 'OneCycleLR':
+            sched_cfg = train_config['scheduler']
+            scheduler = lr_scheduler.OneCycleLR(
+                optimizer, max_lr=float(sched_cfg['max_lr']),
+                total_steps=num_epochs * len(train_loader),
+                pct_start=float(sched_cfg.get('pct_start', 0.4)),
+                div_factor=float(sched_cfg.get('div_factor', 10)),
+                base_momentum=0.85, max_momentum=0.95)
+            step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'step':
+            gamma = float(train_config['lr_scheduler']['gamma'])
             step_size = int(train_config['lr_scheduler']['step_size'])
             scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
         elif train_config['lr_scheduler']['type'] == 'exp':
+            gamma = float(train_config['lr_scheduler']['gamma'])
             scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
         else:
             raise ValueError
-        num_epochs=int(train_config['num_epochs'])
 
         logger.info('===========  Optimizer  ==================:')
         logger.info(f'      LR: {lr}')
@@ -395,9 +436,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             for iter, data in enumerate(train_loader):
                 for key in data:
                     if isinstance(data[key], torch.Tensor):
-                        data[key] = data[key].to(device).float()
-                
-                if len(features) == 1:
+                        if model_type in ('RadarPillar', 'PointPillar'):
+                            # pillar coords / gt_labels are integer tensors (scatter
+                            # indexing, class ids) -- .float() would corrupt them
+                            data[key] = data[key].to(device)
+                        else:
+                            data[key] = data[key].to(device).float()
+
+                if model_type in ('RadarPillar', 'PointPillar'):
+                    inputs = data          # the collated dict IS the network input
+                elif len(features) == 1:
                     inputs = data[features[0]]
                 else:
                     inputs = {feature: data[feature] for feature in features}
@@ -408,16 +456,21 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 logger.debug(f'get net output')
                 # pop out feature data from data dict, keep only label info
                 for feature in features:
-                    data.pop(feature)
+                    data.pop(feature, None)   # RadarPillar batches have no feature-named key
                 loss = net.get_loss(outputs, data, train_config)
                 logger.info(f"Train sample {iter} loss: {loss}")
                 loss.backward()
+                if train_config.get('grad_norm_clip'):
+                    nn.utils.clip_grad_norm_(net.parameters(), float(train_config['grad_norm_clip']))
                 optimizer.step()
+                if step_scheduler_per_iter:
+                    scheduler.step()
                 running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
                 kbar.update(iter, values=[("loss", loss.item())])
                 global_step += 1
 
-            scheduler.step()
+            if not step_scheduler_per_iter:
+                scheduler.step()
 
             history['train_loss'].append(running_loss / len(train_loader.dataset))
             history['lr'].append(scheduler.get_last_lr()[0])

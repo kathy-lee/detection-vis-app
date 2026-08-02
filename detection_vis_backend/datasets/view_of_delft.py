@@ -29,9 +29,19 @@ class ViewOfDelft(Dataset):
         self.lidarPC_filenames = [os.path.join(self.root_path, 'lidar/training/velodyne', filename.split('/')[-1].replace('txt', 'bin')) for filename in self.label_filenames]
         self.calib_radar_filenames = [os.path.join(self.root_path, 'radar/training/calib', filename.split('/')[-1]) for filename in self.label_filenames]
         self.calib_lidar_filenames = [os.path.join(self.root_path, 'lidar/training/calib', filename.split('/')[-1]) for filename in self.label_filenames]
-        self.frame_sync = len(self.label_filenames) 
+        self.frame_sync = len(self.label_filenames)
+        # RadarPillar training reads an accumulation variant (radar / radar_3frames /
+        # radar_5frames); index all three here as FILE state on the shared instance.
+        # Which one a training run uses is request state (prepare_for_train).
+        # Visualization keeps self.radarPC_filenames (single-frame) unchanged.
+        self.radar_variant_filenames = {}
+        for variant in ("radar", "radar_3frames", "radar_5frames"):
+            self.radar_variant_filenames[variant] = [
+                os.path.join(self.root_path, variant, 'training/velodyne',
+                             fn.split('/')[-1].replace('txt', 'bin'))
+                for fn in self.label_filenames]
         logger.info(f'Parsed frames: {self.frame_sync}')
-        return 
+        return
 
     def get_image(self, idx=None, for_visualize=False): 
         #image = np.asarray(Image.open(self.image_filenames[idx]))
@@ -149,16 +159,112 @@ class ViewOfDelft(Dataset):
                 gt.append(corners_img.flatten().tolist() + [cls])
         return gt
     
+    _KITTI_CLASSES = {"Car": 0, "Pedestrian": 1, "Cyclist": 2}
+
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         require_request_scope(self)
-        return 
+        # request-scoped training config only 
+        # everything here lives on the factory's request copy, never the shared
+        # instance (state-ownership boundary).
+        self.model_type = model_cfg.get("class", "RadarPillar")
+        self.radar_variant = train_cfg.get("radar_variant", "radar_5frames")
+        self.pillar_cfg = model_cfg
+        self.datasamples_length = self.frame_sync
+        self.splittype = splittype
+        # FOV_POINTS_ONLY: True (official PP-Radar dataset config)
+        self.fov_points_only = bool(train_cfg.get("fov_points_only", False))
+        # Train-time world augmentation (fthbng77 vod_radarpillar_rot.yaml:24-32).
+        # Stored in self.transformations: inference.py nulls exactly this attribute,
+        # so /predict can never see augmented input.
+        aug_cfg = train_cfg.get("augmentation")
+        if splittype == "train" and aug_cfg:
+            from detection_vis_backend.datasets.vod_augmentation import VodAugmentor
+            self.transformations = VodAugmentor(aug_cfg)
+        else:
+            self.transformations = None
+        return
 
     def __len__(self):
-        return self.frame_sync
+        return getattr(self, "datasamples_length", self.frame_sync)
+
+    def _calib_radar(self, idx):
+        """KITTI-format calib for this frame: intrinsic P2 (line 2), R0_rect
+        (line 4) and Tr_velo_to_cam == radar->camera (line 5)."""
+        with open(self.calib_radar_filenames[idx], "r") as f:
+            lines = f.readlines()
+        intrinsic = np.array(lines[2].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)
+        R0 = np.array(lines[4].strip().split(' ')[1:], dtype=np.float32).reshape(3, 3)
+        R0_ext = np.eye(4, dtype=np.float32)
+        R0_ext[:3, :3] = R0
+        V2C = np.array(lines[5].strip().split(' ')[1:], dtype=np.float32).reshape(3, 4)
+        V2C_ext = np.concatenate([V2C, [[0, 0, 0, 1]]], axis=0).astype(np.float32)
+        return intrinsic, R0_ext, V2C_ext
+
+    def _gt_boxes_radar(self, idx):
+        """KITTI camera-frame labels -> radar-frame [x,y,z_center,l,w,h,yaw].
+
+        The ONLY place this conversion lives. Mirrors the reference
+        (fthbng77/RadarPillar vod_dataset.py:210-216 + calibration_kitti.rect_to_lidar):
+        location via inv(R0_ext @ V2C_ext) -- including R0_rect, which get_label's
+        visualization path ignores -- z center = camera bottom + h/2 after the
+        transform, dims reordered to (l, w, h), and yaw = -(pi/2 + ry): the same
+        sign convention get_label already renders correctly on the feature page.
+        """
+        _, R0_ext, V2C_ext = self._calib_radar(idx)
+        cam_from_radar = R0_ext @ V2C_ext
+        radar_from_cam = np.linalg.inv(cam_from_radar)
+        boxes, labels = [], []
+        with open(self.label_filenames[idx], 'r') as f:
+            for line in f.readlines():
+                p = line.split()
+                if p[0] not in self._KITTI_CLASSES:
+                    continue
+                h, w, l = float(p[8]), float(p[9]), float(p[10])
+                loc_cam = np.array([float(p[11]), float(p[12]), float(p[13]), 1.0], dtype=np.float32)
+                ry = float(p[14])
+                bottom = radar_from_cam @ loc_cam
+                yaw = -(np.pi / 2 + ry)
+                boxes.append([bottom[0], bottom[1], bottom[2] + h / 2.0, l, w, h, yaw])
+                labels.append(self._KITTI_CLASSES[p[0]])
+        if not boxes:
+            return np.zeros((0, 7), np.float32), np.zeros((0,), np.int64)
+        return np.array(boxes, np.float32), np.array(labels, np.int64)
 
     def __getitem__(self, index):
-        logger.debug(f"Data item index: {index}")
-        
-
-        data_dict = {}
-        return data_dict
+        # logger.debug(f"Data item index: {index}")
+        # data_dict = {}
+        # return data_dict
+        from detection_vis_backend.networks.radarpillar import pillarize
+        pts = np.fromfile(self.radar_variant_filenames[self.radar_variant][index],
+                          dtype=np.float32).reshape(-1, 7)
+        # gt loads BEFORE pillarize since slice 3.5: the augmentor transforms
+        # points and boxes jointly (reference order: augment, then
+        # mask_points_and_boxes_outside_range, then voxelize).
+        gt_boxes, gt_labels = self._gt_boxes_radar(index)
+        if getattr(self, "fov_points_only", False):
+            # FOV_POINTS_ONLY: True (official PP-Radar dataset config): keep only
+            # points that project into the camera image.
+            intrinsic, R0_ext, V2C_ext = self._calib_radar(index)
+            cam_from_radar = R0_ext @ V2C_ext
+            hom = np.concatenate([pts[:, :3], np.ones((len(pts), 1), np.float32)], axis=1)
+            cam = (cam_from_radar @ hom.T).T[:, :3]
+            uvw = (intrinsic @ np.concatenate([cam, np.ones((len(cam), 1), np.float32)], axis=1).T).T
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u, v = uvw[:, 0] / uvw[:, 2], uvw[:, 1] / uvw[:, 2]
+            img_w, img_h = 1936, 1216   # VoD camera resolution (all frames)
+            keep = (cam[:, 2] > 0) & (u >= 0) & (u < img_w) & (v >= 0) & (v < img_h)
+            pts = pts[keep]
+        if getattr(self, "transformations", None) is not None and len(gt_boxes):
+            pts, gt_boxes = self.transformations(pts, gt_boxes)
+        if getattr(self, "splittype", None) == "train":
+            # shuffle_points (train: True) -- unbiases truncation at max pillars/points
+            pts = pts[np.random.permutation(len(pts))]
+        sample = pillarize(pts, self.pillar_cfg)
+        # gt_boxes, gt_labels = self._gt_boxes_radar(index)   # pre-3.5 position
+        x0, y0, z0, x1, y1, z1 = self.pillar_cfg["point_cloud_range"]
+        if len(gt_boxes):
+            keep = ((gt_boxes[:, 0] >= x0) & (gt_boxes[:, 0] <= x1) &
+                    (gt_boxes[:, 1] >= y0) & (gt_boxes[:, 1] <= y1))
+            gt_boxes, gt_labels = gt_boxes[keep], gt_labels[keep]
+        sample.update({"gt_boxes": gt_boxes, "gt_labels": gt_labels, "frame_id": index})
+        return sample

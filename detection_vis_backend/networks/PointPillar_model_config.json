@@ -1,0 +1,19 @@
+{
+    "class": "PointPillar",
+    "point_cloud_range": [0.0, -25.6, -3.0, 51.2, 25.6, 2.0],
+    "voxel_size": [0.16, 0.16, 5.0],
+    "max_points_per_pillar": 32,
+    "max_pillars": 16000,
+    "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
+    "vfe_channels": 64,
+    "head_stride": 2,
+    "dir_offset": 0.78539,
+    "anchor_rotations": [0.0, 1.57],
+    "anchors": {
+        "Car":        {"sizes": [3.9, 1.6, 1.56], "z_bottom": -1.78, "match_threshold": 0.6,  "unmatch_threshold": 0.45},
+        "Pedestrian": {"sizes": [0.8, 0.6, 1.73], "z_bottom": -0.6,  "match_threshold": 0.5,  "unmatch_threshold": 0.35},
+        "Cyclist":    {"sizes": [1.76, 0.6, 1.73], "z_bottom": -0.6, "match_threshold": 0.5,  "unmatch_threshold": 0.35}
+    },
+    "backbone": {"layer_nums": [3, 5, 5], "strides": [2, 2, 2],
+                 "channels": [64, 128, 256], "up_channels": [128, 128, 128]}
+}

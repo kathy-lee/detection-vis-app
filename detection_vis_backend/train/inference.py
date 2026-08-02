@@ -14,7 +14,36 @@ from loguru import logger
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent
+from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, radarpillar_collate
+from detection_vis_backend.networks.radarpillar import postprocess
+
+def radarpillar_display_geometry(res, dataset_inst, sample_id):
+    """Pure output formatter for RadarPillar (like carrada_seg_readout below):
+    postprocessed boxes -> display geometry, computed backend-side because the
+    frontend has no calib access.
+
+    image_boxes rows = 8 image-projected corners + cls + score (18 values), via
+    the frame's calib (intrinsic @ (R0_ext @ V2C_ext) -- the same matrices the
+    dataset's label transform uses); boxes whose center is behind the camera are
+    skipped from image_boxes only. bev_boxes rows = 4 BEV corners (bottom face,
+    radar frame) + cls + score (10 values).
+    """
+    from detection_vis_backend.networks.radarpillar import box_corners_3d
+    intrinsic, R0_ext, V2C_ext = dataset_inst._calib_radar(sample_id)
+    cam_from_radar = R0_ext @ V2C_ext
+    image_boxes, bev_boxes = [], []
+    for box, label, score in zip(res["boxes"], res["labels"], res["scores"]):
+        corners = box_corners_3d(box)                              # (8,3), bottom 4 first
+        bev = corners[:4, :2].flatten().tolist()
+        bev_boxes.append([float(v) for v in bev] + [int(label), float(score)])
+        hom = np.concatenate([corners, np.ones((8, 1))], axis=1)   # (8,4)
+        cam = (cam_from_radar @ hom.T).T                           # (8,4)
+        if cam[:, 2].min() <= 0.1:                                 # behind the camera
+            continue
+        img = (intrinsic @ cam.T).T                                # (8,3)
+        img = img[:, :2] / img[:, 2:3]
+        image_boxes.append([float(v) for v in img.flatten()] + [int(label), float(score)])
+    return {"image_boxes": image_boxes, "bev_boxes": bev_boxes, "viz_idx": sample_id}
 
 
 def carrada_seg_readout(pred_logits, gt_mask, viz_idx):
@@ -324,6 +353,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
             pred_labels = pred_labels - 1
             pred_objs = [list(pred_boxes[i]) + [pred_labels[i], pred_scores[i]] for i in range(len(pred_boxes))]
             pred_objs = {"RD": pred_objs}
+        elif model_type in ("RadarPillar", "PointPillar"):
+            input = radarpillar_collate([dataset_inst[sample_id]])
+            input = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in input.items()}
+            output = net(input)
+            res = postprocess(output, net.net.anchors, model_config, parameters["train_config"])[0]
+            pred_objs = radarpillar_display_geometry(res, dataset_inst, sample_id)
         elif model_type == "RAMP_CNN":
             #input = (data['RA'].to(device).float(), data['RD'].to(device).float(), data['AD'].to(device).float())
             input = {feature: torch.tensor(data[feature]).unsqueeze(0).to(device).float() for feature in parameters["features"]}

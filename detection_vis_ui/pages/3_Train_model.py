@@ -66,7 +66,7 @@ if edit_feature_action:
 dataset_name = st.session_state.datafiles_chosen[0]["parse"]
 if len(st.session_state.datafiles_chosen) > 1:
   if all(f["parse"] == dataset_name for f in st.session_state.datafiles_chosen):
-    if dataset_name in ("RADIal", "CARRADA", "RADDetDataset"):
+    if dataset_name in ("RADIal", "CARRADA", "RADDetDataset", "ViewOfDelft"):
       split_mode = st.radio("Select the data split way:", ["sequence", "random", "original"], horizontal=True, key=f"radio_splitmode")
       st.write("Original mode is the default split which the dataset provides.")
     else:
@@ -75,7 +75,7 @@ if len(st.session_state.datafiles_chosen) > 1:
     st.info("Train with files from different datasets is not supported currently.")
     st.stop()
 else:
-  if dataset_name in ("RADIal", "CARRADA", "RADDetDataset"):
+  if dataset_name in ("RADIal", "CARRADA", "RADDetDataset", "ViewOfDelft"):
     split_mode = st.radio("Select the data split way:", ["random", "original"], horizontal=True, key=f"radio_splitmode")
   else:
     split_mode = "random"

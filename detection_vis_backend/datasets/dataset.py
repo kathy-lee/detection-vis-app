@@ -721,9 +721,11 @@ class RADIal(Dataset):
         # Get the objects labels
         box_labels = self.labels[entries_indexes]
 
-        # Labels contains following parameters:
-        # x1_pix	y1_pix	x2_pix	y2_pix	laser_X_m	laser_Y_m	laser_Z_m radar_X_m	radar_Y_m	radar_R_m
-        # format as following: [Range,Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
+        # Labels (labels.csv columns, in order):
+        # 0:numSample 1:x1_pix 2:y1_pix 3:x2_pix 4:y2_pix 5:laser_X_m 6:laser_Y_m 7:laser_Z_m
+        # 8:radar_X_m 9:radar_Y_m 10:radar_R_m 11:radar_A_deg 12:radar_D_mps 13:radar_P_db
+        # 14:dataset 15:index 16:Difficult
+        # Select and format as following: [Range,Angle,Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
         box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
 
         encoded_label = self.encode(box_labels).copy()      
@@ -2847,7 +2849,10 @@ class UWCR(Dataset):
         radar_npy_win_ra = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'], 2), dtype=np.float32)
         radar_npy_win_rv = np.zeros((self.win_size * 2, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
         radar_npy_win_va = np.zeros((self.win_size * 2, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize'], 1), dtype=np.float32)
-        confmap_gt = np.zeros((self.win_size, self.n_class + 1, self.radar_cfg['ramap_asize'], self.radar_cfg['ramap_vsize']), dtype=np.float32)
+        # confmaps are rendered in the range-angle plane, so the buffer must be
+        # (rsize, asize) -- not (asize, vsize), which only worked because UWCR
+        # happens to set ramap_rsize == ramap_asize == ramap_vsize == 128
+        confmap_gt = np.zeros((self.win_size, self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize']), dtype=np.float32)
         obj_info = []
         for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
             # load ra slice

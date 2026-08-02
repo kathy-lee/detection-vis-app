@@ -84,6 +84,72 @@ def test_ViewOfDelft(db_session: Session):
     assert radar_pc.shape[1] == 7, "Radar point cloud data in View-of-Delft is with N*7 shape."
 
 
+def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
+    """RadarPillar training support: __getitem__
+    yields pillar tensors + radar-frame gt boxes for the configured radar variant."""
+    # mirrors RadarPillar_model_config.json (Task 7); inlined so this test does not
+    # depend on task execution order
+    model_cfg = {
+        "point_cloud_range": [0.0, -25.6, -3.0, 51.2, 25.6, 2.0],
+        "voxel_size": [0.16, 0.16, 5.0],
+        "max_points_per_pillar": 32,
+        "max_pillars": 16000,
+        "point_features": ["x", "y", "z", "rcs", "v_r", "v_r_comp", "time"],
+        "velocity_decomposition": True,
+        "head_stride": 2,
+        "dir_offset": 0.78539,
+        "anchor_rotations": [0.0, 1.57],
+        "anchors": {
+            "Car":        {"sizes": [3.9, 1.6, 1.56], "z_bottom": -1.78, "match_threshold": 0.6,  "unmatch_threshold": 0.45},
+            "Pedestrian": {"sizes": [0.8, 0.6, 1.73], "z_bottom": -0.6,  "match_threshold": 0.5,  "unmatch_threshold": 0.35},
+            "Cyclist":    {"sizes": [1.76, 0.6, 1.73], "z_bottom": -0.6, "match_threshold": 0.5,  "unmatch_threshold": 0.35},
+        },
+    }
+    datafile = crud.get_datafile(db_session, 110)
+    assert datafile is not None
+    inst = ViewOfDelft()
+    inst.parse(110, datafile.path, datafile.name, datafile.config)
+    inst._request_scoped = True   # simulate the factory's request copy
+    train_cfg_stub = {
+        "radar_variant": "radar_5frames",
+        "fov_points_only": True,
+        "augmentation": {"random_world_flip": True, "random_world_rotation": True,
+                         "random_world_scaling": True},
+    }
+    inst.prepare_for_train(["radarPC"], train_cfg_stub, model_cfg, splittype="val")
+
+    # val (and None) splittype must not augment: repeated reads are identical
+    assert inst.transformations is None
+    s1, s2 = inst[0], inst[0]
+    assert np.array_equal(s1["pillars"], s2["pillars"])
+
+    # a train-split copy carries the augmentor
+    inst_train = ViewOfDelft()
+    inst_train.parse(110, datafile.path, datafile.name, datafile.config)
+    inst_train._request_scoped = True
+    inst_train.prepare_for_train(["radarPC"], train_cfg_stub, model_cfg, splittype="train")
+    assert inst_train.transformations is not None
+
+    assert len(inst) == inst.frame_sync
+    sample = inst[0]
+    P, K, D = sample["pillars"].shape
+    # D = raw features + (vx, vy) from velocity decomposition + 6 decoration offsets
+    assert K == model_cfg["max_points_per_pillar"] and D == len(model_cfg["point_features"]) + 2 + 6
+    assert sample["coords"].shape == (P, 2)
+    assert sample["gt_boxes"].ndim == 2 and sample["gt_boxes"].shape[1] == 7
+    assert set(np.unique(sample["gt_labels"])).issubset({0, 1, 2})
+    # every kept gt center inside the configured range (the spec's integration check)
+    x0, y0, z0, x1, y1, z1 = model_cfg["point_cloud_range"]
+    found_gt = False
+    for i in (0, 50, 100, 200):
+        s = inst[i]
+        if len(s["gt_boxes"]):
+            found_gt = True
+            assert (s["gt_boxes"][:, 0] >= x0).all() and (s["gt_boxes"][:, 0] <= x1).all()
+            assert (s["gt_boxes"][:, 1] >= y0).all() and (s["gt_boxes"][:, 1] <= y1).all()
+    assert found_gt, "expected at least one of the probed frames to contain objects"
+
+
 @pytest.mark.skip(reason="NuScenes mini dataset not on this machine (/home/kangle/dataset/nuscences_v1.0_mini)")
 def test_NuScenes(db_session: Session):
     dataset_inst = NuScenes()

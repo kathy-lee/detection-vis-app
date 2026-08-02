@@ -15,6 +15,7 @@ from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHour
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss
 from detection_vis_backend.networks.raddet import RadarResNet3D, YoloHead, boxDecoder, lossYolo
 from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatures, Decoder, DARODBlock2D, calculate_rpn_actual_outputs, roi_delta, darod_loss
+from detection_vis_backend.networks.radarpillar import RadarPillarBackboneNet, assign_targets, radarpillar_loss
 from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 
@@ -1019,3 +1020,80 @@ class RadarCrossAttention(nn.Module):
         if self.orientation:
             loss += config['losses']['weight'][2] * self.orent_criterion(pred["pred_orent"], target["gt_orent_map"]) 
         return loss    
+
+class PointPillar(nn.Module):
+    """PointPillars base of RadarPillars (arXiv:2408.05020) on VoD radar.
+
+    Thin app-contract wrapper; all building blocks live in networks/radarpillar.py.
+    This is the slice-3.5 reference architecture (52.27 mAP entire area).
+    Spec: docs/superpowers/specs/2026-07-16-radarpillar-design.md
+
+    Renamed from RadarPillar in slice 4: this class was always the PointPillars base
+    (see the docstring's first line, unchanged since slice 1) and was only called
+    RadarPillar because nothing yet needed to tell the two apart.
+    """
+    # RadarPillars' extras (velocity decomposition, PillarAttention) are config-gated
+    # inside RadarPillarBackboneNet, so the two models differ only by config. This flag
+    # lets each class check that the config it was handed matches the name it is
+    # reported under -- a "baseline" number produced with attention on would silently
+    # invalidate the slice-4 comparison.
+    EXTRAS_EXPECTED = False
+
+    def __init__(self, **model_cfg):
+        super().__init__()
+        model_cfg.pop("class", None)   # the UI stores the class name inside the config
+        self.model_cfg = model_cfg
+        self.net = RadarPillarBackboneNet(model_cfg)
+        self.loss_cfg = {}
+        self._warn_on_name_config_mismatch(model_cfg)
+
+    def _warn_on_name_config_mismatch(self, model_cfg):
+        enabled = []
+        if model_cfg.get("velocity_decomposition", False):
+            enabled.append("velocity_decomposition")
+        if (model_cfg.get("attention") or {}).get("enabled", False):
+            enabled.append("attention")
+        name = type(self).__name__
+        # a warning, not an exception: model config is user-editable JSON in the UI,
+        # and "what if I add attention to the baseline?" is a legitimate experiment
+        if self.EXTRAS_EXPECTED and not enabled:
+            logger.warning(f"{name} built with no RadarPillars extras enabled -- "
+                           f"this is the PointPillars baseline architecture.")
+        elif not self.EXTRAS_EXPECTED and enabled:
+            logger.warning(f"{name} built with RadarPillars extras enabled: {enabled} -- "
+                           f"this is no longer the PointPillars baseline.")
+
+    def forward(self, batch):
+        return self.net(batch["pillars"], batch["coords"], batch["num_points"],
+                        batch_size=int(batch["coords"][:, 0].max().item()) + 1)
+
+    def init_lossfunc(self, train_config, device):
+        self.loss_cfg = train_config.get("losses", {})
+
+    def get_loss(self, pred, batch, config):
+        # Target assignment happens here (it needs the anchors, which live with the
+        # network); gt arrives padded from radarpillar_collate (-1 labels = padding).
+        targets = []
+        for b in range(batch["gt_labels"].shape[0]):
+            valid = batch["gt_labels"][b] >= 0
+            targets.append(assign_targets(
+                self.net.anchors_np, self.net.anchor_classes_np,
+                batch["gt_boxes"][b][valid].cpu().numpy(),
+                batch["gt_labels"][b][valid].cpu().numpy(), self.model_cfg))
+        # radarpillar_loss returns component losses; the app contract
+        # (train loop's loss.backward(), eval's loss.item()) is a scalar.
+        return radarpillar_loss(pred, targets, self.net.anchors_np,
+                                self.net.anchor_classes_np, self.loss_cfg,
+                                next(self.parameters()).device)["loss"]
+
+
+class RadarPillar(PointPillar):
+    """RadarPillars (arXiv:2408.05020) = the PointPillars base plus radial-velocity
+    decomposition, PillarAttention and uniform C=32 scaling -- all three config-gated
+    in RadarPillarBackboneNet, so this subclass adds no computation. It names the
+    configuration and, via EXTRAS_EXPECTED, warns when the config contradicts the name.
+
+    The reference does the same, configuring RadarPillars under MODEL.NAME: PointPillar
+    (fthbng77 vod_radarpillar_rot.yaml:35) -- the extras are components, not a detector.
+    """
+    EXTRAS_EXPECTED = True

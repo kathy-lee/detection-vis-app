@@ -1,112 +1,236 @@
 {
   "FFTRadNet": {
-    "features": ["RD"],
-    "datasets": ["RADIal"],
+    "features": [
+      "RD"
+    ],
+    "datasets": [
+      "RADIal"
+    ],
     "in_channels": 32,
     "win_size": 1,
-    "input_size": [512, 256],
+    "input_size": [
+      512,
+      256
+    ],
     "notes": "Per-frame input tensor is 32*512*256 = channels*range*Doppler. 32 channels = real+imag of the 16-Rx range-Doppler spectrum; 512 range bins are code-fixed; the 256 Doppler axis carries the 12*16 MIMO array (192 virtual antennas) that fftradnet.py's hardcoded geometry (NbTxAntenna/NbRxAntenna) expects. RADIal-only; not configurable here."
   },
   "RODNet_CDC": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 2,
     "win_size": 16,
     "input_size": null,
     "notes": "Fully convolutional; RA map H*W is dataset-determined (CRUW ~128*128). in_channels=2 = real+imag of one map."
   },
   "RODNet_CDCv2": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 4,
     "win_size": 16,
     "input_size": null,
     "notes": "v2 uses MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
   },
   "RODNet_HG": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 2,
     "win_size": 16,
     "input_size": null,
     "notes": "Hourglass; H*W dataset-determined (CRUW ~128*128)."
   },
   "RODNet_HGv2": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 4,
     "win_size": 16,
     "input_size": null,
     "notes": "v2 MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
   },
   "RODNet_HGwI": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 2,
     "win_size": 16,
     "input_size": null,
     "notes": "Hourglass w/ inception; H*W dataset-determined."
   },
   "RODNet_HGwIv2": {
-    "features": ["RA"],
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
     "in_channels": 4,
     "win_size": 16,
     "input_size": null,
     "notes": "v2 MNet (mnet_cfg=[4,32]); in_channels=4. H*W dataset-determined."
   },
   "RECORD": {
-    "features": ["RD", "RA"],
-    "datasets": ["CRUW", "CARRADA"],
+    "features": [
+      "RD",
+      "RA"
+    ],
+    "datasets": [
+      "CRUW",
+      "CARRADA"
+    ],
     "in_channels": 1,
     "win_size": 12,
     "input_size": null,
     "notes": "Fully convolutional; H*W dataset-determined (CARRADA RD 256*64, RA 256*256). Temporal model (bottleneck LSTM)."
   },
   "RECORDNoLstm": {
-    "features": ["RD", "RA"],
-    "datasets": ["CRUW", "CARRADA"],
+    "features": [
+      "RD",
+      "RA"
+    ],
+    "datasets": [
+      "CRUW",
+      "CARRADA"
+    ],
     "in_channels": 1,
     "win_size": 1,
     "input_size": null,
     "notes": "Single-frame RECORD variant; H*W dataset-determined."
   },
   "RECORDNoLstmMulti": {
-    "features": ["RD", "RA"],
-    "datasets": ["CRUW", "CARRADA"],
+    "features": [
+      "RD",
+      "RA"
+    ],
+    "datasets": [
+      "CRUW",
+      "CARRADA"
+    ],
     "in_channels": 1,
     "win_size": 12,
     "input_size": null,
     "notes": "CARRADA path uses in_channels=1 per feature; the CRUW stacked path uses in_channels=96. H*W dataset-determined. CONFIRM which applies to your setup."
   },
   "MVRECORD": {
-    "features": ["RD", "RA", "AD"],
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "datasets": [
+      "CARRADA"
+    ],
     "in_channels": 1,
     "win_size": 5,
     "input_size": null,
     "notes": "Multi-view: separate RD/RA/AD encoders (in_channels=1 each). H*W dataset-determined."
   },
   "RADDet": {
-    "features": ["RAD"],
+    "features": [
+      "RAD"
+    ],
+    "datasets": [
+      "RADDetDataset"
+    ],
     "in_channels": 64,
     "win_size": 1,
-    "input_size": [256, 256, 64],
+    "input_size": [
+      256,
+      256,
+      64
+    ],
     "notes": "RAD cube: range 256 * azimuth 256 * doppler 64; doppler bins are the channel dim (input_channels=64). Pinned in model config."
   },
   "DAROD": {
-    "features": ["RD"],
-    "datasets": ["CARRADA", "RADDetDataset"],
+    "features": [
+      "RD"
+    ],
+    "datasets": [
+      "CARRADA",
+      "RADDetDataset"
+    ],
     "in_channels": 1,
     "win_size": 1,
-    "input_size": [256, 64],
+    "input_size": [
+      256,
+      64
+    ],
     "notes": "RD map 256*64, 1 channel (model config input_size=[256,64,1]). Pinned in model config."
   },
   "RAMP_CNN": {
-    "features": ["RD", "RA", "AD"],
-    "in_channels": null,
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "datasets": [
+      "UWCR"
+    ],
+    "in_channels": {
+      "RA": 2,
+      "RD": 1,
+      "AD": 1
+    },
     "win_size": 16,
-    "input_size": [128, 128],
-    "notes": "ramap_rsize=128, ramap_asize=128 over a 16-frame window; consumes RD/RA/AD. in_channels not declared in model config (CONFIRM)."
+    "input_size": [
+      128,
+      128
+    ],
+    "notes": "ramap_rsize=128, ramap_asize=128 over a 16-frame window; consumes RD/RA/AD. in_channels is per view and is NOT in the model config - it is hardcoded in each encoder's conv1a (ramp_cnn.py): RA=2 (real+imag), RD=1, AD=1 (magnitude). Input temporal axis is 2*win (=32), not win: each frame yields two temporal samples (RA chirps 0 and 128; RD/AD two overlapping 128-chirp Doppler windows [0:128] and [127:255], because the 128-point Doppler FFT cannot take all 255 chirps at once). Encoder strides depth /8, decoder upsamples x4, net /2, so output depth is win and matches the (3,win,128,128) label. Per-view spatial axes differ (RA range*angle, RD range*velocity, AD angle*velocity) and coincide at 128 only because UWCR uses 128 range/angle/velocity bins; ramap_vsize comes from the dataset radar config, not this file. Inputs are not normalized. The paper (arXiv 2011.08981) states 128x128x128x16 and documents neither the chirp split nor the /2; both match the reference implementation upstream (slice3d.py, dataLoader/CRDatasets.py)."
   },
   "RadarCrossAttention": {
-    "features": ["RD", "RA", "AD"],
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "datasets": [
+      "CARRADA"
+    ],
     "in_channels": null,
     "win_size": 5,
     "input_size": null,
     "notes": "Cross-attention over RD/RA/AD; no spatial size or in_channels pinned in model config (CONFIRM)."
+  },
+  "PointPillar": {
+    "features": [
+      "radarPC"
+    ],
+    "datasets": [
+      "ViewOfDelft"
+    ],
+    "in_channels": null,
+    "win_size": 1,
+    "input_size": null,
+    "notes": "PointPillars baseline on VoD radar (N*7), the slice-3.5 reference at 52.27 mAP entire area. Same code path as RadarPillar with the RadarPillars extras switched off in config. Sensor-agnostic by design: 'lidarPC' becomes valid here once the VoD LiDAR data path lands (spec slice 5)."
+  },
+  "RadarPillar": {
+    "features": [
+      "radarPC"
+    ],
+    "datasets": [
+      "ViewOfDelft"
+    ],
+    "in_channels": null,
+    "win_size": 1,
+    "input_size": null,
+    "notes": "PointPillars base of RadarPillars (arXiv:2408.05020) on the VoD radar point cloud (N*7). Pillar grid/anchors pinned in model config; radar accumulation variant (radar/3frames/5frames) in train config."
   }
 }
