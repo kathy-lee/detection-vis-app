@@ -6,10 +6,6 @@ from torchvision.transforms.transforms import Sequence
 from abc import abstractmethod
 from loguru import logger
 
-
-# import sys
-# sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
-
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock, FocalLoss
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, SmoothCELoss
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss

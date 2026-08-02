@@ -1544,7 +1544,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     classes = ["pedestrian", "cyclist", "car"] 
-    with open('/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'r') as file:
+    with open('/home/kangle/dataset/UWCR/Automotive/radar_config.json', 'r') as file:
         radar_cfg = json.load(file)
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')

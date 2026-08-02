@@ -1,7 +1,7 @@
 import os
 import pytest
 
-VOD_ROOT = "/home/kangle/Downloads/wd_disk_radar_data/ViewOfDelft"
+VOD_ROOT = "/home/kangle/dataset/ViewOfDelft"
 GT_DIR = os.path.join(VOD_ROOT, "radar", "training", "label_2")
 
 
