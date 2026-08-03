@@ -1,4 +1,4 @@
-# Published baselines for the 16 wired pairs
+# Published baselines for the 16 wired pairs (24 runs)
 
 Phase 0 of the training-validation campaign. Collected **before** any training run, so
 the target is fixed independently of what we measure.
@@ -8,14 +8,30 @@ Precedence per pair: **paper → original repo README/checkpoint → "no publish
 Pass rule (agreed): headline metric within **~20% relative** of the number below, **and**
 no degenerate metric (loss decreasing, nothing pinned at 0, predictions non-empty).
 
-Two pairs need a modified rule:
+Some entries need a modified rule:
 
 - **RODNet_HGwIv2** has a bracket (83.37 – 85.98) rather than a single target, because
   its exact configuration is not tabulated. Score it as **pass if within 20% of the
   interval** — i.e. ≥ 0.8 × 83.37 ≈ 66.7. Effectively one-sided: still catches a gross
   failure, without inventing a precision the source doesn't support.
-- **RECORDNoLstm and RECORDNoLstmMulti on CARRADA** have no published number, so
-  RECORD/CARRADA is used as an **upper bound**, not a target — see their rows.
+- **RECORDNoLstm and RECORDNoLstmMulti on CARRADA**, in **both views**, have no published
+  number, so the matching RECORD/CARRADA view is used as an **upper bound**, not a
+  target — see their rows. That is four entries, not two.
+
+## One pair is not always one run
+
+The 16 wired (model, dataset) pairs are **24 runs**, because two pairs expand:
+
+- **RODNet / CRUW → 6.** `RODNet_CDC`, `CDCv2`, `HG`, `HGv2`, `HGwI`, `HGwIv2` are six
+  distinct classes in `RODNet_model_config.json`, each with its own baseline (rows 2a–2f).
+- **RECORD-family / CARRADA → 6.** `RECORD`, `RECORDNoLstm` and `RECORDNoLstmMulti` are
+  **single-view** on CARRADA: `RECORD_model_config.json` keys them under `CARRADA/RA` and
+  `CARRADA/RD` as separate config blocks, and the UI's `find_default_configs` selects by
+  `feature[0]`. RA and RD are therefore separately *trained* models, not one model scored
+  two ways — which is also why the RECORD paper reports two numbers per row. On CRUW the
+  same three models take RA only, so no expansion there.
+
+The remaining 14 pairs are one run each. Rows below are indexed per run.
 
 ## Caveats that apply to every comparison
 
@@ -42,11 +58,14 @@ Two pairs need a modified rule:
 | 2e | RODNet_HGv2 | CRUW | AP / AR (OLS) | **83.37 / 85.64** | RODNet JSTSP Table IV, Hourglass+CRF+M-Net |
 | 2f | RODNet_HGwIv2 | CRUW | AP / AR (OLS) | **83.37 – 85.98** (bracket, no exact row) | see per-variant note |
 | 3 | RECORD | CRUW (ROD2021) | AP / AR (OLS) | **72.8 / 82.8** (buffer — confirmed, see note) | RECORD Table I |
-| 4 | RECORD | CARRADA | mIoU RA / RD | **34.8 / 58.1** (buffer — confirmed, see note) | RECORD Table V (`RECORD*`) |
+| 4a | RECORD | CARRADA (RA) | mIoU | **34.8** (buffer — confirmed, see note) | RECORD Table V (`RECORD*`) |
+| 4b | RECORD | CARRADA (RD) | mIoU | **58.1** (buffer — confirmed, see note) | RECORD Table V (`RECORD*`) |
 | 5 | RECORDNoLstm | CRUW (ROD2021) | AP / AR (OLS) | **59.5 / 75.1** | RECORD Table I (`no lstm, single`) |
-| 6 | RECORDNoLstm | CARRADA | mIoU RA / RD | no published number — **upper bound 34.8 / 58.1**, expect ≈18% below | derived from RECORD/CARRADA + CRUW gap |
+| 6a | RECORDNoLstm | CARRADA (RA) | mIoU | no published number — **upper bound 34.8**, expect ≈18% below | derived from row 4a + CRUW gap |
+| 6b | RECORDNoLstm | CARRADA (RD) | mIoU | no published number — **upper bound 58.1**, expect ≈18% below | derived from row 4b + CRUW gap |
 | 7 | RECORDNoLstmMulti | CRUW (ROD2021) | AP / AR (OLS) | **65.5 / 78.9** | RECORD Table I (`no lstm, multi`) |
-| 8 | RECORDNoLstmMulti | CARRADA | mIoU RA / RD | no published number — **upper bound 34.8 / 58.1**, expect ≈10% below | derived from RECORD/CARRADA + CRUW gap |
+| 8a | RECORDNoLstmMulti | CARRADA (RA) | mIoU | no published number — **upper bound 34.8**, expect ≈10% below | derived from row 4a + CRUW gap |
+| 8b | RECORDNoLstmMulti | CARRADA (RD) | mIoU | no published number — **upper bound 58.1**, expect ≈10% below | derived from row 4b + CRUW gap |
 | 9 | MVRECORD | CARRADA | mIoU RA / RD | **44.5 / 63.2** (buffer); 42.4 / 58.5 (online) | RECORD Table V (`MV-RECORD`) |
 | 10 | RADDet | RADDetDataset | AP@0.5 (3D RAD head) | **0.251** (AP@0.1 0.764, AP@0.3 0.563, AP@0.7 0.059) | RADDet Tables I & II |
 | 11 | DAROD | CARRADA | mAP@0.5 / @0.3 | **55.83 / 70.68** | DAROD Table I |
@@ -56,9 +75,9 @@ Two pairs need a modified rule:
 | 15 | PointPillar | ViewOfDelft | mAP entire / corridor | **46.7 / 67.8** (5-frame) | RadarPillars Table I, `PointPillars*` |
 | 16 | RadarPillar | ViewOfDelft | mAP entire / corridor | **50.7 / 70.5** (5-frame) | RadarPillars Table I, `RadarPillars (ours)` |
 
-Coverage: **19 of 21 model-dataset combinations have a published number** (16 table rows,
-with RODNet expanded to its six variants); 2 are unvalidated, and 1 is bracketed rather
-than pointed.
+Coverage: **20 of the 24 runs have a published number**; 4 are unbaselined
+(`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
+is bracketed rather than pointed (`RODNet_HGwIv2`).
 
 ## How the six RODNet variants were mapped
 
@@ -91,12 +110,14 @@ HGv2 and HGwIv2 disable it. That may be deliberate or may be a config oversight;
 way the three v2 classes are not a like-for-like family, and their baselines differ
 accordingly. Worth confirming before reading anything into their relative scores.
 
-## The two unbaselined CARRADA pairs
+## The four unbaselined CARRADA runs
 
 The RECORD paper's CARRADA table (Table V) covers only MV-RECORD and single-view
 RECORD*; the no-LSTM variants are absent — confirmed, not an oversight in our reading.
+Because CARRADA is single-view, this is four runs (rows 6a/6b/8a/8b), not two.
 
-They are therefore scored against **RECORD/CARRADA as an upper bound**, not as a target.
+They are therefore scored against **the matching RECORD/CARRADA view as an upper bound**
+(RA against 34.8, RD against 58.1), not as a target.
 Removing the LSTM is precisely what these variants do, so they *should* score lower, and
 treating RECORD's number as something to match would penalise a correct implementation.
 The expected gap comes from CRUW, where all three are published:
@@ -107,9 +128,13 @@ The expected gap comes from CRUW, where all three are published:
 | RECORDNoLstmMulti | 65.5 | −10% |
 | RECORDNoLstm | 59.5 | −18% |
 
-So: **must not exceed** RECORD/CARRADA's mIoU, and should land roughly 10% (Multi) and
-18% (single) below it. Note RECORDNoLstm at −18% would sit at the edge of a ±20% band if
-scored as a direct target — which is exactly why it isn't.
+So per view: **must not exceed** the row-4 mIoU for that view, and should land roughly
+10% (Multi) and 18% (single) below it. Note RECORDNoLstm at −18% would sit at the edge of
+a ±20% band if scored as a direct target — which is exactly why it isn't.
+
+The gap is measured on CRUW, where the models are stacked-view rather than single-view,
+so carrying it to CARRADA assumes the LSTM contributes similarly in both settings. It is
+an expectation for triage, not a pass/fail threshold; only the upper bound is binding.
 
 ## Conflicting published numbers
 
@@ -154,5 +179,28 @@ between the two is not evidence of a bug.
   **val mAP 50.7**, matching RadarPillars' published 50.7 for the 5-frame entire-area
   setting. Encouraging, though it predates the current code.
 - That same run reports `mAR` and `mIoU` as exactly `0.0000` for all 80 epochs while mAP
-  climbs — a metric pinned at zero across an entire run is the degeneracy signature the
-  campaign is meant to catch. Worth resolving before trusting any pillar comparison.
+  climbs. This is **not** a degeneracy: `RadarPillar_evaluation` returns
+  `{'mAP': mAP, 'mAR': 0.0, 'mIoU': 0.0}` (`evaluate.py:1930`) — the two zeros are
+  hardcoded constants, because the VoD devkit scores BEV/3D mAP only. Nothing to fix.
+
+## Which metrics each evaluator actually produces
+
+A metric that is structurally absent reads identically to a metric that collapsed to
+zero, so any zero-check must know which is which. From the `result = {...}` line of each
+evaluator in `evaluate.py`:
+
+| Evaluator | Real | Hardcoded `0` |
+|---|---|---|
+| `FFTRadNet_evaluation` | mAP, mAR, mIoU | — |
+| `RODNet_evaluation` | mAP, mAR | mIoU |
+| `RECORD_CRUW_evaluation` | mAP, mAR | mIoU |
+| `RECORD_CARRADA_evaluation` | mAP, mAR, mIoU | — |
+| `MVRECORD_CARRADA_evaluation` | mAP, mAR, mIoU | — |
+| `RADDet_evaluation` | mAP | mAR, mIoU |
+| `DAROD_evaluation` | mAP, mAR | mIoU |
+| `RAMP_CNN_evaluation` | mAP, mAR | mIoU |
+| `RadarCrossAttention_evaluation` | mAP | mAR, mIoU |
+| `RadarPillar_evaluation` (also PointPillar) | mAP | mAR, mIoU |
+
+So a zero in a "hardcoded" cell is meaningless, and only a zero in a "real" cell is
+evidence of anything.
