@@ -1880,7 +1880,21 @@ class CARRADA(Dataset):
         self.model_type = model_cfg['class']
         if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             self.process_signal = True
-            self.transformations = get_transformations(transform_names=train_cfg['transformations'])
+            # Pass the split: get_transformations only appends the flips when split ==
+            # 'train' (datasets/utils.py:882-887), and its default is 'train'. Calling it
+            # without one therefore augmented val and test as well -- every evaluation
+            # scored the model on randomly flipped spectrums, with each flip firing at
+            # p=0.5 independently, so ~75% of val/test samples were mirrored. The
+            # reference (colindecourt/darod, darod/utils/data_utils.py) flips only in
+            # prepare_dataset(split="train").
+            #
+            # splittype is None only for the 'random' splitmode, where one instance backs
+            # all three splits and there is nothing to distinguish them by; 'train' keeps
+            # that path behaving exactly as before. The 'sequence' and 'original'
+            # splitmodes both build a separate instance per split (train.py:114, 236), so
+            # there the val/test copies now come out clean.
+            self.transformations = get_transformations(transform_names=train_cfg['transformations'],
+                                                       split=splittype or 'train')
             self.add_temp = True
             self.annotation_type = 'dense'
             self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
