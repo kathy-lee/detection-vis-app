@@ -830,7 +830,11 @@ class DAROD(nn.Module):
         roi_pooled_out = self.roi_pooled(x, roi_bboxes_out)
         logger.debug(f"roi_pooled module outputs roi_pooled_out: {roi_pooled_out.shape}")
 
-        output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
+        # reshape, not view: RoIPooling returns (B, n, pool_h, pool_w, C) -- channels last,
+        # as the reference's crop_and_resize does -- which is a permuted (non-contiguous)
+        # tensor. Flattening in that order also reproduces the reference's feature
+        # ordering into frcnn_fc1.
+        output = roi_pooled_out.reshape(roi_pooled_out.size(0), roi_pooled_out.size(1), -1)
         features = self.radar_features(roi_bboxes_out, roi_bboxes_scores)
         output = torch.cat([output, features], dim=-1)
 
@@ -898,7 +902,18 @@ class DAROD(nn.Module):
 
         # Each center point will have `boxes_per_pixel` number of anchor boxes, so
         # generate a grid of all anchor box centers with `boxes_per_pixel` repeats
-        out_grid = torch.repeat_interleave(torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1), boxes_per_pixel, dim=0)
+        #
+        # Centre order is [y, x, y, x], matching the [y1, x1, y2, x2] box convention used
+        # everywhere else (gt boxes, get_deltas_from_bboxes, generate_iou_map). It was
+        # [x, y, x, y], which paired the w-axis centre with the y column: with
+        # torch.meshgrid's 'ij' indexing that places the anchor for flat index (h, w, a)
+        # on feature-map cell (w, h) -- the grid transposed. A square 32x32 feature map
+        # hides it in the values (center_h and center_w are the same array), so the
+        # anchor SET looked right while every anchor pointed at the wrong cell, and the
+        # RPN's deltas were applied to anchors elsewhere in the map.
+        # Verified: with this order the anchors match the reference implementation's
+        # bbox_utils.anchors_generation bit-for-bit (max|err| = 0 over all 5120).
+        out_grid = torch.repeat_interleave(torch.stack([shift_y, shift_x, shift_y, shift_x], dim=1), boxes_per_pixel, dim=0)
         output = out_grid + anchor_manipulation
         # if train:
         mask = ((output <= 0.0) | (output >= 1.0)).any(dim=-1, keepdim=True)

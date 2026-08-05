@@ -437,8 +437,11 @@ def main():
         print(f"No runs match --only {args.only!r}", file=sys.stderr)
         return 2
 
-    if args.epochs is None and not args.build_only:
-        args.epochs = 1  # Phase 1 is about plumbing; the configs' own epochs come in Phase 2.
+    # Phase 1 (--split smoke) is about plumbing, so one epoch is the point. Phase 2
+    # (--split original) is about the score, so honour each config's published schedule
+    # instead of silently capping it at 1 -- pass --epochs to override either way.
+    if args.epochs is None and not args.build_only and args.split == "smoke":
+        args.epochs = 1
 
     by_parse = fetch_datafiles()
     results, json_path = [], os.path.splitext(args.out)[0] + ".json"

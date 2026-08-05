@@ -26,15 +26,21 @@ from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
 from data import crud, schemas
-from data.database import SessionLocal
+from data.database import get_session_local
 
 @contextmanager
 def get_db():
-    db = SessionLocal()
+    # data.database.SessionLocal is a module-level None that is never assigned -- the
+    # live API is get_session_local(), as jobs/tasks.py already uses. Importing the
+    # stale name made get_db() raise "'NoneType' object is not callable" on every call,
+    # and its only caller is the CARRADA branch of the "original" splitmode
+    # (CreateDataLoaders, which resolves sequences by name), so that split has never
+    # worked -- including the official 18/6/6 split the published DAROD schedule uses.
+    db = get_session_local()
     try:
         yield db
     finally:
-        db.close()  
+        db.close()
 
 @contextmanager
 def function_specific_log_to_file(file_name, level="INFO"):

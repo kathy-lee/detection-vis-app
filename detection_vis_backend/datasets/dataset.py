@@ -1887,6 +1887,14 @@ class CARRADA(Dataset):
             self.norm_type = train_cfg['norm_type']
             self.n_class = 4
             self.datasamples_length = self.frame_sync - self.win_frames + 1
+            # DAROD standardizes its input with per-dataset constants (the reference's
+            # darod/utils/data_utils.py). They come from the TRAIN config, not the model
+            # config: model_cfg is splatted into the network constructor (network.py:38),
+            # so it may only hold DAROD.__init__ arguments. The RECORD family uses
+            # norm_type above instead, so these stay None for them and __getitem__ leaves
+            # the input untouched.
+            self.data_mean = train_cfg.get("data_mean")
+            self.data_std = train_cfg.get("data_std")
         elif self.model_type == 'RadarCrossAttention':
             anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
             # new_gt_anno.json has a DIFFERENT schema from the annotations_frame_oriented.json
@@ -1996,12 +2004,47 @@ class CARRADA(Dataset):
                     gt_labels = []
                     # if self.annos[self.seq_name][init_frame_name]:
                     #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    # DAROD works entirely in normalized [0,1] coordinates (anchors are
+                    # built with steps 1/H, 1/W; Decoder clamps to [0,1]; darod.py's
+                    # roi_delta documents gt_boxes as "normalized format between [0,1]").
+                    # CARRADA annotations are pixel coordinates on the H*W map, e.g.
+                    # [[237,55],[240,57]], so they must be normalized here -- exactly as
+                    # RADDetDataset.__getitem__ already does. Passing pixels straight
+                    # through made IoU(pred, gt) identically 0, hence mAP/mAR of 0.0.
+                    h_dim, w_dim = feature_frame['matrix'].shape[-2], feature_frame['matrix'].shape[-1]
                     if self.annos[init_frame_name]:
                         for obj_anno in self.annos[init_frame_name].values():
                             #obj_anno['range_doppler']['dense']
-                            gt_boxes.append(obj_anno[featurestr]['box'])
+                            (y1, x1), (y2, x2) = obj_anno[featurestr]['box']
+                            gt_boxes.append([y1 / h_dim, x1 / w_dim, y2 / h_dim, x2 / w_dim])
                             gt_labels.append(obj_anno[featurestr]['label'])
-                    frame = {self.features[0]: feature_frame['matrix'], 'label': gt_labels, 'boxes': gt_boxes}
+                    # Mirror onto the boxes the flips self.transform already applied to
+                    # the matrix. The boxes come from the annotations, which are never
+                    # flipped, so without this the labels are spatially desynchronised
+                    # from the input on ~75% of samples (each flip fires with p=0.5).
+                    # The reference does both together -- flip_horizontally(spectrums,
+                    # gt_boxes) in darod/utils/data_utils.py adjusts 1.0 - x.
+                    #
+                    # Go by AXIS, not by class name: for CARRADA's (win, H, W) matrix
+                    # HFlip flips axis=1 (range, the y coord) and VFlip flips axis=2
+                    # (doppler, the x coord) -- the opposite of what the names suggest.
+                    # Gate on membership too: transform() only applies a flip when the
+                    # matching class is in self.transformations.
+                    for _t in (self.transformations or []):
+                        if isinstance(_t, HFlip) and is_hflip:
+                            gt_boxes = [[1.0 - y2, x1, 1.0 - y1, x2]
+                                        for (y1, x1, y2, x2) in gt_boxes]
+                        elif isinstance(_t, VFlip) and is_vflip:
+                            gt_boxes = [[y1, 1.0 - x2, y2, 1.0 - x1]
+                                        for (y1, x1, y2, x2) in gt_boxes]
+                    # Standardize, as the reference does in darod/utils/data_utils.py:
+                    #     spectrums = (spectrums - data_mean) / data_std
+                    # CARRADA RD is log-magnitude around 58.5 +- 3.7, so unstandardized
+                    # the network sees an almost constant DC level carrying a tiny signal.
+                    matrix = feature_frame['matrix']
+                    if self.data_mean is not None and self.data_std is not None:
+                        matrix = (matrix - self.data_mean) / self.data_std
+                    frame = {self.features[0]: matrix, 'label': gt_labels, 'boxes': gt_boxes}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
@@ -2284,8 +2327,15 @@ class RADDetDataset(Dataset):
             self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
         else:
             self.model_type = model_cfg["class"]
-        return 
-    
+        # DAROD standardizes its input: the reference divides the spectrum by the
+        # per-dataset data_mean/data_std (darod/utils/data_utils.py). They live in the
+        # TRAIN config because model_cfg is splatted into the network constructor
+        # (network.py:38) and may only hold DAROD.__init__ arguments. None means "not
+        # configured" -- __getitem__ then leaves the input untouched, as before.
+        self.data_mean = train_cfg.get("data_mean")
+        self.data_std = train_cfg.get("data_std")
+        return
+
     def transform(self, frame, gt_boxes, is_vflip=False, is_hflip=False):
         func_dict = {
             'vflip': flip_vertical,
@@ -2302,9 +2352,9 @@ class RADDetDataset(Dataset):
     def __getitem__(self, index):
         RAD_complex = self.get_RAD(index)
         # Gloabl Normalization
-        RAD_data = complexTo2Channels(RAD_complex)
-        RAD_data = (RAD_data - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
-        
+        RAD_log = complexTo2Channels(RAD_complex)  # log10(|RAD|^2 + 1); kept un-normalized for DAROD
+        RAD_data = (RAD_log - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
+
         with open(self.anno_filenames[index], "rb") as f:
             gt_instances = pickle.load(f)
 
@@ -2315,12 +2365,27 @@ class RADDetDataset(Dataset):
             feature_data = np.transpose(feature_data, (2, 0, 1))
             feature_name = "RAD"
         elif self.model_type == "DAROD":
+            # Reference (colindecourt/darod, datasets/raddet_builder/raddet.py) builds the
+            # spectrum as a SUM OF LOGS over the collapsed axis:
+            #     complexTo2channels(RAD) = log10(|RAD|^2 + 1)  then  getSumDim(axis)
+            # get_RD/get_RA instead return 10*log10(sum(|RAD|^2)) -- a log OF a sum, which
+            # is dominated by the single strongest bin and is a different representation
+            # of the scene, not a rescaling of the same one. Measured mean 58.8 against
+            # the reference's 830.4 (config_raddet.json data_mean; note 256 *
+            # global_mean_log = 830.4 exactly, confirming the sum-of-logs reading).
+            # get_RD/get_RA are left alone because the visualization path uses them.
             if self.features == ["RD"]:
-                feature_data = self.get_RD(index)
+                feature_data = np.sum(RAD_log, axis=1)   # collapse azimuth -> (range, doppler)
                 feature_name = "RD"
             elif self.features == ["RA"]:
-                feature_data = self.get_RA(index)
+                feature_data = np.sum(RAD_log, axis=-1)  # collapse doppler -> (range, azimuth)
                 feature_name = "RA"
+
+            # Standardize, as the reference does in darod/utils/data_utils.py:
+            #     spectrums = (spectrums - data_mean) / data_std
+            # Without it the network sees a ~830 DC offset carrying a +-93 signal.
+            if self.data_mean is not None and self.data_std is not None:
+                feature_data = (feature_data - self.data_mean) / self.data_std
 
             x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
             boxes = gt_instances["boxes"]

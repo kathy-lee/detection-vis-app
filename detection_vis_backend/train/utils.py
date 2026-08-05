@@ -417,16 +417,24 @@ def custom_one_hot(labels, num_classes):
     When a negative value is encountered, it results in an all-zero vector in the one-hot encoded output. 
     This function implements the same as tf.one_hot(). It can also handle 2D input tensor.
     """
-    # Handle the negative values by increasing them by num_classes
-    labels = torch.where(labels < 0, labels + num_classes, labels)
-    
+    # Park every negative label in the ONE spare slot at index num_classes, which the
+    # slice below discards -- so negatives come back all-zero, as tf.one_hot gives.
+    #
+    # This was `labels + num_classes`, which maps -1 to num_classes - 1: the last REAL
+    # class, not the spare slot. roi_delta marks ignored ROIs (neither sampled positive
+    # nor sampled negative -- the large majority) with -1, so the Fast R-CNN classifier
+    # was trained to predict the last class on most of its input. Symptom: every
+    # prediction came back as class 6 on RADDetDataset (n_class=7) and frcnn_cls barely
+    # moved, holding mAP at 0.0 regardless of box quality.
+    labels = torch.where(labels < 0, torch.full_like(labels, num_classes), labels)
+
     # Apply one hot encoding
     one_hot = F.one_hot(labels, num_classes=num_classes + 1)  # One additional class for the negative values
-    
+
     # If we have the additional "negative" class, remove it (it will be the last class)
     if one_hot.size(-1) > num_classes:
         one_hot = one_hot[..., :-1]
-    
+
     return one_hot
     
 

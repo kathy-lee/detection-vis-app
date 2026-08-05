@@ -112,13 +112,26 @@ class RoIBBox(nn.Module):
         nms_iou_threshold = self.rpn_nms_iou
         total_anchors = anchors.shape[0]
         batch_size = rpn_bbox_deltas.shape[0]
-        rpn_bbox_deltas = rpn_bbox_deltas.view(batch_size, total_anchors, 4)
-        
+        # NCHW -> NHWC before reshaping. The reference (colindecourt/darod,
+        # darod/layers/frcnn_layers.py:RoIBBox.call) does
+        #     tf.reshape(rpn_bbox_deltas, (batch_size, total_anchors, 4))
+        # on a TensorFlow NHWC tensor, where the last axis is anchor_count*4 and the
+        # reshape correctly groups each anchor's 4 deltas. Our conv emits NCHW
+        # (B, anchor_count*4, H, W), so the same reshape instead grouped 4 neighbouring
+        # COLUMNS of a single channel as one box -- the proposals were built from
+        # scrambled deltas. Anchors are generated in (h, w, anchor) order, which is
+        # exactly the NHWC flattening order, so permuting first makes the two agree.
+        #
+        # This also fixes the softmax axis: the reference softmaxes over the anchor
+        # dimension (last axis of NHWC); on NCHW dim=-1 was the width axis.
+        rpn_bbox_deltas = rpn_bbox_deltas.permute(0, 2, 3, 1).reshape(batch_size, total_anchors, 4)
+
         # Convert softmax in PyTorch
+        rpn_labels = rpn_labels.permute(0, 2, 3, 1)
         rpn_labels = F.softmax(rpn_labels, dim=-1)
-        rpn_labels = rpn_labels.view(batch_size, total_anchors)
+        rpn_labels = rpn_labels.reshape(batch_size, total_anchors)
         variances = torch.tensor(self.rpn_variances).to(rpn_bbox_deltas.device)
-        rpn_bbox_deltas *= variances.unsqueeze(0).unsqueeze(1)
+        rpn_bbox_deltas = rpn_bbox_deltas * variances.unsqueeze(0).unsqueeze(1)
         # Custom utility function
         rpn_bboxes = get_bboxes_from_deltas(anchors.to(rpn_bbox_deltas.device), rpn_bbox_deltas)
         # Use PyTorch's topk() for this functionality
@@ -184,10 +197,19 @@ class RadarFeatures(nn.Module):
     def denormalize_bboxes(self, bboxes, height, width):
         """
         Denormalize bounding boxes
+
+        Returns a NEW tensor. Writing through `bboxes[...] = ...` would mutate the
+        caller's tensor: DAROD.forward passes roi_bboxes_out here and then reuses the
+        same object for self.decoder(...) and returns it as "roi_bboxes_out" for
+        get_loss. Denormalizing it in place left both holding pixel-space ROIs (up to
+        256) to match against normalized [0,1] gt_boxes, so roi_delta found zero
+        positives, frcnn_reg was identically 0.0 and the second-stage box head never
+        trained at all -- mAP 0.0 on both CARRADA and RADDetDataset.
         """
-        bboxes[..., [0, 2]] = bboxes[..., [0, 2]] * height
-        bboxes[..., [1, 3]] = bboxes[..., [1, 3]] * width
-        return bboxes
+        out = bboxes.clone()
+        out[..., [0, 2]] = bboxes[..., [0, 2]] * height
+        out[..., [1, 3]] = bboxes[..., [1, 3]] * width
+        return out
 
 
 class RoIPooling(torch.nn.Module):
@@ -198,26 +220,51 @@ class RoIPooling(torch.nn.Module):
     def __init__(self, pooling_size):
         super(RoIPooling, self).__init__()
         self.pooling_size = pooling_size
-        self.roi_pool = torchvision.ops.RoIPool(output_size=self.pooling_size, spatial_scale=1.0)
 
     def forward(self, feature_map, roi_bboxes):
+        """Bilinear crop-and-resize of each ROI, equivalent to the reference's
+        tf.image.crop_and_resize (colindecourt/darod, frcnn_layers.py:RoIPooling.call).
+
+        This was torchvision.ops.RoIPool(spatial_scale=1.0), which is a different
+        operation on differently-encoded boxes, in three independent ways:
+          1. RoIPool MAX-pools over integer bins; crop_and_resize BILINEARLY resamples.
+          2. RoIPool expects box coordinates in feature-map pixels and multiplies them by
+             spatial_scale. Our boxes are normalised [0, 1], so with spatial_scale=1.0
+             every ROI collapsed to a sub-pixel region in the top-left corner of the
+             32x32 map -- the second stage saw essentially one corner of the image for
+             every proposal.
+          3. torchvision takes boxes as [x1, y1, x2, y2]; ours are [y1, x1, y2, x2].
+        Verified against the reference on identical inputs: max|err| 1.2e-05 (float32
+        precision), where the old implementation was off by 5.85.
+
+        :param feature_map: (B, C, H, W)
+        :param roi_bboxes: (B, n, [y1, x1, y2, x2]) normalised to [0, 1]
+        :return: (B, n, pool_h, pool_w, C) -- channels last, matching the reference, so
+                 the caller's flatten produces the same feature ordering as TF's.
         """
-        :param feature_map: feature map
-        :param roi_bboxes: roi boxes
-        :return: pooled features
-        """
-        batch_size, total_bboxes = roi_bboxes.shape[0], roi_bboxes.shape[1]
-        
-        # We need to arrange bbox indices for each batch
-        device = roi_bboxes.device
-        pooling_bbox_indices = torch.arange(batch_size, device=device).unsqueeze(1).repeat(1, total_bboxes)
-        pooling_bboxes = roi_bboxes.reshape(-1, 4)
-        rois = torch.cat([pooling_bbox_indices.view(-1,1).float(), pooling_bboxes], dim=1)
-        
-        # Use RoIPooling
-        pooling_feature_map = self.roi_pool(feature_map, rois)
-        final_pooling_feature_map = pooling_feature_map.view(batch_size, total_bboxes, pooling_feature_map.shape[1], pooling_feature_map.shape[2], pooling_feature_map.shape[3])
-        return final_pooling_feature_map
+        batch_size, channels = feature_map.shape[0], feature_map.shape[1]
+        total_bboxes = roi_bboxes.shape[1]
+        pool_h, pool_w = self.pooling_size
+
+        y1, x1, y2, x2 = roi_bboxes.unbind(-1)                       # each (B, n)
+        # Sample pool_h x pool_w points spanning the box, endpoints inclusive -- the
+        # sampling grid crop_and_resize uses.
+        ty = torch.linspace(0.0, 1.0, pool_h, device=roi_bboxes.device)
+        tx = torch.linspace(0.0, 1.0, pool_w, device=roi_bboxes.device)
+        gy = y1[..., None] + (y2 - y1)[..., None] * ty               # (B, n, pool_h)
+        gx = x1[..., None] + (x2 - x1)[..., None] * tx               # (B, n, pool_w)
+        # grid_sample(align_corners=True) wants [-1, 1] over the input extent.
+        gy = gy * 2.0 - 1.0
+        gx = gx * 2.0 - 1.0
+        grid = torch.stack([gx[:, :, None, :].expand(batch_size, total_bboxes, pool_h, pool_w),
+                            gy[:, :, :, None].expand(batch_size, total_bboxes, pool_h, pool_w)],
+                           dim=-1)                                   # (B, n, ph, pw, 2) as (x, y)
+        grid = grid.reshape(batch_size, total_bboxes * pool_h, pool_w, 2)
+
+        pooled = F.grid_sample(feature_map, grid, mode='bilinear',
+                               padding_mode='zeros', align_corners=True)
+        return pooled.reshape(batch_size, channels, total_bboxes, pool_h, pool_w) \
+                     .permute(0, 2, 3, 4, 1)
 
 
 def get_deltas_from_bboxes(bboxes, gt_boxes):
@@ -340,7 +387,14 @@ def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size
             
             batch_boxes.append(keep_boxes)
             batch_scores.append(keep_scores)
-            batch_classes.append(torch.full((len(keep_scores),), c, dtype=torch.float32))
+            # device= matters: without it torch.full builds on CPU while batch_scores /
+            # batch_boxes are on the GPU, so the `batch_classes[top_indices]` below fails
+            # with "indices should be either on cpu or on the same device as the indexed
+            # tensor". That line only runs when a frame yields more than max_total_size
+            # detections, so the bug stayed hidden while the model was too weak to emit
+            # that many -- it first fired at epoch 44 of the 50-epoch CARRADA run.
+            batch_classes.append(torch.full((len(keep_scores),), c, dtype=torch.float32,
+                                            device=scores.device))
         
         # Concatenate results of all classes
         batch_boxes = torch.cat(batch_boxes, dim=0)
@@ -444,9 +498,13 @@ class Decoder(nn.Module):
         roi_bboxes, pred_deltas, pred_label_probs = inputs
         batch_size = pred_deltas.shape[0]
         
-        pred_deltas = pred_deltas.view(batch_size, -1, self.total_labels, 4)
         variances = torch.tensor(self.variances).to(pred_deltas.device)
-        pred_deltas *= variances.unsqueeze(0).unsqueeze(1)
+        # Out-of-place (`*`, not `*=`): .view() shares storage with the caller's
+        # frcnn_reg_pred, and DAROD.forward returns that same tensor for get_loss.
+        # Scaling it in place meant the loss compared an already-variance-scaled
+        # prediction against roi_delta's `deltas / variances` target.
+        pred_deltas = pred_deltas.view(batch_size, -1, self.total_labels, 4) * \
+            variances.unsqueeze(0).unsqueeze(1)
         
         expanded_roi_bboxes = roi_bboxes.unsqueeze(-2).expand(-1, -1, self.total_labels, -1)
         pred_bboxes = get_bboxes_from_deltas(expanded_roi_bboxes, pred_deltas)
@@ -606,10 +664,23 @@ def reg_loss(*args):
     """
     y_true, y_pred = args if len(args) == 2 else args[0]
     y_pred = y_pred.reshape(y_pred.shape[0], -1, 4)
-    # Huber loss
-    loss_for_all = F.smooth_l1_loss(y_true, y_pred, reduction='none', beta=1/9).sum(-1)
-    # loss_for_all = torch.sum(loss_for_all, dim=-1)
-    
+    # Huber loss. Must match the reference's
+    #     tf.losses.Huber(reduction=NONE, delta=1/9)
+    # (colindecourt/darod, darod/utils/train_utils.py:reg_loss) on BOTH counts:
+    #
+    #   1. huber_loss(delta), not smooth_l1_loss(beta). Despite the similar shape they
+    #      differ by a factor of 1/delta -- smooth_l1(beta=d) == huber(delta=d)/d -- so
+    #      beta=1/9 inflated this term 9x.
+    #   2. MEAN over the 4 box coordinates, not sum. tf.losses.Huber with
+    #      reduction=NONE reduces the last axis by mean; .sum(-1) added another 4x.
+    #
+    # Combined the regression loss was 36x too large. darod_loss returns an unweighted
+    # sum of rpn_reg + rpn_cls + frcnn_reg + frcnn_cls, so both classification heads were
+    # swamped roughly 36:1 -- the model optimized box coordinates while barely training
+    # the classifier, which is why it produced well-placed boxes (IoU 0.83 on a single
+    # batch) with a collapsed label and hence ~0 mAP.
+    loss_for_all = F.huber_loss(y_true, y_pred, reduction='none', delta=1/9).mean(-1)
+
     # Check for any non-zero entries in the last dimension to create a mask
     pos_cond = torch.any(y_true != 0.0, dim=-1)
     pos_mask = pos_cond.float()
