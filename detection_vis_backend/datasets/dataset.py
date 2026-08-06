@@ -2028,8 +2028,28 @@ class CARRADA(Dataset):
                     h_dim, w_dim = feature_frame['matrix'].shape[-2], feature_frame['matrix'].shape[-1]
                     if self.annos[init_frame_name]:
                         for obj_anno in self.annos[init_frame_name].values():
-                            #obj_anno['range_doppler']['dense']
-                            (y1, x1), (y2, x2) = obj_anno[featurestr]['box']
+                            # Box = extent of the DENSE annotation, as the reference builds
+                            # it (colindecourt/darod, datasets/carrada_builder/carrada.py:
+                            # _build_bbox takes min/max over the 'dense' polygon).
+                            #
+                            # This was the annotation's own 'box' field, which is the
+                            # extent of the SPARSE annotation -- a handful of seed points,
+                            # not the object. On sequence 2019-09-16-13-13-01 frame 000037
+                            # the same object measures:
+                            #     'box'/'sparse' -> [85, 39, 88, 40]   (3 x 1 px)
+                            #     'dense'        -> [83, 37, 90, 42]   (7 x 5 px)
+                            # IoU between the two is 0.086, so a correctly trained detector
+                            # scores ~0 against the sparse boxes: the reference's own
+                            # weights, which reproduce its published 0.5583, score only
+                            # 0.1025 through this loader.
+                            #
+                            # It also crippled training. Anchor scales are 0.03-0.12 of a
+                            # 256-bin range axis, i.e. 7.7-30 px, so almost no anchor can
+                            # reach the RPN's 0.3 positive IoU threshold against a 3 x 1 px
+                            # target -- the RPN was learning from nearly no positives.
+                            dense = np.asarray(obj_anno[featurestr]['dense'])
+                            y1, x1 = dense[:, 0].min(), dense[:, 1].min()
+                            y2, x2 = dense[:, 0].max(), dense[:, 1].max()
                             gt_boxes.append([y1 / h_dim, x1 / w_dim, y2 / h_dim, x2 / w_dim])
                             gt_labels.append(obj_anno[featurestr]['label'])
                     # Mirror onto the boxes the flips self.transform already applied to
