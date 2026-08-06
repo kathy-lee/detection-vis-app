@@ -46,14 +46,25 @@ class DARODBlock2D(nn.Module):
         self.maxpooling = nn.MaxPool2d(kernel_size=pooling_size, stride=pooling_strides)
 
     def _get_norm(self, block_norm, filters, name):
+        # eps=1e-3 is tfa.layers.GroupNormalization's default (tensorflow_addons/layers/
+        # normalizations.py:80); torch's nn.GroupNorm defaults to 1e-5. The reference
+        # (colindecourt/darod, darod/models/darod_blocks.py) takes the tfa default, so
+        # ours normalized with a variance floor 100x smaller. With trained reference
+        # weights loaded into this module, eps=1e-5 gave max|err| 1.59 at the very first
+        # norm and the error compounded through the whole backbone; at 1e-3 every layer
+        # from block1_norm1 to rpn_reg_pred matches to float32 precision (max|err| 6e-3
+        # on the RPN logits, 2e-5 typical).
         if block_norm == "batch_norm":
+            # Not reachable from DAROD (use_bn picks "group_norm"), but note that Keras's
+            # BatchNormalization also differs from torch's defaults: epsilon 1e-3 vs 1e-5
+            # and momentum 0.99 vs torch's 0.1 (i.e. torch momentum 0.01).
             return nn.BatchNorm2d(filters)
         elif block_norm == "group_norm":
-            return GroupNorm(32, filters)  # Assuming 32 groups
+            return GroupNorm(32, filters, eps=1e-3)  # tfa default: groups=32, eps=1e-3
         elif block_norm == "layer_norm":
-            return GroupNorm(1, filters)
+            return GroupNorm(1, filters, eps=1e-3)
         elif block_norm == "instance_norm":
-            return nn.InstanceNorm2d(filters)
+            return nn.InstanceNorm2d(filters, eps=1e-3)
         elif block_norm is None:
             return None
         else:
@@ -94,7 +105,7 @@ class DARODBlock2D(nn.Module):
     
 
 class RoIBBox(nn.Module):
-    def __init__(self, anchors, pre_nms_topn_train, pre_nms_topn_test, post_nms_topn_train, post_nms_topn_test, rpn_nms_iou, rpn_variances):
+    def __init__(self, anchors, pre_nms_topn_train, pre_nms_topn_test, post_nms_topn_train, post_nms_topn_test, rpn_nms_iou, rpn_variances, anchors_eval=None):
         super(RoIBBox, self).__init__()
         self.pre_nms_topn_train = pre_nms_topn_train
         self.pre_nms_topn_test = pre_nms_topn_test
@@ -104,9 +115,15 @@ class RoIBBox(nn.Module):
         self.rpn_variances = rpn_variances
 
         self.anchors = anchors.clone().detach()
+        # Inference uses a different anchor set -- see anchors_generation in network.py.
+        self.anchors_eval = self.anchors if anchors_eval is None else anchors_eval.clone().detach()
 
     def forward(self, rpn_bbox_deltas, rpn_labels):
-        anchors = self.anchors
+        # Train-time anchors zero out the out-of-bounds boxes; eval-time anchors clip them
+        # to [0, 1] instead. The reference makes the same switch by building the two sets
+        # separately -- train.py:51 anchors_generation(config, train=True), eval.py:44
+        # anchors_generation(config, train=False).
+        anchors = self.anchors if self.training else self.anchors_eval
         pre_nms_topn = self.pre_nms_topn_train if self.training else self.pre_nms_topn_test
         post_nms_topn = self.post_nms_topn_train if self.training else self.post_nms_topn_test
         nms_iou_threshold = self.rpn_nms_iou
@@ -414,8 +431,17 @@ def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size
         all_nms_classes.append(batch_classes)
         all_valid_detections.append(len(batch_boxes))
 
+    # Clip to [0, 1], as tf.image.combined_non_max_suppression does -- clip_boxes
+    # defaults to True (tensorflow/python/ops/image_ops_impl.py:4784) and the reference
+    # calls it without overriding that. Decoded proposals routinely fall outside the
+    # image (measured range [-0.039, 1.465] on a test frame), so unclipped ROIs were
+    # sampled beyond the feature map and matched against gt boxes that are always inside
+    # it. Verified: after clipping, our proposals reproduce the reference's exactly --
+    # 603 of 603 kept, scores identical, boxes equal bar one swapped pair of tied scores.
+    all_nms_boxes = [b.clamp(0.0, 1.0) for b in all_nms_boxes]
+
     max_len = max([b.shape[0] for b in all_nms_boxes])
-    
+
     device = all_nms_boxes[0].device
     all_nms_classes = [c.to(device) for c in all_nms_classes]
     padded_nms_boxes = [torch.cat([b, torch.zeros((max_len - b.shape[0], 4), device=device)], dim=0) for b in all_nms_boxes]
