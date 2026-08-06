@@ -2368,6 +2368,10 @@ class RADDetDataset(Dataset):
         # configured" -- __getitem__ then leaves the input untouched, as before.
         self.data_mean = train_cfg.get("data_mean")
         self.data_std = train_cfg.get("data_std")
+        # Cache under TMP_ROOTDIR, not the dataset dir: the dataset lives on an external
+        # disk that may be mounted read-only, and this is derived data.
+        self.collapsed_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache")
         return
 
     def transform(self, frame, gt_boxes, is_vflip=False, is_hflip=False):
@@ -2383,16 +2387,46 @@ class RADDetDataset(Dataset):
     def __len__(self):
         return self.frame_sync
 
-    def __getitem__(self, index):
-        RAD_complex = self.get_RAD(index)
-        # Gloabl Normalization
-        RAD_log = complexTo2Channels(RAD_complex)  # log10(|RAD|^2 + 1); kept un-normalized for DAROD
-        RAD_data = (RAD_log - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
+    def _collapsed_cache_path(self, index, feature_name):
+        stem = os.path.splitext(os.path.basename(self.RAD_filenames[index]))[0]
+        return os.path.join(self.collapsed_cache_dir, feature_name, f"{stem}.npy")
 
+    def _get_collapsed(self, index, feature_name):
+        """Sum-of-logs spectrum collapsed to 2D, memoized on disk.
+
+        DAROD consumes a 256x64 RD map (64 KB) but the frame on disk is a 256x256x64
+        complex RAD cube (33 MB), so every epoch re-read ~500x the data it uses and
+        recomputed the identical sum. That is the whole reason a RADDetDataset epoch
+        measured 2709 s against CARRADA's 28.9 s. Caching the collapsed map costs one
+        pass over the dataset (~1 epoch) and ~640 MB for ~10k frames.
+
+        Only the DAROD path benefits: the RADDet model consumes the full cube.
+        """
+        path = self._collapsed_cache_path(index, feature_name)
+        if os.path.exists(path):
+            return np.load(path)
+        RAD_log = complexTo2Channels(self.get_RAD(index))  # log10(|RAD|^2 + 1)
+        axis = 1 if feature_name == "RD" else -1  # collapse azimuth / doppler
+        arr = np.sum(RAD_log, axis=axis).astype(np.float32)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write atomically: dataloader workers can race on the same frame, and a torn
+        # .npy would poison every later epoch. Pass a file object so np.save does not
+        # append its own .npy to the temp name.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.save(fh, arr)
+        os.replace(tmp, path)
+        return arr
+
+    def __getitem__(self, index):
         with open(self.anno_filenames[index], "rb") as f:
             gt_instances = pickle.load(f)
 
         if self.model_type == "RADDet":
+            RAD_complex = self.get_RAD(index)
+            # Gloabl Normalization
+            RAD_log = complexTo2Channels(RAD_complex)
+            RAD_data = (RAD_log - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
             # decode ground truth boxes to YOLO format
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
@@ -2408,12 +2442,14 @@ class RADDetDataset(Dataset):
             # the reference's 830.4 (config_raddet.json data_mean; note 256 *
             # global_mean_log = 830.4 exactly, confirming the sum-of-logs reading).
             # get_RD/get_RA are left alone because the visualization path uses them.
+            #
+            # The collapsed map is cached on disk pre-standardization, so changing
+            # data_mean/data_std does not invalidate it -- see _get_collapsed.
             if self.features == ["RD"]:
-                feature_data = np.sum(RAD_log, axis=1)   # collapse azimuth -> (range, doppler)
-                feature_name = "RD"
+                feature_name = "RD"                      # collapse azimuth -> (range, doppler)
             elif self.features == ["RA"]:
-                feature_data = np.sum(RAD_log, axis=-1)  # collapse doppler -> (range, azimuth)
-                feature_name = "RA"
+                feature_name = "RA"                      # collapse doppler -> (range, azimuth)
+            feature_data = self._get_collapsed(index, feature_name)
 
             # Standardize, as the reference does in darod/utils/data_utils.py:
             #     spectrums = (spectrums - data_mean) / data_std

@@ -47,6 +47,29 @@
     },
 
     "RADDetDataset": {
+        "num_epochs": 75,
+        "optimizer": {
+            "lr": 1e-4
+        },
+        "lr_scheduler": {
+            "type": "exp",
+            "gamma": 1.0
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 16,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 16,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "schedule_notes": "Published DAROD schedule for RADDet: 75 epochs, batch 16, Adam lr 1e-4 (colindecourt/darod config/config_raddet.json epochs/batch_size/optimizer/lr). That config sets \"scheduler\": false, so the learning rate is CONSTANT -- its \"scheduler_step\": 40 is dead config, read only when scheduler is true. train.py has no 'no scheduler' option, so this is expressed as ExponentialLR with gamma 1.0, which is exactly a constant lr. Note this differs from CARRADA above, which does decay (StepLR every 25 epochs). The whole dataloader block must be restated because smoke_sweep.resolve_configs merges the per-dataset block with a shallow dict.update, so a partial 'dataloader' would drop the val and test entries.",
         "data_mean": 830.4466,
         "data_std": 93.25871,
         "data_stats_notes": "Standardization constants for the RD input, copied verbatim from the reference implementation colindecourt/darod, config/config_raddet.json (data_mean/data_std). Applied there in darod/utils/data_utils.py as (spectrum - data_mean) / data_std. These describe the reference's SUM-OF-LOGS spectrum, sum(log10(|RAD|^2 + 1)) collapsed over the azimuth axis -- note 256 * global_mean_log (3.2438383) = 830.42, which is data_mean, confirming that reading. They therefore only apply now that RADDetDataset.__getitem__ builds RD the same way; against the previous log-of-a-sum form (measured mean 58.75) these constants would have been actively harmful. Verified after the change: measured mean 829.272 / std 94.292 over 7 batches, against the reference's 830.447 / 93.259."
