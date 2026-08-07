@@ -2353,6 +2353,8 @@ class RADDetDataset(Dataset):
 
         if 'transformations' in train_cfg:
             self.transformations = train_cfg['transformations']
+        # Which split this copy serves -- transform() augments the train split only.
+        self.splittype = splittype
 
         if model_cfg["class"] == "RADDet":
             self.model_type = "RADDet"
@@ -2374,14 +2376,35 @@ class RADDetDataset(Dataset):
             os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache")
         return
 
-    def transform(self, frame, gt_boxes, is_vflip=False, is_hflip=False):
-        func_dict = {
-            'vflip': flip_vertical,
-            'hflip': flip_horizontal
-        }
-        if self.transformations is not None:
-            for transform in self.transformations:
-                frame, gt_boxes = func_dict[transform](frame, gt_boxes)
+    def transform(self, frame, gt_boxes):
+        """Random flip augmentation, matching the reference's data_preprocessing
+        (colindecourt/darod, darod/utils/data_utils.py): one uniform draw per sample,
+        < 0.25 -> horizontal, < 0.5 -> vertical, otherwise unchanged. Never both, and
+        only on the train split.
+
+        This used to apply EVERY entry of self.transformations to EVERY sample: the
+        is_vflip/is_hflip parameters were accepted and never read, and the sole caller
+        passed neither. With transformations ["hflip", "vflip"] that meant both flips
+        on every frame of train, val AND test -- a deterministic 180 degree rotation of
+        the whole dataset rather than augmentation, with no stochastic regularization at
+        all. Both 75-epoch seeds overfit accordingly (val loss 0.35 -> 0.47, val mAP
+        peaking around epoch 62 of 75).
+        The permanent mirroring also fed RadarFeatures wrong physics: it converts box
+        coordinates to range/Doppler via range_res/doppler_res, so a target at range r
+        was reported to the classifier as R - r.
+        """
+        if not self.transformations:
+            return frame, gt_boxes
+        # splittype is None only if a caller builds one instance for every split; treat
+        # that as train to preserve the previous default rather than silently drop
+        # augmentation. CreateDataLoaders builds a copy per split (train.py).
+        if self.splittype not in (None, 'train'):
+            return frame, gt_boxes
+        r = np.random.uniform(0, 1)
+        if r < 0.25 and 'hflip' in self.transformations:
+            frame, gt_boxes = flip_horizontal(frame, gt_boxes)
+        elif r < 0.5 and 'vflip' in self.transformations:
+            frame, gt_boxes = flip_vertical(frame, gt_boxes)
         return frame, gt_boxes
     
     def __len__(self):
@@ -2451,9 +2474,28 @@ class RADDetDataset(Dataset):
                 feature_name = "RA"                      # collapse doppler -> (range, azimuth)
             feature_data = self._get_collapsed(index, feature_name)
 
+            # The reference normalizes the RAD cube ELEMENTWISE BEFORE collapsing
+            # (datasets/raddet_builder/raddet.py:91 -> :99):
+            #     RAD = (log10(|RAD|^2 + 1) - global_mean_log) / global_variance_log
+            #     RD  = sum over the azimuth axis
+            # which, since the cache holds the raw sum S, is (S - n*mean) / variance for
+            # n the number of collapsed bins (256 azimuth for RD, 64 doppler for RA).
+            # Only then does data_utils.py standardize by data_mean/data_std.
+            #
+            # We used to skip straight to the standardization, giving 0.010723*S - 8.9049
+            # against the reference's 0.0015684*S - 10.2072: 6.8x their dynamic range and
+            # a different offset. I had dismissed that as harmless on the grounds that the
+            # first conv is linear and GroupNorm follows it, so a positive affine transform
+            # washes out -- wrong, because the conv bias and the per-channel constants do
+            # not scale with the signal, so GroupNorm does not restore equivalence.
+            # Measured: the reference's own trained weights score mAP 0.0031 through this
+            # loader with the old scaling, against 0.4414 from its own eval.py.
+            n_collapsed = 256 if feature_name == "RD" else 64   # RADDet RAD is (256, 256, 64)
+            feature_data = ((feature_data - n_collapsed * self.data_stats["global_mean_log"])
+                            / self.data_stats["global_variance_log"])
+
             # Standardize, as the reference does in darod/utils/data_utils.py:
             #     spectrums = (spectrums - data_mean) / data_std
-            # Without it the network sees a ~830 DC offset carrying a +-93 signal.
             if self.data_mean is not None and self.data_std is not None:
                 feature_data = (feature_data - self.data_mean) / self.data_std
 

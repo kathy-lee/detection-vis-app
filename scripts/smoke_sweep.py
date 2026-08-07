@@ -318,7 +318,10 @@ def execute(run, by_parse, args):
     train_cfg.setdefault("dataloader", {}).update(split_patch)
     if args.epochs is not None:
         train_cfg["num_epochs"] = args.epochs
+    if args.seed is not None:
+        train_cfg["seed"] = args.seed
     result["num_epochs"] = train_cfg["num_epochs"]
+    result["seed"] = train_cfg["seed"]
     result["splitmode"] = split_patch["splitmode"]
     result["n_datafiles"] = len(datafiles)
 
@@ -350,6 +353,7 @@ def write_report(results, path, args):
         "",
         f"`--split {args.split}`"
         + (f", `--epochs {args.epochs}`" if args.epochs is not None else ", config-default epochs")
+        + (f", `--seed {args.seed}`" if args.seed is not None else "")
         + (", **build-only** (dataloaders built, no training)" if args.build_only else ""),
         "",
         "Purpose is the plumbing, not the score.",
@@ -397,6 +401,10 @@ def main():
                    help="skip runs whose id contains SUBSTR; repeatable")
     p.add_argument("--split", choices=["smoke", "original"], default="smoke")
     p.add_argument("--epochs", type=int, help="override num_epochs (default: config value)")
+    # Repeat a pair across seeds to measure run-to-run spread. With --split original the
+    # split is fixed by sequence/frame lists, so the seed only moves weight init, batch
+    # order and augmentation draws -- which is exactly the variation we want to quantify.
+    p.add_argument("--seed", type=int, help="override train_config seed (default: config value)")
     p.add_argument("--build-only", action="store_true",
                    help="build dataloaders and stop -- validates split resolution cheaply")
     p.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "phase1-smoke-sweep.md"))
