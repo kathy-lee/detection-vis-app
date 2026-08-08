@@ -1578,7 +1578,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                     if classid == -1000: 
                         continue
                     gt_obj = {'id': id_gt, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                                    'classid': classid, 'score': 1.0}
+                                    'class_id': classid, 'score': 1.0}
                     gt_objs[iter, classid].append(gt_obj)
                     id_gt += 1
             # TODO: Handle the case of empty annotation
@@ -1630,11 +1630,23 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                 class_id, ridx, aidx, conf = obj
                 if class_id == -1:
                     continue
+                # res_final is a float array, so these unpack as numpy floats and
+                # rng_grid[ridx] raises IndexError. The line only runs once a detection
+                # survives post-processing, so it stayed latent for as long as the model
+                # detected nothing -- the run "succeeded" with mAP 0 and crashed the
+                # moment the model started working (epoch 3 of a 20-epoch run).
+                class_id, ridx, aidx = int(class_id), int(ridx), int(aidx)
                 rng = rng_grid[ridx]
                 agl = agl_grid[aidx]
                 res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                            'classid': class_id, 'score': conf}
-                res_objs[iter, classid].append(res_obj)
+                            'class_id': class_id, 'score': conf}
+                # class_id, not classid: `classid` is a leaked loop variable from the
+                # ground-truth loop above (the class of the last GT object seen), so every
+                # detection was filed under the wrong class bucket -- and under a stale one
+                # on frames with no GT at all. accumulate() then scored each class against
+                # another class's detections, which pins mAP/mAR at 0 however well the
+                # model does. The dict value on the line above already had it right.
+                res_objs[iter, class_id].append(res_obj)
                 id_res += 1
             init_genConfmap = init_genConfmap.next
 
@@ -1649,11 +1661,12 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                     class_id, ridx, aidx, conf = obj
                     if class_id == -1:
                         continue
+                    class_id, ridx, aidx = int(class_id), int(ridx), int(aidx)  # see above
                     rng = rng_grid[ridx]
                     agl = agl_grid[aidx]
                     res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                                'classid': class_id, 'score': conf}
-                    res_objs[iter, classid].append(res_obj)
+                                'class_id': class_id, 'score': conf}
+                    res_objs[iter, class_id].append(res_obj)   # see the note above
                     id_res += 1
                 init_genConfmap = init_genConfmap.next
                 # offset += 1
@@ -1741,6 +1754,19 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         R=[]
         TP = 0
         GT = categ['grd_no']
+        if GT == 0:
+            # No ground truth for this class in this split: recall is undefined, so
+            # TP/GT gave 0/0 -> nan -> np.trapz -> nan, and the nan then propagated into
+            # the 3-class mean, reporting mAP as nan for a model that was detecting
+            # perfectly well. Seen in the Phase 1 smoke sweep, whose 3-file sequence split
+            # of CARRADA contains no pedestrian or cyclist frames: classes 0 and 1 had
+            # GT 0 while class 2 scored AP 0.418 at recall 0.93.
+            # Exclude the class instead, which is also what COCO-style mAP does with
+            # absent categories.
+            categ['AP'] = float('nan')
+            cls[f"{idx}"] = categ
+            logger.info(f"{idx} | no ground truth in this split, excluded from mAP")
+            continue
         index = np.argsort(-categ['Conf'])
         for cnt, i in enumerate(index):
             TP += categ['TP'][i]
@@ -1754,7 +1780,13 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         logger.info(f"{idx} | AP: {categ['AP']}, P: {prec / rec}, R: {prec / GT}, GT: {GT}, Heading Accuracy: {cls[f'{idx}']['O_T']}, {cls[f'{idx}']['O_P']}")
         cls[f"{idx}"] = categ
     
-    mAP = (cls['0']['AP'] + cls['1']['AP'] + cls['2']['AP']) / 3
+    # Average over the classes that actually occur, not a hardcoded 3 -- see the GT == 0
+    # branch above. A single absent class used to make the whole metric nan.
+    present = [cls[f"{i}"]['AP'] for i in range(len(cls)) if cls[f"{i}"]['grd_no'] > 0]
+    mAP = float(np.mean(present)) if present else 0.0
+    if len(present) < len(cls):
+        logger.warning(f"mAP averaged over {len(present)} of {len(cls)} classes; the rest "
+                       f"have no ground truth in this split and cannot be scored.")
     result = {'mAP': mAP, 'mAR': 0, 'mIoU': 0}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
