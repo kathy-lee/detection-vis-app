@@ -322,7 +322,19 @@ def randomly_select_xyz_mask(mask, select_xyz, seed):
     :param seed: seed
     :return:  selected_valid_mask = (batch_size, [m_bool_value])
     """
-    torch.manual_seed(seed)
+    # NO torch.manual_seed(seed) here. This runs 4-5 times per batch (RPN target
+    # assignment plus roi_delta's positive and negative masks), and reseeding the GLOBAL
+    # generator each time broke training two ways:
+    #   1. random_mask came out identical on every call, so the "random" subsampling was a
+    #      fixed function of the mask -- the same candidates every batch, every epoch.
+    #   2. Worse, DataLoader(shuffle=True) builds its RandomSampler generator from the
+    #      global RNG at the start of each epoch. That RNG had just been reset to `seed` by
+    #      the previous epoch's last batch, so every epoch drew the SAME permutation:
+    #      the model saw one identical batch sequence for 74 of 75 epochs.
+    # Demonstrated directly: with the reseed, epoch2 and epoch3 orders are equal; without
+    # it they differ. The reference passes its seed as an op-level argument to
+    # tf.random.uniform (train_utils.py:26), which does not disturb the global stream.
+    # train() already seeds globally once at startup, so per-run reproducibility is kept.
     maxval = select_xyz.max().item() * 10
     device = mask.device
     select_xyz = select_xyz.to(device)
@@ -392,13 +404,20 @@ def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size
             class_scores = class_scores[valid_inds]
             class_boxes = boxes[b, valid_inds, c, :]
             
-            # Sort class_scores and keep top max_output_size_per_class
             sorted_scores, sorted_indices = class_scores.sort(descending=True)
-            sorted_scores = sorted_scores[:max_output_size_per_class]
-            sorted_boxes = class_boxes[sorted_indices][:max_output_size_per_class]
-            
-            # Apply NMS
-            keep_indices = nms(sorted_boxes, sorted_scores, iou_threshold)
+            sorted_boxes = class_boxes[sorted_indices]
+
+            # max_output_size_per_class bounds the OUTPUT of NMS, not its input --
+            # tf.image.combined_non_max_suppression suppresses across every candidate and
+            # then keeps at most that many survivors. This used to truncate to the top
+            # max_output_size_per_class BEFORE suppressing, so overlapping boxes consumed
+            # the budget and lower-scored non-overlapping ones never got a chance.
+            # Measured on one train batch against the reference: 578 real proposals
+            # against their 680, from an identical candidate set (every kept box matched
+            # one of theirs to 2.5e-4).
+            # Invisible on CARRADA, where pre_nms_topn == post_nms_topn == 1000 makes the
+            # truncation a no-op; RADDet runs 2000 -> 1000 (train) and 1000 -> 500 (test).
+            keep_indices = nms(sorted_boxes, sorted_scores, iou_threshold)[:max_output_size_per_class]
             keep_boxes = sorted_boxes[keep_indices]
             keep_scores = sorted_scores[keep_indices]
             
@@ -440,7 +459,17 @@ def non_max_suppression(boxes, scores, max_output_size_per_class, max_total_size
     # 603 of 603 kept, scores identical, boxes equal bar one swapped pair of tied scores.
     all_nms_boxes = [b.clamp(0.0, 1.0) for b in all_nms_boxes]
 
-    max_len = max([b.shape[0] for b in all_nms_boxes])
+    # Pad to max_total_size, as tf.image.combined_non_max_suppression does -- its output
+    # is always (batch, max_total_size, ...), zero rows after valid_detections.
+    # This used to pad to the batch's largest real count, which looks tidier and is wrong:
+    # the zero rows are NOT inert. roi_delta consumes the padded tensor whole, so each one
+    # enters the Fast R-CNN pool as a background negative, changing both the class balance
+    # and the loss normalisation.
+    # Measured on one batch with the reference's own weights loaded into both
+    # implementations, ours 820 real ROIs against their 1000: frcnn_cls_loss 0.1723 vs
+    # 0.1873 (8% low), frcnn_reg_loss 0.0635 vs 0.0632, block1.conv1 gradient norm 15%
+    # low -- while the entire RPN side (losses, targets, gradients) matched to 4+ decimals.
+    max_len = max_total_size
 
     device = all_nms_boxes[0].device
     all_nms_classes = [c.to(device) for c in all_nms_classes]
