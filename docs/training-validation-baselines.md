@@ -79,6 +79,71 @@ Coverage: **20 of the 24 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
 is bracketed rather than pointed (`RODNet_HGwIv2`).
 
+
+## Measured results (Phase 2/3)
+
+Protocol: official split, the paper's own schedule, repo default configs, **three seeds
+(3/7/11)** per pair, final-epoch weights (which is also what the reference's `eval.py`
+evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
+
+| # | pair | ours (mean ± sd) | published | reference on OUR pipeline | verdict |
+|---|------|------------------|-----------|---------------------------|---------|
+| 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
+| 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
+
+Both are mAP@0.5. The other 22 runs are not yet measured.
+
+**Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
+only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
+own published figure. That is about 1 sd of the seed spread, so it may be seed noise --
+but the builder that produced the published number is not recoverable from that repo
+(its `config_raddet.json` pins dataset_version 1.0.0 while `raddet.py` declares 1.1.0,
+so the published config cannot load the published builder). CARRADA has no such problem:
+there the reference reproduces the paper at both thresholds (0.5578/0.7044 against
+0.5583/0.7068).
+
+### Run-to-run variance is large enough to change verdicts
+
+Measured over three seeds with everything else fixed:
+
+| pair | sd | relative |
+|------|-----|----------|
+| DAROD / CARRADA | 0.0140 | 2.5% |
+| DAROD / RADDetDataset | 0.0186 | 4.2% |
+
+**A single run cannot resolve a difference below roughly 5%.** Any verdict finer than
+that needs seeds; `scripts/smoke_sweep.py --seed N` exists for this. Two cautionary
+examples from this campaign, both of which were reported as findings before being
+re-measured:
+
+- A single CARRADA run scored 0.5556 against a published 0.5583 and was called a match
+  "within 0.5%". Three seeds put the mean at 0.5377 ± 0.0162 at that point in the work --
+  the 0.5% was a favourable draw, not precision.
+- A single RADDet run scored 0.4320 and its 7.2% shortfall was treated as the thing to
+  explain. Three seeds gave 0.4060 ± 0.0227, i.e. a 12.8% shortfall; the first run had
+  been the best of the three.
+
+### How these were validated
+
+Matching a published number is weak evidence on its own, because a wrong pipeline can
+still train to a plausible score. The stronger check, and the one that found the real
+defects, is to run the reference implementation's **trained weights through our own
+loader, decoder and evaluator** and confirm we reproduce its score:
+
+| pair | reference's own `eval.py` | same weights, our pipeline |
+|------|---------------------------|----------------------------|
+| CARRADA | 0.5578 | 0.5581 |
+| RADDetDataset | 0.4414 | 0.4478 |
+
+That isolates data/eval from training in one shot and needs no training run. On CARRADA
+it read 0.1025 before the gt-box defect was fixed; on RADDet 0.0031 before the input
+normalization defect. **Run it first on any pair that has a reference implementation.**
+
+Reference checkpoints, per-class results, the saved comparison tensors and the harness
+scripts are preserved outside the repo at `/home/kangle/dataset/darod_reference/`
+(see its README). Twenty defects were found and fixed to reach the numbers above; the
+commit messages on `feat/validate-baselines` carry the details.
+
 ## How the six RODNet variants were mapped
 
 Two papers are involved. **RODNet_v1** (WACV) reports the three non-v2 architectures
