@@ -3034,12 +3034,24 @@ class UWCR(Dataset):
         for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
             # load ra slice
             # format of radar_npy_win_ra [chirp, range, angle, real/imag]
-            ra = self.get_RA(idx)
+            # frameid, NOT idx. idx is the position WITHIN the window (0..win_size-1), so
+            # every sample in the dataset loaded the same first win_size frames while the
+            # labels below correctly used frameid = data_id + idx*step. Verified: samples
+            # 0, 1 and 5 returned byte-identical RA/RD/AD while their confmap_gt differed.
+            # The model was therefore asked to predict 110 different label maps from one
+            # constant input; the best fit is the average label map, a broad smear with no
+            # local maxima, which is why the loss fell while detect_peaks found nothing and
+            # mAP stayed at 0. It also explains why a single batch overfits fine -- one
+            # batch has one label, so a constant input maps to it consistently.
+            # The reference indexes both by frame (Xiangyu-Gao/Radar-multiple-perspective-
+            # object-detection, dataLoader/CRDatasets.py:97-110: np.load(path % (chirp_id,
+            # frameid))).
+            ra = self.get_RA(frameid)
             radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, 0, :]
             radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, 128, :]
             # load rv slice
             # format of radar_npy_win_rv [chirp, range, velocity, real]
-            rv, va = self.get_RV_VA_slice(idx)
+            rv, va = self.get_RV_VA_slice(frameid)
             radar_npy_win_rv[idx * 2, :, :, 0] = rv[:, :, 0]
             radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv[:, :, 1]
             # load va slice
@@ -3063,7 +3075,19 @@ class UWCR(Dataset):
                     if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
                         continue
                     rng_idx, _ = find_nearest(self.rng_grid, distance)
-                    agl_idx, _ = find_nearest(self.agl_grid, angle)
+                    # radians: self.agl_grid comes from confmap2ra(..., radordeg='rad')
+                    # (our default; the reference's default is 'deg'), so it spans
+                    # [-1.5708, 1.5708] while `angle` above is in DEGREES. Feeding degrees
+                    # to find_nearest clamped every object to an endpoint: +40 deg -> bin
+                    # 127, -30 deg -> bin 0, and only targets within +-1.57 DEGREES of
+                    # boresight landed anywhere in between. Measured on the train split:
+                    # 384 of 640 gt peaks at angle 127, 238 at angle 0, 18 elsewhere.
+                    # detect_peaks only scans columns 2..125 (it needs a full 3x5
+                    # neighbourhood), so those labels were unscoreable and RAMP_CNN's
+                    # mAP/mAR were pinned at 0 while the model trained happily on them.
+                    # The sibling RA-label path already does this correctly via
+                    # ra2idx(distance, math.radians(angle), ...).
+                    agl_idx, _ = find_nearest(self.agl_grid, math.radians(angle))
                     obj_in_frame.append([rng_idx, agl_idx, category])
                 confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
                 confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
