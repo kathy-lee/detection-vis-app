@@ -24,6 +24,7 @@ import csv
 import json
 import math
 import os
+import re
 import sys
 import time
 import traceback
@@ -101,7 +102,16 @@ def run_id(run):
 # Reimplemented rather than imported: that module is a Streamlit page and executes UI code
 # at import time. Keep the two in step.
 # --------------------------------------------------------------------------------------
-def resolve_configs(model, dataset, features):
+def resolve_configs(model, dataset, features, config_variant=""):
+    """Resolve the model and train configs for a run.
+
+    config_variant selects an alternate TRAIN config by filename suffix, e.g.
+    "_reference" loads RODNet_train_config_reference.json instead of
+    RODNet_train_config.json. Default "" keeps every existing caller on the repo
+    defaults. The reference configs carry each paper's published schedule, which is what
+    Phase 2 baseline comparisons need; the repo defaults are the app's own settings and
+    are deliberately left alone.
+    """
     if model in RECORD_FAMILY:
         with open(os.path.join(NETWORKS_DIR, "RECORD_model_config.json")) as f:
             data = json.load(f)
@@ -125,19 +135,22 @@ def resolve_configs(model, dataset, features):
         with open(os.path.join(NETWORKS_DIR, f"{model}_model_config.json")) as f:
             model_cfg = json.load(f)
 
-    if model in RODNET_FAMILY:
-        with open(os.path.join(TRAIN_DIR, "RODNet_train_config.json")) as f:
-            train_cfg = json.load(f)
+    # One path for every model: the six RODNet variants share a file keyed by MODEL, the
+    # rest have their own file keyed by DATASET. RODNet used to load flat, which left no
+    # way to express its per-variant epochs (50 for HG/HGv2, 100 for the others) or batch
+    # size (2 for the HGwI variants, 4 for the rest).
+    cfg_name = "RODNet" if model in RODNET_FAMILY else model
+    with open(os.path.join(TRAIN_DIR, f"{cfg_name}_train_config{config_variant}.json")) as f:
+        data = json.load(f)
+    if "default" in data:
+        train_cfg = copy.deepcopy(data["default"])
+        node = data.get(model, data.get(dataset))
+        if node:
+            train_cfg.update(node.get(features[0], node) if features[0] in node else node)
     else:
-        with open(os.path.join(TRAIN_DIR, f"{model}_train_config.json")) as f:
-            data = json.load(f)
-        if "default" in data:
-            train_cfg = copy.deepcopy(data["default"])
-            if dataset in data:
-                node = data[dataset]
-                train_cfg.update(node.get(features[0], node) if features[0] in node else node)
-        else:
-            train_cfg = data
+        train_cfg = data
+    # Keys starting with "_" are provenance notes for humans, not settings.
+    train_cfg = {k: v for k, v in train_cfg.items() if not k.startswith("_")}
 
     model_cfg = copy.deepcopy(model_cfg)
     model_cfg["class"] = model
@@ -194,13 +207,48 @@ def build_split(dataset, files, mode):
 
     # CRUW and UWCR: no built-in split, always explicit sequence.
     if mode == "original":
-        n_val = 4
-        train, val = files[:-n_val], files[-n_val:]
+        if dataset == "CRUW":
+            # 30 / 5 / 5 by sorted sequence name, deterministic.
+            #
+            # THIS IS OUR SPLIT, NOT THE PAPER'S, and numbers from it are indicative
+            # against the published AP/AR rather than an exact comparison. The published
+            # split is not recoverable from anything we have: the RODNet paper does not
+            # list it, the reference repo does not ship it (CRDataset simply lists
+            # whatever sequences sit in the train/valid/test folders, and the configs say
+            # `seqs=[]` meaning "use everything in the subdir"), and the released data
+            # does not encode it either.
+            #
+            # The held-out test split has to come out of the labelled pool: ROD2021 ships
+            # 40 LABELLED sequences (TRAIN_RAD_H, with TRAIN_RAD_H_ANNO) plus 10 sequences
+            # with no annotations (TEST_RAD_H, the challenge submission set), so those 10
+            # cannot be scored locally.
+            #
+            # Previously this was 36 train / 4 val / 0 test, which left no held-out test
+            # set at all -- the reported number would have been validation.
+            # STRATIFIED by scene type, not a plain name sort. CRUW sequence names encode
+            # the scene (BMS, PMS, PBMS, MLMS, ONRD = on-road, ...), and sorting by name
+            # groups them: a plain sort puts all 6 ONRD sequences in val/test and none in
+            # train, making the test set 100% on-road. That is the hardest scene by a wide
+            # margin -- the RAMP-CNN row in this doc records on-road 57.07/64.85 against
+            # parking-lot 97.38/98.37 -- so such a split would measure train/test
+            # distribution shift rather than model quality.
+            # Sorting by (scene, name) and then taking every 8th position spreads each
+            # scene across all three splits, and 40 = 5 x 8 lands exactly on 30/5/5.
+            def _scene(f):
+                m = re.match(r"\d{4}_\d{2}_\d{2}_([A-Z]+?)\d", f["name"])
+                return m.group(1) if m else "?"
+            seqs = sorted(files, key=lambda f: (_scene(f), f["name"]))
+            train = [f for i, f in enumerate(seqs) if i % 8 < 6]
+            val = [f for i, f in enumerate(seqs) if i % 8 == 6]
+            test = [f for i, f in enumerate(seqs) if i % 8 == 7]
+        else:
+            n_val = 4
+            train, val, test = files[:-n_val], files[-n_val:], []
     else:
-        train, val = files[:2], files[2:3]
-    chosen = train + val
+        train, val, test = files[:2], files[2:3], []
+    chosen = train + val + test
     return chosen, {"splitmode": "sequence",
-                    "split_sequence": {"train": train, "val": val, "test": []}}
+                    "split_sequence": {"train": train, "val": val, "test": test}}
 
 
 # --------------------------------------------------------------------------------------
@@ -313,7 +361,7 @@ def execute(run, by_parse, args):
     if not files:
         return {**result, "status": "error", "error": f"no datafiles registered for {dataset}"}
 
-    model_cfg, train_cfg = resolve_configs(model, dataset, features)
+    model_cfg, train_cfg = resolve_configs(model, dataset, features, args.config_variant)
     datafiles, split_patch = build_split(dataset, files, args.split)
     train_cfg.setdefault("dataloader", {}).update(split_patch)
     if args.epochs is not None:
@@ -405,6 +453,12 @@ def main():
     # split is fixed by sequence/frame lists, so the seed only moves weight init, batch
     # order and augmentation draws -- which is exactly the variation we want to quantify.
     p.add_argument("--seed", type=int, help="override train_config seed (default: config value)")
+    # Phase 2 wants each paper's published schedule, not the app's defaults. Those live in
+    # <model>_train_config_reference.json alongside the defaults, so the repo's own configs
+    # stay untouched and a run records which it used.
+    p.add_argument("--config-variant", default="", metavar="SUFFIX",
+                   help="train-config filename suffix, e.g. '_reference' for the "
+                        "published schedule (default: the repo's own config)")
     p.add_argument("--build-only", action="store_true",
                    help="build dataloaders and stop -- validates split resolution cheaply")
     p.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "phase1-smoke-sweep.md"))
