@@ -1,5 +1,7 @@
 import rosbag
 import os
+import hashlib
+import inspect
 import struct
 import cv2
 import imageio
@@ -2865,6 +2867,44 @@ class UWCR(Dataset):
             rd = np.abs(rd[:, 0, :])
         return rd
 
+    def _frame_slices_cache_path(self, frameid):
+        stem = os.path.splitext(os.path.basename(self.radar_filenames[frameid]))[0]
+        return os.path.join(self.frame_cache_dir, self.seq_name, f"{stem}.npz")
+
+    def get_frame_slices(self, frameid):
+        """The six 2D slices __getitem__ consumes, memoized on disk.
+
+        get_RA and get_RV_VA_slice both call get_RD, which loads a .mat and runs the range
+        FFT, and then each runs its own angle/Doppler FFTs in Python loops. All of it is
+        recomputed identically every epoch: ~17 s per training step through the DataLoader
+        against ~3 s when the tensors are already in memory, which is why one epoch of 56
+        batches takes ~10 min. The slices actually consumed are two chirps of RA plus two
+        channels each of RV and VA -- ~512 KB per frame against the 4.2 MB complex cube.
+
+        Cached BEFORE windowing and augmentation, so window/stride config changes do not
+        invalidate it. Only the RAMP_CNN path uses this; the visualization path still calls
+        get_RA/get_RV_VA_slice directly.
+
+        :return: (ra_chirp0, ra_chirp128, rv0, rv1, va0, va1)
+        """
+        path = self._frame_slices_cache_path(frameid)
+        if os.path.exists(path):
+            z = np.load(path)
+            return (z["ra0"], z["ra128"], z["rv0"], z["rv1"], z["va0"], z["va1"])
+        ra = self.get_RA(frameid)
+        rv, va = self.get_RV_VA_slice(frameid)
+        out = dict(ra0=np.float32(ra[:, :, 0, :]), ra128=np.float32(ra[:, :, 128, :]),
+                   rv0=np.float32(rv[:, :, 0]), rv1=np.float32(rv[:, :, 1]),
+                   va0=np.float32(va[:, :, 0]), va1=np.float32(va[:, :, 1]))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Atomic: dataloader workers race on the same frame, and a torn .npz would poison
+        # every later epoch -- same reasoning as RADDetDataset._get_collapsed.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.savez(fh, **out)
+        os.replace(tmp, path)
+        return (out["ra0"], out["ra128"], out["rv0"], out["rv1"], out["va0"], out["va1"])
+
     def get_RV_VA_slice(self, idx=None, for_visualize=False):
         data = self.get_RD(idx)
         # RV slice
@@ -3010,6 +3050,20 @@ class UWCR(Dataset):
             self.step = train_cfg['test_step']
             self.stride = train_cfg['test_stride']
 
+        # Cache dir for get_frame_slices. Under TMP_ROOTDIR, not the dataset dir: the
+        # dataset disk may be read-only and this is derived data.
+        #
+        # The path carries a hash of the code that PRODUCES the slices, so editing any of
+        # get_RD/get_RA/get_RV_VA_slice misses the cache instead of silently serving
+        # values computed by the old code. A stale numerical cache is a silent-wrong-answer
+        # failure, which is the hardest kind to notice -- the RADDet cache relies on a
+        # hand-deletion note instead, which is weaker.
+        _src = "".join(inspect.getsource(fn) for fn in
+                       (UWCR.get_RD, UWCR.get_RA, UWCR.get_RV_VA_slice))
+        self.frame_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "uwcr_frame_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
+
         n_frame = self.frame_sync
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
@@ -3046,18 +3100,20 @@ class UWCR(Dataset):
             # The reference indexes both by frame (Xiangyu-Gao/Radar-multiple-perspective-
             # object-detection, dataLoader/CRDatasets.py:97-110: np.load(path % (chirp_id,
             # frameid))).
-            ra = self.get_RA(frameid)
-            radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, 0, :]
-            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, 128, :]
+            # Same six slices as before, served from the on-disk cache -- see
+            # get_frame_slices for why the memoization sits here rather than inside
+            # get_RA (its full return is 33 MB/frame; the two chirps used are 0.26 MB).
+            ra0, ra128, rv0, rv1, va0, va1 = self.get_frame_slices(frameid)
+            radar_npy_win_ra[idx * 2, :, :, :] = ra0
+            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra128
             # load rv slice
             # format of radar_npy_win_rv [chirp, range, velocity, real]
-            rv, va = self.get_RV_VA_slice(frameid)
-            radar_npy_win_rv[idx * 2, :, :, 0] = rv[:, :, 0]
-            radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv[:, :, 1]
+            radar_npy_win_rv[idx * 2, :, :, 0] = rv0
+            radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv1
             # load va slice
             # format of radar_npy_win_rv [chirp, angle, velocity, real]
-            radar_npy_win_va[idx * 2, :, :, 0] = va[:, :, 0]
-            radar_npy_win_va[idx * 2 + 1, :, :, 0] = va[:, :, 1]
+            radar_npy_win_va[idx * 2, :, :, 0] = va0
+            radar_npy_win_va[idx * 2 + 1, :, :, 0] = va1
             # label file: [uid, class, px, py, wid, len]
             obj_in_frame = []
             try:
