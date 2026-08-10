@@ -91,7 +91,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
 | 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
 
-Both are mAP@0.5. The other 22 runs are not yet measured.
+Both are mAP@0.5. The other 22 runs are not yet measured against their baselines.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
@@ -101,6 +101,57 @@ but the builder that produced the published number is not recoverable from that 
 so the published config cannot load the published builder). CARRADA has no such problem:
 there the reference reproduces the paper at both thresholds (0.5578/0.7044 against
 0.5583/0.7068).
+
+### Phase 1 closure
+
+Phase 1 (plumbing, not score) ended with four runs verdicted `degenerate`. All four are
+now resolved, and **only two of them were model defects** -- the other two were
+*measurement* defects, where a working model was reported as producing nothing:
+
+| pair | Phase 1 verdict | resolved | what it actually was |
+|------|----------------|----------|----------------------|
+| DAROD / CARRADA | degenerate | validated, 0.5642 | real: 20 porting defects |
+| DAROD / RADDetDataset | degenerate | validated, 0.4463 | real: same porting defects |
+| RadarCrossAttention / CARRADA | degenerate | **ok**, mAP 0.4367 | evaluator: `TP/GT` with GT 0 gave nan |
+| RAMP_CNN / UWCR | degenerate | **ok**, mAP 0.9295 | 3 evaluator + 3 data/config defects |
+
+**Treat `degenerate` as a flag for investigation, not a conclusion.** It means the
+evaluator reported zeros, which conflates a broken model with a broken metric.
+
+Neither of the two `ok` results above is comparable to its published baseline yet:
+
+- **RadarCrossAttention 0.4367 is car-only.** The smoke sweep's 3-file sequence split of
+  CARRADA contains no pedestrian or cyclist frames, so two of three classes have no
+  ground truth and are excluded from the mean. The published 0.94/0.86 averages all
+  three. Needs CARRADA's official split.
+- **RAMP_CNN 0.9295 is 3 of 22 sequences**, with a single validation sequence (mAR hits
+  1.0000 at several epochs, so it is likely an easy one). The published 81.23/84.25 is
+  the full dataset. Phase 2 additionally needs `CyclicLR` support in `train()` (the
+  reference runs `CyclicLR(base_lr=1e-6, max_lr=1e-5)` with `IS_Steplr=False`) and the
+  paper's train/test split, which Phase 0 did not record.
+
+**RAMP_CNN's metric is a threshold, not a ramp.** `detect_peaks` requires a strict local
+maximum in a 3x5 window, so mAP stays at *exactly* 0 until the predicted confmap sharpens
+past that bar, then rises steeply:
+
+| epoch | 0-7 | 8 | 10-11 | 12 | 13 | 19 |
+|-------|-----|---|-------|----|----|----|
+| mAP | 0.0000 | 0.1833 | ~0.15 | 0.5761 | 0.9103 | 0.9295 |
+
+Every earlier attempt ran 6 epochs, inside the flat region. A zero here means "not yet",
+not "never" -- do not conclude a pair is broken from a short run against a peak-detection
+metric.
+
+### Phase 0 gaps found in use
+
+- **Training schedules were not collected**, only published scores and eval protocols.
+  Every schedule used so far (DAROD's 50/75 epochs, RAMP_CNN's lr) came from the
+  reference implementations' configs, not the papers. Pairs without a public reference
+  will need the paper text.
+- **Data splits were not collected either** (RAMP_CNN's is still unknown).
+- `train()` supports `step`, `exp` and `OneCycleLR` only. RAMP_CNN needs cyclic,
+  RECORD/MVRECORD need early stopping, RadarCrossAttention needs plateau. These are
+  trainer gaps that will block faithful Phase 2 runs.
 
 ### Run-to-run variance is large enough to change verdicts
 
@@ -143,6 +194,32 @@ Reference checkpoints, per-class results, the saved comparison tensors and the h
 scripts are preserved outside the repo at `/home/kangle/dataset/darod_reference/`
 (see its README). Twenty defects were found and fixed to reach the numbers above; the
 commit messages on `feat/validate-baselines` carry the details.
+
+**When no trained reference weights exist**, as for RAMP_CNN, the same idea still works
+one level down: compare the reference's *code and data* against ours, numerically, in
+this order. All six RAMP_CNN defects were found this way and none was visible from our
+source alone.
+
+1. **Config against the reference's config.** Cheapest possible check. Caught RAMP_CNN's
+   lr being 10x too high (1e-4 vs 1e-5), which made the loss diverge.
+2. **Ground-truth distribution.** Measure *where* the labels land, do not read the code
+   that makes them. Caught degrees being fed to a radian angle grid: 622 of 640 labels
+   clamped to the extreme azimuth bins, where the peak detector does not even scan.
+3. **Do consecutive samples differ?** One line. Caught the radar input being indexed by
+   window position instead of frame, so all 110 samples shared one input while their
+   labels varied -- unlearnable by construction, and invisible to every other check.
+4. **Structural diff of model and losses** against the reference. Confirmed 81 layer
+   definitions plus all forward bodies identical, ruling the model out.
+5. **Round-trip the evaluator on ground truth.** Feeding RAMP_CNN's detector its own
+   labels yielded 80 detections from 80 gt cells, ruling the detector out.
+6. **Single-batch and small-subset overfit.** Separates "cannot learn" from "has not
+   learned yet": 20 samples for 400 steps reached mAP 0.6189, which proved capability
+   while the full run still read 0.
+
+Three times during this work the conclusion "the code is fine, it just needs more
+training" was drawn from absence of evidence, and once it was wrong -- the frameid defect
+above was found only after that claim had already been made twice. Prefer a cheap
+positive test (3, 5, 6) over an argument from everything-else-checks-out.
 
 ## How the six RODNet variants were mapped
 
