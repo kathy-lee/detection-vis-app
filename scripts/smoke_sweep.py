@@ -383,7 +383,8 @@ def execute(run, by_parse, args):
                           n_train=len(tr.dataset), n_val=len(va.dataset),
                           n_test=len(te.dataset) if te else 0)
         else:
-            exp_name = train(datafiles, features, model_cfg, train_cfg)
+            exp_name = train(datafiles, features, model_cfg, train_cfg,
+                             pretrained=args.resume)
             rows = read_val_eval(exp_name)
             result.update(status="ok", exp_name=exp_name,
                           epochs_recorded=len(rows) if rows else 0,
@@ -453,6 +454,13 @@ def main():
     # split is fixed by sequence/frame lists, so the seed only moves weight init, batch
     # order and augmentation draws -- which is exactly the variation we want to quantify.
     p.add_argument("--seed", type=int, help="override train_config seed (default: config value)")
+    # train() checkpoints restore everything (weights, optimizer, scheduler, epoch,
+    # history, global_step), so a long run can be split across GPU windows: run with a
+    # small --epochs, later resume from the last .pth with a larger --epochs. Meaningful
+    # only with a single matching run.
+    p.add_argument("--resume", metavar="CKPT",
+                   help="path to a checkpoint .pth to resume from; training continues "
+                        "at its epoch+1 up to --epochs / the config's num_epochs")
     # Phase 2 wants each paper's published schedule, not the app's defaults. Those live in
     # <model>_train_config_reference.json alongside the defaults, so the repo's own configs
     # stay untouched and a run records which it used.

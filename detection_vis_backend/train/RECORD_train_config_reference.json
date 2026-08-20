@@ -1,0 +1,160 @@
+{
+    "_about": "Published RECORD schedule, from the reference implementation colindecourt/record (configs/cruw/config_record_cruw.yaml, configs/carrada/config_record_{rd,ra}_carrada.yaml). Kept SEPARATE from RECORD_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged: lr 1e-3, loss type (bce for CRUW, wce_w10sdice for CARRADA), the per-class loss weights (byte-identical to the reference's weights_config/{rd,ra}_weights.json), win_size (12 CRUW / 5 CARRADA), the step and stride values, and the eval thresholds. What differs is only the schedule: epochs, batch size and the lr decay period.",
+    "_scheduler_note": "The reference uses PyTorch Lightning's scheduler dict -- ExponentialLR(gamma=0.9) with interval 'epoch' and frequency 10 (CRUW, executors/cruw_trainer.py:246) or 20 (CARRADA, executors/carrada_trainer_sv.py:86). `frequency` means STEP THE SCHEDULER EVERY N EPOCHS. Our train() steps every epoch, so the repo default `{type: exp, gamma: 0.9}` decays 0.9 per epoch instead of per N epochs. Over the published schedules that is severe: at epoch 499 the repo config reaches lr 1.47e-26 against the reference's 7.98e-05, a factor of 5.4e21, so the model would stop learning within the first ~100 of 500 epochs. Expressed here as StepLR(step_size=N, gamma=0.9), which is bit-identical to ExponentialLR(gamma=0.9) stepped every N epochs (verified numerically over 100 epochs) and needs no trainer change.",
+    "_split_note": "CRUW: the reference names its split explicitly -- 36 train / 4 valid, with test empty because ROD2021's test sequences ship unannotated. Its 40 sequences are exactly the 40 registered here. CARRADA: the reference reads data_seq_ref.json and splits on the Train/Validation/Test field; this repo's hardcoded 18/6/6 lists match that file sequence-for-sequence.",
+
+    "default": {
+        "seed": 3,
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 20,
+            "gamma": 0.9
+        },
+        "optimizer": {
+            "lr": 0.001
+        },
+        "num_epochs": 500,
+        "dataloader": {
+            "train": {
+                "batch_size": 8,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 1,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        }
+    },
+
+    "CRUW": {
+        "_src": "config_record_cruw.yaml: n_epoch 100, batch_size 16, scheduler exp @ frequency 10",
+        "num_epochs": 100,
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 10,
+            "gamma": 0.9
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 16,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 1,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "losses": {
+            "type": "bce"
+        },
+        "preprocess": {
+            "normalize": false,
+            "aug": {
+                "mirror": 0.5,
+                "reverse": 0.5,
+                "gaussian": 0.0
+            }
+        },
+        "win_size": 12,
+        "train_step": 1,
+        "train_stride": 4,
+        "test_step": 1,
+        "test_stride": 1,
+        "max_dets": 20,
+        "peak_thres": 0.3,
+        "ols_thres": 0.3
+    },
+
+    "CARRADA": {
+        "RD": {
+            "_src": "config_record_rd_carrada.yaml: n_epoch 500, batch_size 8, lr_step 20",
+            "num_epochs": 500,
+            "lr_scheduler": {
+                "type": "step",
+                "step_size": 20,
+                "gamma": 0.9
+            },
+            "dataloader": {
+                "train": {
+                    "batch_size": 8,
+                    "num_workers": 4
+                },
+                "val": {
+                    "batch_size": 1,
+                    "num_workers": 1
+                },
+                "test": {
+                    "batch_size": 1,
+                    "num_workers": 1
+                }
+            },
+            "losses": {
+                "type": "wce_w10sdice",
+                "weight": [
+                    0.0004236998233593304,
+                    0.4749960642363426,
+                    0.4175089566101426,
+                    0.1070712793301555
+                ]
+            },
+            "win_size": 5,
+            "transformations": [
+                "hflip",
+                "vflip"
+            ],
+            "norm_type": "tvt",
+            "max_dets": 20,
+            "peak_thres": 0.3,
+            "ols_thres": 0.3
+        },
+        "RA": {
+            "_src": "config_record_ra_carrada.yaml: n_epoch 500, batch_size 8, lr_step 20",
+            "num_epochs": 500,
+            "lr_scheduler": {
+                "type": "step",
+                "step_size": 20,
+                "gamma": 0.9
+            },
+            "dataloader": {
+                "train": {
+                    "batch_size": 8,
+                    "num_workers": 4
+                },
+                "val": {
+                    "batch_size": 1,
+                    "num_workers": 1
+                },
+                "test": {
+                    "batch_size": 1,
+                    "num_workers": 1
+                }
+            },
+            "losses": {
+                "type": "wce_w10sdice",
+                "weight": [
+                    0.00012380283547712211,
+                    0.49374198702138145,
+                    0.4158134117152977,
+                    0.09032079842784382
+                ]
+            },
+            "win_size": 5,
+            "transformations": [
+                "hflip",
+                "vflip"
+            ],
+            "norm_type": "tvt",
+            "max_dets": 20,
+            "peak_thres": 0.3,
+            "ols_thres": 0.3
+        }
+    }
+}
