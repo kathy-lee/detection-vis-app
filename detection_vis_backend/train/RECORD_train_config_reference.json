@@ -2,6 +2,7 @@
     "_about": "Published RECORD schedule, from the reference implementation colindecourt/record (configs/cruw/config_record_cruw.yaml, configs/carrada/config_record_{rd,ra}_carrada.yaml). Kept SEPARATE from RECORD_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged: lr 1e-3, loss type (bce for CRUW, wce_w10sdice for CARRADA), the per-class loss weights (byte-identical to the reference's weights_config/{rd,ra}_weights.json), win_size (12 CRUW / 5 CARRADA), the step and stride values, and the eval thresholds. What differs is only the schedule: epochs, batch size and the lr decay period.",
     "_scheduler_note": "The reference uses PyTorch Lightning's scheduler dict -- ExponentialLR(gamma=0.9) with interval 'epoch' and frequency 10 (CRUW, executors/cruw_trainer.py:246) or 20 (CARRADA, executors/carrada_trainer_sv.py:86). `frequency` means STEP THE SCHEDULER EVERY N EPOCHS. Our train() steps every epoch, so the repo default `{type: exp, gamma: 0.9}` decays 0.9 per epoch instead of per N epochs. Over the published schedules that is severe: at epoch 499 the repo config reaches lr 1.47e-26 against the reference's 7.98e-05, a factor of 5.4e21, so the model would stop learning within the first ~100 of 500 epochs. Expressed here as StepLR(step_size=N, gamma=0.9), which is bit-identical to ExponentialLR(gamma=0.9) stepped every N epochs (verified numerically over 100 epochs) and needs no trainer change.",
     "_split_note": "CRUW: the reference names its split explicitly -- 36 train / 4 valid, with test empty because ROD2021's test sequences ship unannotated. Its 40 sequences are exactly the 40 registered here. CARRADA: the reference reads data_seq_ref.json and splits on the Train/Validation/Test field; this repo's hardcoded 18/6/6 lists match that file sequence-for-sequence.",
+    "_early_stop_note": "The reference EARLY-STOPS, so its epoch counts are ceilings, not durations: main_cruw.py uses EarlyStopping(monitor='val_loss', patience=7, mode='min'), main_carrada.py uses EarlyStopping(monitor='val_metrics/{rd,ra}_prec', patience=20, mode='max'). Mirrored here via train()'s config-driven early_stop; 'mAP' in our RECORD/CARRADA evaluator IS mean pixel precision, the same quantity the reference monitors. Stopping cannot lower the reported score -- the best checkpoint by the monitored metric always predates the stop by construction -- it only cuts the tail of the 500-epoch CARRADA schedule.",
 
     "default": {
         "seed": 3,
@@ -55,6 +56,11 @@
         "losses": {
             "type": "bce"
         },
+        "early_stop": {
+            "monitor": "loss",
+            "mode": "min",
+            "patience": 7
+        },
         "preprocess": {
             "normalize": false,
             "aug": {
@@ -105,6 +111,11 @@
                     0.1070712793301555
                 ]
             },
+            "early_stop": {
+                "monitor": "mAP",
+                "mode": "max",
+                "patience": 20
+            },
             "win_size": 5,
             "transformations": [
                 "hflip",
@@ -145,6 +156,11 @@
                     0.4158134117152977,
                     0.09032079842784382
                 ]
+            },
+            "early_stop": {
+                "monitor": "mAP",
+                "mode": "max",
+                "patience": 20
             },
             "win_size": 5,
             "transformations": [

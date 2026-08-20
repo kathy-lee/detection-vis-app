@@ -422,6 +422,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         global_step = 0
         history = {'train_loss':[],'val_loss':[],'lr':[],'mAP':[],'mAR':[],'mIoU':[]}
         best_mAP = 0
+        # Optional config-driven early stopping, e.g.
+        # {"monitor": "mAP", "mode": "max", "patience": 20} -- monitor "loss" reads
+        # val_loss. Absent from the config means no early stopping (full schedule).
+        early_stop = train_config.get('early_stop')
 
         if pretrained:
             logger.info('===========  Resume training  ==================:')
@@ -532,7 +536,19 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             
             torch.save(checkpoint,filename)
             logger.info(f'Saved checkpoint of epoch {epoch}.')
-        
+
+            if early_stop:
+                # Derived from history rather than a running counter so a resumed run
+                # (history restored from the checkpoint) keeps the same stopping point.
+                series = history['val_loss'] if early_stop['monitor'] == 'loss' else history[early_stop['monitor']]
+                best_idx = int(np.argmin(series)) if early_stop.get('mode', 'max') == 'min' else int(np.argmax(series))
+                since_best = len(series) - 1 - best_idx
+                if since_best >= early_stop['patience']:
+                    logger.info(f"Early stopping at epoch {epoch}: no {early_stop['monitor']} improvement "
+                                f"for {since_best} epochs (best at epoch {best_idx}, "
+                                f"patience {early_stop['patience']}).")
+                    break
+
         df_val_eval.to_csv(val_eval_path, index=False)
 
         logger.info(f'=========== Evaluation on Test data ===========')
