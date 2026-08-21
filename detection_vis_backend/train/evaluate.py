@@ -725,6 +725,12 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         if seq_name not in sequences:
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
+            # write_dets_results_single_frame appends, and val runs every epoch into the
+            # same exp dir -- without this, epoch N is scored against the union of all
+            # detections from epochs <= N (duplicates count as false positives, so mAP
+            # decays monotonically while mAR climbs).
+            if os.path.exists(save_path):
+                os.remove(save_path)
         # Currently only support batch_size set to 1 for val evaluation
         start_frame_id = data['start_frame'].item()
         end_frame_id = data['end_frame'].item()
@@ -826,6 +832,9 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
         if seq_name not in sequences:
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+            # Same append-across-epochs trap as RODNet_evaluation above.
+            if os.path.exists(save_path):
+                os.remove(save_path)
 
         for key in data:
             logger.debug(f"data contains key: {key}")
