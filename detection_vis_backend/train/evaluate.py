@@ -696,6 +696,11 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
     total_count = 0
     load_tic = time.time()
     sequences = []
+    # The val loader windows at train_stride, the test loader at test_stride
+    # (prepare_for_train mirrors the reference CRDataset's split logic), and the
+    # pop count below must match the loader's advance -- with a mismatch, part of
+    # the frames are never written and score as misses.
+    stride = train_config['test_stride'] if eval_type == 'test' else train_config['train_stride']
     for iter, data in enumerate(dataloader):
         load_time = time.time() - load_tic
 
@@ -723,6 +728,20 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
+            # Flush the previous sequence's tail before starting the next one. The
+            # reference builds one dataset per sequence and resets its stack in
+            # between; our single loader spans all sequences, so without this the
+            # last win_size - stride frames of each sequence are never written and
+            # the next sequence's first windows average against the stale tail.
+            if sequences:
+                offset = prev_start_frame + stride
+                while init_genConfmap is not None:
+                    total_count += 1
+                    res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
+                    write_dets_results_single_frame(res_final, offset, save_path, classes)
+                    init_genConfmap = init_genConfmap.next
+                    offset += 1
+                init_genConfmap = ConfmapStack(confmap_shape)
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
             # write_dets_results_single_frame appends, and val runs every epoch into the
@@ -744,15 +763,16 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         
         process_tic = time.time()
         
-        for i in range(train_config['train_stride']): # test_stride
+        for i in range(stride):
             total_count += 1
             res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             cur_frame_id = start_frame_id + i
             write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
             init_genConfmap = init_genConfmap.next
-        
+        prev_start_frame = start_frame_id
+
         if iter == len(dataloader) - 1:
-            offset = train_config['train_stride'] # test_stride
+            offset = stride
             cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
