@@ -493,10 +493,19 @@ def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, 
     }
 
 
-def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs):
+def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs, frame_ids=None):
 
     gt_dets = read_gt_txt(gt_path, n_frame, n_class, classes)
     sub_dets = read_rodnet_res(res_path, n_frame, n_class, classes, rng_grid, agl_grid)
+    if frame_ids is not None:
+        # Score only these frames, on both sides of the match. Callers whose
+        # loader does not cover every frame (RECORD's val loader strides by
+        # train_stride but the model predicts one frame per window) pass the
+        # covered set here; without the filter, every uncovered frame's GT
+        # counts as misses.
+        gt_dets = {key: (objs if key[0] in frame_ids else []) for key, objs in gt_dets.items()}
+        if sub_dets:
+            sub_dets = {key: (objs if key[0] in frame_ids else []) for key, objs in sub_dets.items()}
     if sub_dets:
         olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
                     for imgId in range(n_frame)
@@ -847,10 +856,18 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     batch_size = train_config['dataloader'][eval_type]['batch_size']
     sequences = []
+    # The model predicts one frame per window, so frame coverage equals the
+    # loader's stride: complete at test_stride 1, but only every train_stride-th
+    # frame on the val loader. Track what was actually written so the val score
+    # is computed over exactly those frames (an unbiased uniform sample) instead
+    # of counting the uncovered frames' GT as misses. The NoLstm variants take a
+    # fixed-size window, so predicting the skipped frames is not an option.
+    frames_written = {}
     for iter, data in enumerate(dataloader):
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
+            frames_written[seq_name] = set()
             save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
             # Same append-across-epochs trap as RODNet_evaluation above.
             if os.path.exists(save_path):
@@ -873,13 +890,15 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
                     confmap_pred = net(tmp_ra_maps)
                 res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
-        
+                frames_written[seq_name].add(tmp_frame_id)
+
         with torch.set_grad_enabled(False):
             confmap_pred = net(inputs)
         logger.debug('get network output')
-        
+
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
+        frames_written[seq_name].add(frame_id)
 
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
@@ -902,7 +921,10 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
 
         olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
-        evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
+        # Val-only frame filter; the test path (stride 1, full coverage) keeps
+        # the reference-faithful scoring over all frames.
+        frame_filter = frames_written[seq_name] if eval_type == 'val' else None
+        evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs, frame_ids=frame_filter)
 
         if evalImgs:
             eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes)
