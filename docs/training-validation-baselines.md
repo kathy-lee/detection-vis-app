@@ -79,6 +79,32 @@ Coverage: **20 of the 24 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
 is bracketed rather than pointed (`RODNet_HGwIv2`).
 
+### Found in Phase 2: no CRUW baseline is locally reproducible
+
+Reading the source papers during the RODNet_CDC run showed that every CRUW number in
+the table above was measured on data we do not hold:
+
+- **Rows 2a–2f** (RODNet_v1 Table 2, JSTSP Table IV) were trained on the **full,
+  unreleased CRUW corpus** — ~396K frames, ~260K objects, 92% used for training —
+  roughly 6–8× the ROD2021 public release (40 annotated sequences) that this repo has.
+  The "+CRF" in the source column is not post-processing: Table 2 is an ablation over
+  **supervision sources**, camera-only (CDC: 52.62 AP) vs camera-radar-fusion
+  auto-annotation (74.29) — a 22-point swing from label quality alone, and both are a
+  different annotation regime from ROD2021's shipped labels. Evaluation used the
+  authors' private split of the full corpus.
+- **Rows 3, 5, 7** (RECORD Table I) were scored by the **ROD2021 challenge server** on
+  its 10 hidden test sequences, whose annotations were never released (the paper trains
+  36 / validates 4 and submits predictions; Table I's caption says "test set of the
+  ROD2021 challenge"). Table I contains no RODNet rows, so there is also no published
+  RODNet number on a recoverable split.
+
+Consequences: the RODNet 74.29 and RECORD 72.8 are not comparable **to each other**
+(different training data, labels, and test sets), and neither is reachable by local
+evaluation. CRUW pairs therefore get **relative validation** — the cross-model ladder
+on our fixed split (see the RODNet_CDC closure below) — instead of the absolute ~20%
+pass rule. CARRADA, RADDetDataset, RADIal and ViewOfDelft are unaffected: their test
+annotations ship with the data and their reference splits are recoverable.
+
 
 ## Measured results (Phase 2/3)
 
@@ -90,8 +116,9 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 |---|------|------------------|-----------|---------------------------|---------|
 | 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
 | 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
+| 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
 
-Both are mAP@0.5. The other 22 runs are not yet measured against their baselines.
+Rows 11/12 are mAP@0.5. The other runs are not yet measured against their baselines.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
@@ -101,6 +128,124 @@ but the builder that produced the published number is not recoverable from that 
 so the published config cannot load the published builder). CARRADA has no such problem:
 there the reference reproduces the paper at both thresholds (0.5578/0.7044 against
 0.5583/0.7068).
+
+### Closed: RODNet_CDC / CRUW (Phase 2) — inconclusive-by-protocol, healthy per scene
+
+Verified ready before launch (2026-08-20): config, GT distribution (640/640 labels
+scannable), sample variation, CDC backbone structurally identical to the reference,
+`nn.BCELoss` both sides, and the full OLS metric chain against the official devkit.
+Ran with `--config-variant _reference` (lr 1e-5, StepLR(5, 0.1)), budgeted 25 epochs,
+**stopped at 10**: the x0.1-every-5 anneal has lr at ≤1e-7 from epoch 10, and val had
+plateaued at 50±3 since epoch 3. Two GPU windows, joined via `--resume` (checkpoints
+carry optimizer, scheduler, epoch and history; only the RNG draws differ from an
+uninterrupted run, within the measured seed spread).
+
+**The split is ours, not the paper's** (30/5/5, stratified by scene type so on-road
+sequences appear in all three splits; the published split is not recoverable from the
+paper, the reference repo, or the data).
+
+**Found and fixed during this run: per-epoch evaluation contamination.**
+`write_dets_results_single_frame` opens its results file with `'a+'`, and every epoch's
+validation writes into the same exp dir — so epoch N was scored against the union of
+all detections from epochs ≤ N. Duplicates count as false positives under OLS matching,
+so logged val mAP *decayed* monotonically after the anneal (48.5 → 23.3 over epochs
+4–9) while mAR climbed — a signature worth remembering, since it looks exactly like
+overfitting. Same trap existed in `RECORD_CRUW_evaluation`; both now delete stale
+result files first (RAMP_CNN scores in memory, unaffected). The checkpoints themselves
+were clean; all 10 were re-evaluated into fresh directories.
+
+**Found and fixed after the first closure draft: test-stride mismatch in the evaluator.**
+`RODNet_evaluation`'s frame-pop loop advanced by `train_stride` (4) regardless of split,
+while the test loader windows at `test_stride` (8) — so only frames 0–3 of every
+8-frame advance were ever written (~50% of test frames, 20% on the long `ONRD002`), the
+overlap averaging was misaligned, and every unwritten frame scored as a miss. The
+reference (`yizhou-wang/RODNet` `tools/test.py`) uses `test_stride` in both places; the
+`train_stride` was our port's error, and the val path was only accidentally correct
+(4/4). A related boundary flush was added for our single cross-sequence loader (the
+reference builds one dataset per sequence, so it never carries a stack tail across
+sequences). The first-draft test numbers (18.5 / 20.9) were artifacts of this bug; the
+corrected numbers below come from re-evaluating the same epoch-7 checkpoint with the
+fixed evaluator.
+
+Clean val trajectory (re-evaluated, AP / AR):
+
+| epoch | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|-------|---|---|---|---|---|---|---|---|---|---|
+| val mAP | 4.0 | 31.9 | 36.1 | 50.2 | 48.3 | 51.9 | 46.7 | **53.5** | 51.4 | 49.8 |
+| val mAR | 10.5 | 52.9 | 52.5 | 62.9 | 59.0 | 61.0 | 56.1 | **62.9** | 60.4 | 57.7 |
+
+Best epoch 7: **val 53.5 / 62.9, test 38.5 / 44.6** (fixed evaluator; epoch 8 test:
+36.9 / 43.3, epoch 9: 36.9 / 42.8 — the same ordering as val, so best-val selection
+and the reference's latest-checkpoint convention differ by under 2 points here). To
+rule out any remaining protocol asymmetry, the val sequences were also re-scored under
+the exact test protocol (stride 8, test eval path): **51.8 / 62.7** — within 2 points
+of the per-epoch figure, so the per-epoch val numbers stand and the remaining val−test
+gap is ~13 points under an identical protocol.
+
+Per-sequence, epoch 7 (fixed evaluator, AP / AR):
+
+| split | sequence | AP | AR |
+|-------|----------|-----|-----|
+| test | `PM1S014` (parking) | 89.2 | 93.5 |
+| test | `PBMS007` (parking) | 69.0 | 75.2 |
+| test | `PMS3000` (parking) | 64.6 | 75.6 |
+| test | `ONRD002` (on-road) | 23.8 | 30.8 |
+| test | `CM1S004` (campus) | 13.2 | 15.5 |
+| val | `PM1S013` (parking) | 92.1 | 95.8 |
+| val | `BMS1002` (parking) | 92.1 | 96.9 |
+| val | `PMS2000` (parking) | 63.3 | 75.5 |
+| val | `PBMS004` (parking) | 43.7 | 54.2 |
+| val | `ONRD001` (on-road) | 29.9 | 43.3 |
+
+**Why the verdict is inconclusive-by-protocol, not fail.** The published 74.29 is not a
+reachable target (see "no CRUW baseline is locally reproducible" above), and the
+remaining ~13-point val−test gap is per-sequence composition: same weights, same
+protocol, and the spread runs 13.2 (`CM1S004`, a scene type with no val counterpart) to
+92.1; test drew the two hardest sequences of the whole pool while val's hardest is
+29.9. The parking scores sit at the published per-scene ceiling (RECORD Table I: PL
+95.0; RAMP-CNN: ParkingLot 97.38) — a broken implementation does not score 89–92 AP on
+anything. What the closure cannot exclude is a residual training deficit on the hard
+scenes (`CM1S004`, on-road); that is exactly what the ladder check below resolves.
+
+**Pre-registered ladder check** (the falsifiable test that replaces the absolute rule):
+when the RECORD family runs on this same split, the published ordering must reproduce —
+RECORD (72.8) > NoLstmMulti (65.5) > NoLstmSingle (59.5), with RODNet_CDC below RECORD
+— and per-sequence scores cross-check the split story: if RECORD also scores ~15 on
+`CM1S004`, the sequence is the cause; if it scores ~50 there, revisit RODNet_CDC's
+training. Same data on both sides, so deviation from the ladder is
+implementation signal, not split noise.
+
+### RECORD family: verified, ready to run
+
+The full pre-run comparison against `colindecourt/record` (the same checklist that
+found defects in every other family) came back **clean** -- the only real defect
+remains the scheduler frequency, fixed via `RECORD_train_config_reference.json`:
+
+- **Model code**: encoder/decoder/IR/LSTM layers and the NoLstm variant are verbatim
+  copies of the reference; wrapper forwards (RECORD, RECORDNoLstm, MVRECORD incl.
+  cross-view skip connections) match line-for-line.
+- **Architecture configs**: programmatic deep-diff of `RECORD_model_config.json`
+  against all four reference YAMLs (CRUW, CARRADA RD/RA, MVRECORD): exact match,
+  including CARRADA's asymmetric [2,1] strides and [1,0] output paddings.
+- **Losses**: identical on every path -- BCE (CRUW); `mean([wCE, 10*SoftDice])` with
+  byte-identical dice/one-hot code and class-weight order (CARRADA);
+  `mean(rd_loss + ra_loss)` (MVRECORD).
+- **Input assembly**: NoLstm reshapes match the reference's `on_before_batch_transfer`;
+  GT is the last-frame confmap on both sides.
+- **Evaluators**: CRUW reuses the devkit-verified OLS chain with the identical
+  truncated-first-window protocol; CARRADA's `Evaluator` is the same verbatim MVRSS
+  copy on both sides.
+
+Two protocol deviations were found and one closed:
+
+1. **The reference early-stops** (patience 20 on CARRADA pixel precision, 7 on CRUW
+   val loss), so its published epoch counts are ceilings. `train()` now supports a
+   config-driven `early_stop` block and the reference config carries the reference's
+   own values. For CARRADA this also aligns checkpoint selection: our `mAP` there *is*
+   mean pixel precision, the metric the reference monitors.
+2. **CRUW checkpoint selection still differs**: the reference keeps best-val-loss, we
+   keep best-val-mAP. Documented, not changed -- selecting on the comparison metric is
+   the defensible side of the deviation.
 
 ### Phase 1 closure
 
