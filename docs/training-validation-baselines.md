@@ -247,6 +247,63 @@ Two protocol deviations were found and one closed:
    keep best-val-mAP. Documented, not changed -- selecting on the comparison metric is
    the defensible side of the deviation.
 
+### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
+
+Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-
+equivalent ×0.9 every 10 epochs, early stop patience 7 on val loss, 100-epoch
+ceiling), same stratified 30/5/5 split and fixed evaluator as the RODNet closure.
+Trained 2026-08-22/23 in two segments (~41 min/epoch measured, joined via
+`--resume`; a system suspend killed the first segment mid-epoch-7 and it resumed
+from the epoch-6 checkpoint).
+
+**Ended by the reference's own early stopping at epoch 17**: patience 7 on val
+loss, whose best was epoch 9. Note the stop criterion had gone quiet while the
+comparison metric had not — three of the last five epochs set val mAP records —
+so 55.6 is a floor on what this config reaches, not a converged ceiling. This is
+the documented val-loss/val-mAP selection deviation (see above), left faithful to
+the reference rather than tuned.
+
+Val trajectory (frame-filtered per-epoch eval, AP / AR):
+
+| epoch | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|-------|---|---|---|---|---|---|---|---|---|
+| val mAP | 26.5 | 36.5 | 41.0 | 42.1 | 49.0 | 51.1 | 52.4 | 48.5 | 49.3 |
+| val mAR | 54.6 | 63.6 | 59.4 | 64.0 | 65.0 | 65.8 | 65.2 | 66.2 | 63.9 |
+
+| epoch | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 |
+|-------|----|----|----|----|----|----|----|----|
+| val mAP | 50.0 | 54.5 | 52.2 | 55.1 | 43.4 | 53.7 | 55.3 | **55.6** |
+| val mAR | 66.0 | 67.3 | 66.8 | 67.1 | 59.0 | 65.6 | 68.8 | **66.8** |
+
+Best val epoch 17: **55.6 / 66.8**. Final test (stride 1, all frames): **41.6 /
+48.2**.
+
+**The pre-registered ladder check passes on its first rung.** Same split, same
+evaluator, same protocol on both sides:
+
+| test sequence | RECORD | RODNet_CDC |
+|---------------|--------|------------|
+| `PM1S014` (parking) | **94.2** / 96.7 | 89.2 / 93.5 |
+| `PMS3000` (parking) | **81.0** / 86.1 | 64.6 / 75.6 |
+| `PBMS007` (parking) | **76.9** / 85.4 | 69.0 / 75.2 |
+| `ONRD002` (on-road) | 28.2 / 34.3 | 23.8 / 30.8 |
+| `CM1S004` (campus) | 12.2 / 13.5 | 13.2 / 15.5 |
+| **Overall** | **41.6 / 48.2** | 38.5 / 44.6 |
+
+- **RECORD > RODNet_CDC**, the published ordering, on val (55.6 vs 53.5) and test
+  (41.6 vs 38.5), winning four of five sequences.
+- **`CM1S004` is confirmed intrinsically hard, not a RODNet training deficit.**
+  RECORD scores 12.2 there — *below* RODNet's 13.2 — while beating it everywhere
+  else. Two unrelated architectures agreeing to within a point on the one
+  sequence type absent from training is the pre-registered signature of a data
+  problem, and it retires the open question from the RODNet closure.
+- **The val frame-filter fix is verified end-to-end**: the epoch-6 checkpoint
+  scores 51.14/65.77 on the filtered per-epoch path vs 51.39/65.67 on a full
+  stride-1 val eval — agreement within 0.25 AP, every sequence within ~1 point.
+
+Still open for the full ladder: `RECORDNoLstmMulti` and `RECORDNoLstmSingle` must
+land below RECORD and in the published order (65.5 > 59.5).
+
 ### Phase 1 closure
 
 Phase 1 (plumbing, not score) ended with four runs verdicted `degenerate`. All four are
