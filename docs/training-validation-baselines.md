@@ -154,6 +154,22 @@ pytorch-lightning 1.8.1, so the published code **cannot run as-is**. Until it is
 monitors in `main_carrada.py` have nothing to track -- meaning the precision-monitored
 checkpoint selection was never exercised by the authors in this code state.
 
+**Where the remaining ~5 points went -- four hypotheses tested and eliminated**, so
+they do not need re-litigating:
+
+| hypothesis | verdict | evidence |
+|------------|---------|----------|
+| our port is defective | ruled out | reference scores 53.19 on our data, we score 53.15 |
+| our CARRADA copy differs from theirs | ruled out | processed-RD mean 58.4271 vs the `rd_stats_all.json` constant 58.4711 (0.08%); min/max gaps are sampling artefacts of reading 121 of ~12.5k frames. NOTE the comparison must use `range_doppler_processed/`, which is what the loader reads when `process_signal: true` (`dataloaders.py:113`), not `range_doppler_numpy/` |
+| wrong split option | ruled out | `--data_split` and `--reproduce` are parsed but never read on the CARRADA path (`--data_split` is only asserted in `eval_cruw.py`) |
+| the published number came from a different eval path | ruled out | `eval_carrada.py` builds the same dataloader and calls the same `trainer.test`, hitting the same `Evaluator` and global confusion matrix |
+
+What survives is that **the published artifact is not the code that produced the
+published numbers** -- proven by the `TypeError` above, which makes a validation epoch
+impossible at this commit. Whatever the authors actually ran differed from what they
+released, and the difference is not recoverable from the repository. Both sides here are
+also single-seed. Further chasing of the gap through this repo's code is not warranted.
+
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
 own published figure. That is about 1 sd of the seed spread, so it may be seed noise --
