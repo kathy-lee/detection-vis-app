@@ -117,8 +117,42 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
 | 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
+| 6a | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
 
-Rows 11/12 are mAP@0.5. The other runs are not yet measured against their baselines.
+Rows 11/12 are mAP@0.5; row 6a is mIoU. The other runs are not yet measured against
+their baselines.
+
+**Read RECORD/CARRADA RD against 53.19, not 58.10** — the same situation as RADDet
+below, but established far more sharply. The reference implementation itself, run from
+a pristine checkout of `colindecourt/record@52b6f37` on its own pinned stack (torch
+1.12.0+cu116, pytorch-lightning 1.8.1) against our CARRADA copy, scores **53.19** test
+mIoU where the paper reports 58.10. Ours scores 53.15 — a gap of 0.04, with the same
+per-class shape on both sides:
+
+| class | reference on our data | ours | published |
+|-------|----------------------|------|-----------|
+| Bg | 99.44 | 99.45 | 99.60 |
+| Ped | 40.35 | 39.22 | 46.60 |
+| Cycl | 20.52 | **23.02** | 28.60 |
+| Car | 52.46 | 50.90 | 57.50 |
+| **mIoU** | **53.19** | **53.15** | 58.10 |
+
+Both implementations miss the published number in the same classes by similar margins,
+and ours is the better of the two on cyclist. So the ~5-point deficit is **not in this
+repo's port** -- it is a property of the data copy or of some aspect of the published
+setup that neither implementation reproduces, and it cannot be closed by changing our
+code. The validation trajectories also tracked each other throughout (best val mIoU
+63.05 reference vs 63.86 ours, peaking at the same epoch).
+
+Everything that differed from upstream was enumerated before the run: five dataset and
+project paths (upstream ships unusable `path_to_datasets/` placeholders that its own
+Dockerfile substitutes), `n_epoch` 500 -> 100 to match our budget, and one logging line.
+That last one is a finding in itself: `carrada_trainer_sv.py:158` calls
+`self.log(test_results_log)` with a dict, which raises `TypeError` on the pinned
+pytorch-lightning 1.8.1, so the published code **cannot run as-is**. Until it is fixed,
+`val_metrics/rd_prec` is never logged and the `ModelCheckpoint` / `EarlyStopping`
+monitors in `main_carrada.py` have nothing to track -- meaning the precision-monitored
+checkpoint selection was never exercised by the authors in this code state.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its

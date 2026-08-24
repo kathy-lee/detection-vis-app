@@ -2,7 +2,11 @@
     "_about": "Published RECORD schedule, from the reference implementation colindecourt/record (configs/cruw/config_record_cruw.yaml, configs/carrada/config_record_{rd,ra}_carrada.yaml). Kept SEPARATE from RECORD_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged: lr 1e-3, loss type (bce for CRUW, wce_w10sdice for CARRADA), the per-class loss weights (byte-identical to the reference's weights_config/{rd,ra}_weights.json), win_size (12 CRUW / 5 CARRADA), the step and stride values, and the eval thresholds. What differs is only the schedule: epochs, batch size and the lr decay period.",
     "_scheduler_note": "The reference uses PyTorch Lightning's scheduler dict -- ExponentialLR(gamma=0.9) with interval 'epoch' and frequency 10 (CRUW, executors/cruw_trainer.py:246) or 20 (CARRADA, executors/carrada_trainer_sv.py:86). `frequency` means STEP THE SCHEDULER EVERY N EPOCHS. Our train() steps every epoch, so the repo default `{type: exp, gamma: 0.9}` decays 0.9 per epoch instead of per N epochs. Over the published schedules that is severe: at epoch 499 the repo config reaches lr 1.47e-26 against the reference's 7.98e-05, a factor of 5.4e21, so the model would stop learning within the first ~100 of 500 epochs. Expressed here as StepLR(step_size=N, gamma=0.9), which is bit-identical to ExponentialLR(gamma=0.9) stepped every N epochs (verified numerically over 100 epochs) and needs no trainer change.",
     "_split_note": "CRUW: the reference names its split explicitly -- 36 train / 4 valid, with test empty because ROD2021's test sequences ship unannotated. Its 40 sequences are exactly the 40 registered here. CARRADA: the reference reads data_seq_ref.json and splits on the Train/Validation/Test field; this repo's hardcoded 18/6/6 lists match that file sequence-for-sequence.",
-    "_early_stop_note": "The reference EARLY-STOPS, so its epoch counts are ceilings, not durations: main_cruw.py uses EarlyStopping(monitor='val_loss', patience=7, mode='min'), main_carrada.py uses EarlyStopping(monitor='val_metrics/{rd,ra}_prec', patience=20, mode='max'). Mirrored here via train()'s config-driven early_stop; 'mAP' in our RECORD/CARRADA evaluator IS mean pixel precision, the same quantity the reference monitors. Stopping cannot lower the reported score -- the best checkpoint by the monitored metric always predates the stop by construction -- it only cuts the tail of the 500-epoch CARRADA schedule.",
+    "_early_stop_note": "The reference EARLY-STOPS, so its epoch counts are ceilings, not durations: main_cruw.py uses EarlyStopping(monitor='val_loss', patience=7, mode='min'), main_carrada.py uses EarlyStopping(monitor='val_metrics/{rd,ra}_prec', patience=20, mode='max'). Mirrored here via train()'s config-driven early_stop; 'mAP' in our RECORD/CARRADA evaluator IS mean pixel precision, the same quantity the reference monitors.",
+
+    "_test_checkpoint_note": "The reference tests trainer.test(..., ckpt_path='best') -- the best epoch by its ModelCheckpoint monitor, NOT the weights left at loop exit (main_cruw.py:72,110-115; main_carrada.py:109,147). With early stopping the two differ by up to `patience` epochs, so evaluating final weights understates the score by whatever the metric drifts over the patience tail. train() had no best-checkpoint restore at all; it now takes `test_checkpoint: {monitor, mode}`, left unset for families whose reference does evaluate the latest checkpoint (DAROD). CARRADA uses monitor mAP/max, which is simultaneously reference-faithful (their monitor IS mean pixel precision) and consistent with how the other CRUW rows are selected. CRUW uses mAP/max rather than the reference's val_loss/min: that is the documented selection deviation -- the ladder compares models against each other, so the same rule has to apply to every model in it, and RODNet_CDC's number is best-val-mAP.",
+
+    "_transformations_note": "CARRADA now trains with hflip ONLY, matching how the published numbers were actually produced ('vflip' is parked in _transformations_disabled). The reference config says `transformations: 'hflip, vflip'`, but main_carrada.py:56 parses it with .split(',') into ['hflip', ' vflip'] -- with a leading space -- and get_transformations (utils/carrada_functions.py:99) tests `'vflip' in transform_names`, which is False for ' vflip'. Verified against the files and by executing the reference's own parse. It is an unintended bug, not a choice: the paper's experimental settings claim both flips are applied, and the failure is positional (the first list element never carries a leading space, so hflip survives only because it is written first). The first attempt DID run with both flips and reached test mIoU 52.3 against the published 58.1, over-segmenting badly (RD: Ped recall 92 at precision 38, Car recall 93 at precision 48), so vflip was dropped as the leading candidate for that calibration gap.",
 
     "default": {
         "seed": 3,
@@ -111,14 +115,21 @@
                     0.1070712793301555
                 ]
             },
-            "early_stop": {
+            "_early_stop_disabled": {
+                "_why": "COMMENTED OUT (rename this key back to 'early_stop' to restore; values below are the reference's, unchanged). Disabled for the diagnostic run: patience 20 on precision stopped the previous run at 26 epochs while mIoU was still in its best band, and then selected a degenerate under-predicting checkpoint (val mIoU 47.8 of a 61.5 run; test 42.4). The reference's rule is applied POST HOC to the recorded per-epoch curve instead, which reproduces the same selection without letting the stop truncate the trajectory being measured.",
                 "monitor": "mAP",
                 "mode": "max",
                 "patience": 20
             },
+            "test_checkpoint": {
+                "monitor": "mAP",
+                "mode": "max"
+            },
             "win_size": 5,
             "transformations": [
-                "hflip",
+                "hflip"
+            ],
+            "_transformations_disabled": [
                 "vflip"
             ],
             "norm_type": "tvt",
@@ -161,6 +172,10 @@
                 "monitor": "mAP",
                 "mode": "max",
                 "patience": 20
+            },
+            "test_checkpoint": {
+                "monitor": "mAP",
+                "mode": "max"
             },
             "win_size": 5,
             "transformations": [

@@ -426,6 +426,17 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         # {"monitor": "mAP", "mode": "max", "patience": 20} -- monitor "loss" reads
         # val_loss. Absent from the config means no early stopping (full schedule).
         early_stop = train_config.get('early_stop')
+        # Optional config-driven checkpoint selection for the FINAL test evaluation,
+        # e.g. {"monitor": "mAP", "mode": "max"}. The RECORD reference tests
+        # trainer.test(..., ckpt_path='best'), i.e. the best epoch by its monitored
+        # metric, not the weights left at loop exit -- with early stopping those differ
+        # by up to `patience` epochs. Absent from the config keeps the final weights,
+        # which is what other families' references do (DAROD's eval.py restores
+        # latest_checkpoint).
+        test_checkpoint = train_config.get('test_checkpoint')
+        best_state = None
+        best_score = None
+        best_state_epoch = None
 
         if pretrained:
             logger.info('===========  Resume training  ==================:')
@@ -537,6 +548,15 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             torch.save(checkpoint,filename)
             logger.info(f'Saved checkpoint of epoch {epoch}.')
 
+            if test_checkpoint:
+                score = eval['loss'] if test_checkpoint['monitor'] == 'loss' else eval[test_checkpoint['monitor']]
+                improved = (best_score is None
+                            or (score < best_score if test_checkpoint.get('mode', 'max') == 'min' else score > best_score))
+                if improved:
+                    best_score = score
+                    best_state_epoch = epoch
+                    best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+
             if early_stop:
                 # Derived from history rather than a running counter so a resumed run
                 # (history restored from the checkpoint) keeps the same stopping point.
@@ -550,6 +570,30 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     break
 
         df_val_eval.to_csv(val_eval_path, index=False)
+
+        if test_checkpoint:
+            monitor = test_checkpoint['monitor']
+            mode = test_checkpoint.get('mode', 'max')
+            series = history['val_loss'] if monitor == 'loss' else history[monitor]
+            best_idx = (int(np.argmin(series)) if mode == 'min' else int(np.argmax(series))) if series else None
+            if best_idx is not None and best_state is not None and best_idx == best_state_epoch:
+                net.load_state_dict(best_state)
+                logger.info(f'Restored best checkpoint for testing: epoch {best_idx} '
+                            f'({monitor}={series[best_idx]:.4f}).')
+            elif best_idx is not None:
+                # Resumed run: the best epoch predates this segment, so those weights
+                # exist only on disk, in the directory the resume checkpoint came from.
+                import glob
+                matches = sorted(glob.glob(os.path.join(os.path.dirname(pretrained),
+                                                        f'{model_type}_epoch{best_idx:02d}_*.pth'))) if pretrained else []
+                if matches:
+                    net.load_state_dict(torch.load(matches[0], map_location=device)['net_state_dict'])
+                    logger.info(f'Restored best checkpoint for testing from {matches[0]} '
+                                f'(epoch {best_idx}, {monitor}={series[best_idx]:.4f}).')
+                else:
+                    logger.warning(f'Best epoch by {monitor} is {best_idx}, whose checkpoint was not found '
+                                   f'(resumed run); testing the final weights instead. The reported test score '
+                                   f'is NOT the reference-faithful best-checkpoint number.')
 
         logger.info(f'=========== Evaluation on Test data ===========')
         if test_loader is None:
