@@ -117,10 +117,13 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
 | 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
-| 6a | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
+| 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
+| 4a | RECORD / CARRADA / RA | not yet run | 34.80 | **33.08** | reference anchor established |
 
-Rows 11/12 are mAP@0.5; row 6a is mIoU. The other runs are not yet measured against
-their baselines.
+Rows 11/12 are mAP@0.5; rows 4a/4b are mIoU. The other runs are not yet measured
+against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
+RECORD on CARRADA RA/RD. An earlier revision labelled the RD result `6a`, which in that
+table is RECORDNoLstm/CARRADA-RA -- a different pair.)
 
 **Read RECORD/CARRADA RD against 53.19, not 58.10** — the same situation as RADDet
 below, but established far more sharply. The reference implementation itself, run from
@@ -169,6 +172,39 @@ published numbers** -- proven by the `TypeError` above, which makes a validation
 impossible at this commit. Whatever the authors actually ran differed from what they
 released, and the difference is not recoverable from the repository. Both sides here are
 also single-seed. Further chasing of the gap through this repo's code is not warranted.
+
+**Read RECORD/CARRADA RA against 33.08, not 34.80.** The same reference run was repeated
+for the RA view (same pristine checkout, same pinned stack, same CARRADA copy, 100-epoch
+budget, no early stop triggered, tested on its precision-best checkpoint at epoch 76):
+
+| class | reference on our data | published |
+|-------|----------------------|-----------|
+| Bg | 99.23 | 99.70 |
+| Ped | 8.07 | 10.30 |
+| Cycl | **4.71** | 1.40 |
+| Car | 20.32 | 27.70 |
+| **mIoU** | **33.08** | **34.80** |
+
+A 1.7-point shortfall, ~5% relative -- the same signature as the RD view, on a second
+independent view. Two details worth keeping:
+
+- **The val-to-test drop is small here** (34.59 -> 33.08, 1.5 points) against RD's ~10.
+  Background contributes ~25 of the 34.8 total and transfers between splits essentially
+  unchanged, so almost the whole drop lands on the three object classes.
+- **The shortfall is not uniform**: car is 7.4 low and pedestrian 2.2 low, but cyclist is
+  3.4 points *higher* than published (4.71 vs 1.40). A published cyclist IoU of 1.4 is
+  close enough to zero that it is plausibly noise in the authors' own run, which is a
+  reason to weight the RA aggregate lightly in either direction.
+
+**Running the RA view also required a third patch to the reference**, and this one is
+substantive rather than cosmetic: `CarradaDatasetRangeAngle.__getitem__`
+(`datasets/carrada/dataloaders.py:330`) files the range-ANGLE mask under the key
+`'rd_mask'` -- copy-pasted from the range-Doppler class -- while
+`carrada_trainer_sv.py:174` reads `batch['ra_mask']` for that view. The RA path therefore
+raises `KeyError` on its first validation batch and **cannot train for a single epoch as
+published**. Since Table V reports an RA number, that path certainly ran for the authors,
+which independently confirms the conclusion above: the released artifact is not the code
+that produced the published table.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
