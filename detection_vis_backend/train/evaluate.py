@@ -732,7 +732,10 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # get_loss reduces over the ACTUAL batch, so weight by that, not by the
+            # configured batch_size: the final batch is short whenever the split size
+            # is not a multiple of it, and would otherwise be over-weighted.
+            running_loss += loss.item() * inputs.shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
         
         seq_name = data['seq_name'][0]
@@ -902,7 +905,7 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
 
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if eval_type == "val":
@@ -1056,10 +1059,10 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
         inputs = data[features[0]]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
         
         metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
@@ -1096,7 +1099,8 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data[features[0]].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
@@ -1269,10 +1273,10 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
         inputs = data["RAD"]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         pred = outputs['pred'].detach().cpu().numpy()
@@ -1300,7 +1304,10 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
         else:
             class_ap = np.mean(ap_class_i)
         ap_all_class_test.append(class_ap)
-    mean_ap_test /= batch_size * len(dataloader)
+    # mean_ap_test accumulates once per FRAME (the batch_id loop above), so normalise by
+    # the frame count. `batch_size * len(dataloader)` overestimates it whenever the split
+    # is not a multiple of batch_size, which would drag mAP down.
+    mean_ap_test /= len(dataloader.dataset)
     result = {'mAP': mean_ap_test, 'mAR': 0.0, 'mIoU': 0.0}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
@@ -1554,10 +1561,10 @@ def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_t
         inputs = data['RD']
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if outputs["decoder_output"] is not None:
@@ -1661,10 +1668,11 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
         tic = time.time()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data['RD'].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         confmap_pred = outputs['confmap_pred'][-1].cpu().detach().numpy()  
@@ -1784,7 +1792,8 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data['RD'].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if data['RA'].shape[0] != prev_size:
@@ -1973,7 +1982,9 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
             outputs = net(data)
         if eval_type == 'val':
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # Point-cloud batch: 'pillars'/'coords' are concatenated across samples, so
+            # their leading axis is not the sample count -- frame_ids is one per sample.
+            running_loss += loss.item() * len(data['frame_ids'])
 
         results = postprocess(outputs, net.net.anchors, model_cfg, train_config)
         for b, res in enumerate(results):

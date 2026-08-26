@@ -387,10 +387,38 @@ per-view re-check before launching it found one real defect and confirmed the re
   gives `config_mvrecord_carrada.yaml` as *the* MV-RECORD buffer training command. The
   architecture we build is the one that command builds.
 
-One benign difference left as-is: the reference's val/test dataloaders use the train
-batch size (8) where ours use 1. The `Evaluator` accumulates one global confusion matrix
-over all pixels, so batching cannot move the metric -- and the RD/RA runs matched with
-the same difference in place.
+**Eval batch size: adopted the reference's, and fixed a defect it exposed.** The
+reference builds its val *and* test loaders with `train_cfg['batch_size']` (8), not 1.
+Measured on our box, batch 8 is **~4x faster** (9.5 -> 37.5 samples/s; validation on the
+RA run's shape would drop from 4m16s to ~1m05s per epoch, ~5h over 100 epochs), so
+MVRECORD's reference config now uses batch 8 for val and test. RD/RA are left at their
+measured batch-1 settings; their numbers stand.
+
+Three things were checked before making that change:
+
+- **The comparison metrics are unaffected in substance.** The `Evaluator` accumulates one
+  global confusion matrix, so each sample is counted once regardless of grouping. The
+  measured drift between batch sizes is ~8e-06 mIoU -- float non-determinism from
+  batch-shape-dependent kernels, not a semantic change; each batch size is bit-reproducible
+  across repeats. (An earlier revision of this file said batching "cannot move the metric";
+  that was too strong -- it cannot move it *systematically*, but it does move it at 1e-5.)
+- **A real defect, now fixed.** Every evaluator accumulated
+  `running_loss += loss.item() * batch_size` using the CONFIGURED batch size, while
+  `get_loss` reduces over the ACTUAL batch -- so a short final batch was over-weighted
+  by `configured/actual`. Reachable whenever the split is not a multiple of the batch
+  size (`drop_last` is unset, so partial batches do occur). Demonstrated on CARRADA val at
+  batch 16 (151 full + 8): reported 1.86479782 against the correct 1.85897204. Fixed at
+  all nine sites plus a tenth instance of the same class in `RADDet_evaluation`, whose mAP
+  was normalised by `batch_size * len(dataloader)` rather than the frame count.
+  **No completed result changes**: RD/RA/CRUW/RODNet all ran eval at batch 1, where
+  configured == actual always, and the bug touches only the loss, never the confusion
+  matrix. DAROD (val batch 4/16) had inflated val *losses*, but its verdict rests on
+  mAP@0.5 and it has no loss-based early stop or checkpoint selection.
+- **The loss is not comparable across batch sizes**, by construction and on both sides:
+  `CrossEntropyLoss(weight=..., reduction='mean')` divides by the sum of class weights
+  present in the batch, so batches whose frames differ in class composition do not
+  decompose into per-sample losses (measured: 6 of 25 batches differ, max 0.0153). Read
+  MVRECORD's val loss only against itself, never against the batch-1 RD/RA curves.
 
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 

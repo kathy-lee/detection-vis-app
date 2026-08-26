@@ -11,6 +11,8 @@
 
     "_transformations_note": "hflip ONLY, for the reason documented at length in RECORD_train_config_reference.json: the reference yaml says `transformations: \"hflip, vflip\"` but main_carrada.py:56 parses it with .split(',') into ['hflip', ' vflip'] -- with a leading space -- and get_transformations tests `'vflip' in transform_names`, which is False for ' vflip'. The published numbers were produced with hflip alone. 'vflip' is parked in _transformations_disabled.",
 
+    "_eval_batch_note": "val/test run at batch 8, matching the reference (main_carrada.py builds its val and test DataLoaders with train_cfg['batch_size'], not 1). Measured ~4x faster than batch 1 on our box -- 9.5 -> 37.5 samples/s -- which on the RA run's shape would have cut validation from 4m16s to ~1m05s per epoch. Two consequences, both checked: (1) mIoU/mAP/mAR are unaffected in substance -- the Evaluator accumulates one global confusion matrix, so every sample is counted once regardless of grouping; the measured drift between batch sizes is ~8e-06 mIoU, pure float non-determinism from batch-shape-dependent kernels, and each batch size is bit-reproducible. (2) The LOSS is not comparable across batch sizes, by construction and on both sides: CrossEntropyLoss(weight=..., reduction='mean') divides by the sum of class weights present in the batch, so batches whose frames differ in class composition do not decompose into per-sample losses (measured: 6 of 25 batches differ, max 0.0153). Do not compare this run's val loss against the batch-1 RD/RA runs' -- compare mIoU.",
+
     "_metrics_note": "MV-RECORD reports TWO mIoU figures, one per view (paper Table V: 63.2 RD, 44.5 RA), and the reference logs them separately as rd_miou / ra_miou (executors/carrada_trainer.py:191,195 val and 322,326 test), building global_ aggregates for acc/prec/dice ONLY -- never for mIoU. MVRECORD_CARRADA_evaluation returns 'mIoU_rd' and 'mIoU_ra' accordingly; read those against the published pair. The 'mIoU' key it also returns is their mean, kept only for train()'s history/CSV contract, and corresponds to no published number.",
 
     "default": {
@@ -30,11 +32,11 @@
                 "num_workers": 4
             },
             "val": {
-                "batch_size": 1,
+                "batch_size": 8,
                 "num_workers": 1
             },
             "test": {
-                "batch_size": 1,
+                "batch_size": 8,
                 "num_workers": 1
             }
         }
@@ -54,11 +56,11 @@
                 "num_workers": 4
             },
             "val": {
-                "batch_size": 1,
+                "batch_size": 8,
                 "num_workers": 1
             },
             "test": {
-                "batch_size": 1,
+                "batch_size": 8,
                 "num_workers": 1
             }
         },
