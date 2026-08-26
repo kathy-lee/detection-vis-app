@@ -353,6 +353,45 @@ Two protocol deviations were found and one closed:
    keep best-val-mAP. Documented, not changed -- selecting on the comparison metric is
    the defensible side of the deviation.
 
+#### MVRECORD: re-audited before Phase 2 (2026-08-26), one defect found and fixed
+
+The family audit above covered MVRECORD's model code, architecture config and loss. The
+per-view re-check before launching it found one real defect and confirmed the rest:
+
+- **Evaluator (DEFECT, fixed)**: `MVRECORD_CARRADA_evaluation` averaged `range_doppler`
+  with *itself*, so the reported mIoU was the RD score alone and RA was computed and
+  discarded. Correcting the typo is not sufficient -- the reference logs `rd_miou` and
+  `ra_miou` separately (`executors/carrada_trainer.py:191,195` val, `322,326` test) and
+  builds `global_` aggregates for acc/prec/dice ONLY, never mIoU, matching the paper's
+  pair (63.2 RD / 44.5 RA). The evaluator now returns `mIoU_rd` and `mIoU_ra`.
+- **Dataset**: our multi-view `__getitem__` is line-for-line the reference's
+  `CarradaDataset.__getitem__` -- same annotation masks, processed/raw selection,
+  `dstack`+`rollaxis`, one flip decision shared across all three views, the fake-mask
+  trick for AD, `add_temp=True`. Normalisation sits in `__getitem__` for us and in the
+  trainer (all three stages) for them: same operation, same order relative to the flip.
+  The three stats constants are byte-identical to the reference's JSON, `ad_stats_all`
+  included -- the first check to exercise it, since AD is unused by the RD/RA runs. Our
+  CARRADA copy has `angle_doppler_processed`. Flips are gated on `split == 'train'` on
+  both sides, so val/test see no augmentation.
+- **Loss**: `wce_w10sdice` builds 2 criteria, so the reference takes its `nb_losses < 3`
+  branch and the coherence loss (CoL) never applies to the published config. Our
+  `get_loss` (`network.py:700-706`) is that branch line-for-line.
+- **Train config**: Adam + lr 1e-3 + `StepLR(20, 0.9)` == the reference's Adam +
+  `ExponentialLR(gamma=0.9, frequency=20)`; batch 8; hflip only; byte-identical per-view
+  class weights. `test_checkpoint` on `mAP` is exact: the reference monitors
+  `val_metrics/global_prec = (rd['prec'] + ra['prec'])/2`, and `get_pixel_prec_class`
+  returns `prec = np.mean(prec_by_class)` (`evaluate.py:971`), which is term-for-term
+  what our `mAP` averages.
+- **`config_name: 'mv-record-s'`** inside `models/configs/mv_record.yaml` is a dead
+  label: never read by any code, `get_models` has no `MV-RECORD-S` branch, and the README
+  gives `config_mvrecord_carrada.yaml` as *the* MV-RECORD buffer training command. The
+  architecture we build is the one that command builds.
+
+One benign difference left as-is: the reference's val/test dataloaders use the train
+batch size (8) where ours use 1. The `Evaluator` accumulates one global confusion matrix
+over all pixels, so batching cannot move the metric -- and the RD/RA runs matched with
+the same difference in place.
+
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
 Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-
@@ -645,7 +684,7 @@ evaluator in `evaluate.py`:
 | `RODNet_evaluation` | mAP, mAR | mIoU |
 | `RECORD_CRUW_evaluation` | mAP, mAR | mIoU |
 | `RECORD_CARRADA_evaluation` | mAP, mAR, mIoU | — |
-| `MVRECORD_CARRADA_evaluation` | mAP, mAR, mIoU | — |
+| `MVRECORD_CARRADA_evaluation` | mAP, mAR, mIoU_rd, mIoU_ra (+ mIoU, their mean) | — |
 | `RADDet_evaluation` | mAP | mAR, mIoU |
 | `DAROD_evaluation` | mAP, mAR | mIoU |
 | `RAMP_CNN_evaluation` | mAP, mAR | mIoU |

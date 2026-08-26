@@ -1118,7 +1118,16 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
             sum(metrics_dict['range_angle']['prec_by_class']) / len(metrics_dict['range_angle']['prec_by_class']) / 2 
     mAR = sum(metrics_dict['range_doppler']['recall_by_class']) / len(metrics_dict['range_doppler']['recall_by_class']) / 2 + \
             sum(metrics_dict['range_angle']['recall_by_class']) / len(metrics_dict['range_angle']['recall_by_class']) / 2
-    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    # The reference keeps the two views apart: carrada_trainer.py logs 'rd_miou' and
+    # 'ra_miou' separately (lines 191/195 val, 322/326 test) and builds global_ aggregates
+    # for acc/prec/dice ONLY -- never for mIoU. The paper does the same, reporting 63.2 RD
+    # against 44.5 RA. An average of those two matches nothing published, so both views are
+    # carried here; 'mIoU' remains for train()'s history/CSV contract.
+    # (Until 2026-08-26 this line read range_doppler twice, so 'mIoU' was the RD score alone.)
+    rd_miou = metrics_dict['range_doppler']['miou']
+    ra_miou = metrics_dict['range_angle']['miou']
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (rd_miou + ra_miou)/2,
+              'mIoU_rd': rd_miou, 'mIoU_ra': ra_miou}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
     return  result

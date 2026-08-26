@@ -518,8 +518,19 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             history['mAP'].append(eval['mAP'])
             history['mAR'].append(eval['mAR'])
             history['mIoU'].append(eval['mIoU'])
-            
-            new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
+
+            # Evaluators may report more than the four shared columns -- MVRECORD returns
+            # per-view mIoU, which is the form the reference and the paper report. Carry
+            # whatever else came back so it reaches history and val_eval.csv; the test path
+            # already writes every returned key (from_dict below).
+            extras = {k: v for k, v in eval.items() if k not in ('loss', 'mAP', 'mAR', 'mIoU')}
+            for k, v in extras.items():
+                # Pad when a series starts late (a run resumed from a checkpoint written
+                # before the key existed) so index == epoch stays true for every series --
+                # test_checkpoint below uses argmax(series) AS an epoch index.
+                history.setdefault(k, [None] * (len(history['mAP']) - 1)).append(v)
+
+            new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU'], **extras})
             df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
             
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
