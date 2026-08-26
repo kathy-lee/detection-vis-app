@@ -168,7 +168,8 @@
                     0.09032079842784382
                 ]
             },
-            "early_stop": {
+            "_early_stop_disabled": {
+                "_why": "COMMENTED OUT (rename this key back to 'early_stop' to restore; values below are the reference's, unchanged). Same reason as the RD block: patience 20 on precision can stop the run while mIoU is still improving and then select an under-predicting checkpoint. The reference's rule is applied post hoc to the recorded per-epoch curve instead.",
                 "monitor": "mAP",
                 "mode": "max",
                 "patience": 20
@@ -179,7 +180,9 @@
             },
             "win_size": 5,
             "transformations": [
-                "hflip",
+                "hflip"
+            ],
+            "_transformations_disabled": [
                 "vflip"
             ],
             "norm_type": "tvt",

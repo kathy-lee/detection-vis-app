@@ -118,7 +118,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
 | 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
-| 4a | RECORD / CARRADA / RA | not yet run | 34.80 | **33.08** | reference anchor established |
+| 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
 
 Rows 11/12 are mAP@0.5; rows 4a/4b are mIoU. The other runs are not yet measured
 against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
@@ -177,13 +177,13 @@ also single-seed. Further chasing of the gap through this repo's code is not war
 for the RA view (same pristine checkout, same pinned stack, same CARRADA copy, 100-epoch
 budget, no early stop triggered, tested on its precision-best checkpoint at epoch 76):
 
-| class | reference on our data | published |
-|-------|----------------------|-----------|
-| Bg | 99.23 | 99.70 |
-| Ped | 8.07 | 10.30 |
-| Cycl | **4.71** | 1.40 |
-| Car | 20.32 | 27.70 |
-| **mIoU** | **33.08** | **34.80** |
+| class | reference on our data | ours | published |
+|-------|----------------------|------|-----------|
+| Bg | 99.23 | 99.17 | 99.70 |
+| Ped | 8.07 | 7.36 | 10.30 |
+| Cycl | **4.71** | **3.55** | 1.40 |
+| Car | 20.32 | **20.86** | 27.70 |
+| **mIoU** | **33.08** | **32.74** | **34.80** |
 
 A 1.7-point shortfall, ~5% relative -- the same signature as the RD view, on a second
 independent view. Two details worth keeping:
@@ -195,6 +195,26 @@ independent view. Two details worth keeping:
   3.4 points *higher* than published (4.71 vs 1.40). A published cyclist IoU of 1.4 is
   close enough to zero that it is plausibly noise in the authors' own run, which is a
   reason to weight the RA aggregate lightly in either direction.
+
+**Our RA run lands at 32.74, −0.34 against that anchor (−1.0%).** 100 epochs, seed 3,
+official split, hflip only, early stop parked, tested on the mAP-best checkpoint
+(epoch 73, val mAP 0.3574 / mIoU 0.3501); 16h37m wall-clock, no resume. Two properties
+make this a match rather than a near-miss:
+
+- **The per-class deltas against the reference are mixed in sign** (Bg −0.06, Ped −0.71,
+  Cycl −1.16, Car **+0.54**). An implementation difference pushes the classes the same
+  way -- as the gap to *published* does, where both our run and the reference are low on
+  car and high on cyclist. Mixed signs at this magnitude are run-to-run variance.
+- **The val peak is unresolvable to better than this.** Mean epoch-to-epoch |Δ mIoU| over
+  the last 30 epochs is 0.0080, while the top-8 epochs by val mIoU span only 0.0069 --
+  nine epochs sit within one noise-step of the peak (0.3427-0.3501). Which of them wins
+  on val is arbitrary, so a 0.34-point test difference is below what this protocol can
+  resolve. Selecting the test-best checkpoint instead would be test-set selection and was
+  not done.
+
+Note our val mIoU (0.3501) *exceeds* the reference's (0.3459) while our test mIoU comes in
+0.34 lower -- consistent with both runs sampling the same distribution rather than one
+being systematically better.
 
 **Running the RA view also required a third patch to the reference**, and this one is
 substantive rather than cosmetic: `CarradaDatasetRangeAngle.__getitem__`
