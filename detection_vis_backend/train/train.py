@@ -462,6 +462,17 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             net.train()
             running_loss = 0.0
 
+            # Gradient accumulation: `accum` micro-batches of the dataloader's batch_size
+            # compose one effective batch of accum*batch_size. Mirrors PyTorch Lightning's
+            # accumulate_grad_batches, which the reference CARRADA configs set -- including
+            # its loss scaling: PL divides the step loss by the accumulation factor before
+            # backward, so the accumulated gradient is the MEAN over the effective batch,
+            # not its sum. Needed for MVRECORD, which OOMs at the published batch 8 on a
+            # 24 GB card and must run batch 4 x accum 2 to keep the published effective
+            # batch. accum=1 (the default) reproduces the previous behaviour exactly.
+            accum = max(1, int(train_config.get('accumulate_grad', 1) or 1))
+            optimizer.zero_grad()
+
             for iter, data in enumerate(train_loader):
                 for key in data:
                     if isinstance(data[key], torch.Tensor):
@@ -479,7 +490,16 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 else:
                     inputs = {feature: data[feature] for feature in features}
                 logger.debug('get input')
-                optimizer.zero_grad()
+                # Actual sample count of THIS batch -- the final batch is short whenever
+                # the split is not a multiple of batch_size (drop_last is unset), and the
+                # configured value would over-weight it in the epoch mean.
+                if model_type in ('RadarPillar', 'PointPillar'):
+                    n_samples = len(data['frame_ids'])
+                elif len(features) == 1:
+                    n_samples = inputs.shape[0]
+                else:
+                    n_samples = inputs[features[0]].shape[0]
+
                 with torch.set_grad_enabled(True):
                     outputs = net(inputs)
                 logger.debug(f'get net output')
@@ -488,13 +508,20 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     data.pop(feature, None)   # RadarPillar batches have no feature-named key
                 loss = net.get_loss(outputs, data, train_config)
                 logger.info(f"Train sample {iter} loss: {loss}")
-                loss.backward()
-                if train_config.get('grad_norm_clip'):
-                    nn.utils.clip_grad_norm_(net.parameters(), float(train_config['grad_norm_clip']))
-                optimizer.step()
-                if step_scheduler_per_iter:
-                    scheduler.step()
-                running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
+                (loss / accum).backward()
+
+                # Step on every accum-th micro-batch, and on the last batch of the epoch so
+                # a trailing partial group is not silently dropped (PL behaves the same).
+                # Clipping belongs at the step boundary, on the fully accumulated gradient.
+                if (iter + 1) % accum == 0 or (iter + 1) == len(train_loader):
+                    if train_config.get('grad_norm_clip'):
+                        nn.utils.clip_grad_norm_(net.parameters(), float(train_config['grad_norm_clip']))
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    if step_scheduler_per_iter:
+                        scheduler.step()
+
+                running_loss += loss.item() * n_samples   # unscaled loss, actual batch
                 kbar.update(iter, values=[("loss", loss.item())])
                 global_step += 1
 

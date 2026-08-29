@@ -44,7 +44,9 @@
 
     "CARRADA": {
         "_src": "config_mvrecord_carrada.yaml: n_epoch 500, batch_size 8, lr 0.001, lr_step 20, loss wce_w10sdice, norm_type tvt, win_size 5",
+        "_accumulate_grad_note": "TRAIN batch is 4 with accumulate_grad 2, NOT the published batch 8 -- MV-RECORD at batch 8 OOMs on a 24 GB 3090 (20.61 GiB allocated at the failure), so the reference anchor run was forced onto 4 x 2 and ours matches it. The product is the published effective batch. It is not identical to a true batch 8: weighted CE normalises by the sum of class weights present in the batch (see _eval_batch_note), so two batches of 4 do not compose into one batch of 8; the gradient direction is close because the model is LayerNorm, which is per-sample. train() divides the step loss by accumulate_grad before backward, matching PyTorch Lightning's accumulate_grad_batches, so the accumulated gradient is the mean over the effective batch rather than its sum. VAL/TEST stay at batch 8 -- no gradients there, so no OOM, and the confusion-matrix metrics are batch-invariant to ~1e-05.",
         "num_epochs": 500,
+        "accumulate_grad": 2,
         "lr_scheduler": {
             "type": "step",
             "step_size": 20,
@@ -52,7 +54,7 @@
         },
         "dataloader": {
             "train": {
-                "batch_size": 8,
+                "batch_size": 4,
                 "num_workers": 4
             },
             "val": {
