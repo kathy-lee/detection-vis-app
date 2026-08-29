@@ -119,8 +119,9 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
 | 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
 | 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
+| 9 | MVRECORD / CARRADA | not yet run | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | reference anchor established |
 
-Rows 11/12 are mAP@0.5; rows 4a/4b are mIoU. The other runs are not yet measured
+Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU. The other runs are not yet measured
 against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
 RECORD on CARRADA RA/RD. An earlier revision labelled the RD result `6a`, which in that
 table is RECORDNoLstm/CARRADA-RA -- a different pair.)
@@ -225,6 +226,61 @@ raises `KeyError` on its first validation batch and **cannot train for a single 
 published**. Since Table V reports an RA number, that path certainly ran for the authors,
 which independently confirms the conclusion above: the released artifact is not the code
 that produced the published table.
+
+**Read MVRECORD/CARRADA against 56.35 RD / 38.09 RA, not 63.2 / 44.5.** Same pristine
+checkout and pinned stack, 100 epochs, tested on the reference's own precision-best
+checkpoint (epoch 99, `global_prec` 0.5538):
+
+| class | RD IoU (ours-run reference) | RA IoU (ours-run reference) |
+|-------|------------------|------------------|
+| Bg | 99.53 | 99.52 |
+| Ped | 45.21 | 17.91 |
+| Cycl | 26.23 | 10.59 |
+| Car | 54.43 | 24.35 |
+| **mIoU** | **56.35** (published 63.2) | **38.09** (published 44.5) |
+
+A 6.9-point shortfall on RD (−10.8%) and 6.4 on RA (−14.4%) -- the same signature as the
+single-view runs, now on the multi-view model, and the largest gaps measured so far.
+
+**The val-to-test drop is what matters here, and it is much larger than RA's.** Best
+validation was **65.29 RD** (epoch 99) and **42.53 RA** (epoch 92) -- RD *above* its
+published 63.2. Test then came in 8.9 points lower on RD and 4.4 lower on RA, against
+only 1.5 for the RECORD/CARRADA RA run. So a mid-run reading of the val curve suggests
+MVRECORD reproduces its paper on RD; the test evaluation says it does not. Do not quote
+MVRECORD validation figures as if they were the anchor.
+
+Two caveats attach to this anchor, both forced and both documented rather than worked
+around:
+
+- **batch 4 with `accumulate_grad: 2`, not batch 8.** MV-RECORD at the published batch
+  size OOMs on a 24 GB 3090 (20.61 GiB allocated at the failure). Accumulation preserves
+  the published *effective* batch, but is not identical to it: weighted CE normalises by
+  the sum of class weights present in the batch (see the eval-batch section above), so two
+  batches of 4 do not compose into one batch of 8. Gradient direction is close -- the
+  model is LayerNorm, which is per-sample -- but this is a real deviation.
+- **Resumed at epoch 53.** The run was stopped and restarted from `last.ckpt`; Lightning
+  restores optimizer, scheduler and callback state, but epoch 53 draws a fresh shuffle
+  rather than continuing the interrupted epoch's order. Same training procedure, different
+  random draw.
+
+Resuming also required a fifth patch to the pristine repo, and it is the first that only
+appears on resume: `carrada_trainer.py`'s `on_train_start` now moves Adam's `step` state
+back to CPU. PL 1.8.1 calls `_optimizer_to_device` immediately after
+`optimizer.load_state_dict` (`strategies/strategy.py:369`) and moves *every* optimizer
+state tensor to CUDA, including `step` -- which torch 1.12 deliberately excludes from that
+cast (`optim/optimizer.py:181`) because the non-capturable path asserts
+`not step_t.is_cuda` (`optim/adam.py:255`). Lightning undoes torch's own guard and resume
+dies. Restoring `step` to CPU keeps the resumed run on the identical Adam code path;
+setting `capturable=True` would also have worked but would have switched the anchor to a
+different implementation mid-run.
+
+One thing this run settles: **the training can collapse, but does not do so reliably.** An
+earlier attempt (killed at epoch 14 by the USB drive dropping off the bus) saw RD fall
+from 55.59 at epoch 9 to ~25.0 -- the background-only value -- and stay there, with
+`global_prec` then selecting that degenerate state as its best checkpoint. The completed
+run passed the same epochs cleanly and never collapsed in 100 epochs. So the collapse is a
+real failure mode of these hyperparameters, not a deterministic one, and the
+precision-monitored selection will not protect against it.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
