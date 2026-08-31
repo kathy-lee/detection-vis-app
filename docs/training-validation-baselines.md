@@ -119,7 +119,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
 | 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
 | 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
-| 9 | MVRECORD / CARRADA | not yet run | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | reference anchor established |
+| 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) |
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU. The other runs are not yet measured
 against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
@@ -281,6 +281,71 @@ from 55.59 at epoch 9 to ~25.0 -- the background-only value -- and stay there, w
 run passed the same epochs cleanly and never collapsed in 100 epochs. So the collapse is a
 real failure mode of these hyperparameters, not a deterministic one, and the
 precision-monitored selection will not protect against it.
+
+### Closed: MVRECORD / CARRADA (Phase 2) — match against the reference anchor
+
+Our run, same official split, same `_reference` config (100 epochs, batch 4 ×
+`accumulate_grad` 2, val/test batch 8), tested on the mAP-best checkpoint:
+
+| | ours | reference on our pipeline | published |
+|---|---|---|---|
+| mIoU RD | **54.83** | 56.35 | 63.2 |
+| mIoU RA | **38.89** | 38.09 | 44.5 |
+| mAP | 0.4853 | — | — |
+| mAR | 0.8218 | — | — |
+
+**−1.52 on RD (−2.7%), +0.80 on RA (+2.1%)** — the two views disagree in sign, which is
+what run-to-run variance looks like and not what an implementation difference looks like.
+A defect in code the two views share (dataset, backbone, loss, metric chain) would move
+both the same direction. Per class:
+
+| class | RD ours | RD reference | Δ | RA ours | RA reference | Δ |
+|-------|---------|--------------|---|---------|--------------|---|
+| Bg | 99.48 | 99.53 | −0.05 | 99.58 | 99.52 | +0.06 |
+| Ped | 42.03 | 45.21 | −3.18 | 18.53 | 17.91 | +0.62 |
+| Cycl | 25.73 | 26.23 | −0.50 | 11.74 | 10.59 | +1.15 |
+| Car | 52.08 | 54.43 | −2.35 | 25.73 | 24.35 | +1.38 |
+| **mIoU** | **54.83** | **56.35** | −1.52 | **38.89** | **38.09** | +0.80 |
+
+Note the sign structure carefully: **within** a view every class moves the same way, and
+only **between** views do the signs flip. That is expected -- each view has its own
+decoder head and all four of its classes ride on it -- so this is two independent
+observations that disagree, not eight. Do not read the eight per-class deltas as eight
+pieces of evidence. The shared Background class is flat to ±0.06 on both views, which is
+the part that would move first if the common code path differed.
+
+The largest single gap is RD Pedestrian at −3.18, and it is a precision effect rather than
+a miss: recall on that class is 0.9175 against precision 0.4368, i.e. we over-predict
+pedestrians in range-Doppler slightly more than the reference does.
+
+**The validation trajectories are statistically indistinguishable**, which is the stronger
+evidence and does not depend on a single checkpoint draw. Over epochs 40-87 (post-warmup,
+n=48 each):
+
+| | ours | reference | diff | Mann-Whitney |
+|---|---|---|---|---|
+| RD | 59.34 ± 2.73 | 59.58 ± 2.58 | −0.23 | p = 0.68 |
+| RA | 37.61 ± 1.94 | 37.92 ± 1.99 | −0.31 | p = 0.40 |
+| mAP | 0.4971 ± 0.0234 | 0.4995 ± 0.0226 | −0.0024 | p = 0.61 |
+
+The mean differences are an order of magnitude below the epoch-to-epoch spread. Both runs
+also happened to peak on mAP at **epoch 99** (ours 0.5543, the reference's `global_prec`
+0.5538) and therefore tested the same epoch index. Val-to-test drop was 10.16 RD / 3.19 RA
+for ours against 8.94 / 3.68 for the anchor -- the transfer penalty behaves the same on
+both sides, and it is again large enough that the val curve alone would have been
+misleading (our best val RD was 64.99, close to the published 63.2).
+
+Ours was **resumed at epoch 55** from its own epoch-54 checkpoint, so it carries the same
+kind of fresh-shuffle discontinuity as the anchor (resumed at 53). `train()` restores
+weights, optimizer, scheduler, `global_step` and `history`; the interrupted epoch's
+remaining batches are discarded and that epoch is redone from its start.
+
+One artifact to ignore in `docs/phase2-mvrecord-carrada.{md,json}`: the run is labelled
+`verdict: suspect` with note `loss 0.321 -> 0.4571 (NOT down)`. That is `smoke_sweep`'s
+first-vs-last val-loss heuristic applied to the resumed segment only, and this model's val
+loss oscillates in 0.25-0.46 with no trend while mIoU climbs -- the reference does exactly
+the same. `epochs_recorded: 45` likewise counts only epochs 55-99; the checkpoint history
+holds all 100.
 
 **Read RADDet against 0.4478, not 0.4657.** The reference implementation itself scores
 only 0.4414 on our copy of RADDet (0.4478 through our loader/evaluator), 5.2% under its
