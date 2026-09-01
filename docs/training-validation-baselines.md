@@ -553,7 +553,7 @@ a pristine worktree of `ZhangAoCanada/RADDet@75f4603` at `/home/kangle/projects/
 
 | step | result |
 |------|--------|
-| 1. Config against the reference's | schedule mismatch (below) and a single-vs-four mAP threshold gap; the other 12 fields match, including all four `global_*` constants, `max_boxes_per_frame` 30, the six anchors and every IoU threshold |
+| 1. Config against the reference's | schedule mismatch (below) and a single-vs-four mAP threshold gap (both now closed); the other 12 fields match, including all four `global_*` constants, `max_boxes_per_frame` 30, the six anchors and every IoU threshold |
 | 2. Ground-truth distribution | no clamping: 0.6% of boxes in the extreme range bins, 1.3% in azimuth, all 6 anchors used |
 | 3. Do consecutive samples differ? | 0/11 identical inputs, 0/11 identical labels |
 | 4. Structural diff of model and losses | **two defects, both fixed** |
@@ -635,6 +635,31 @@ the step count stepped per iteration, verified bit-identical to the reference's 
 step from 1 to 243,800. Batch size is set to the reference's 3 rather than the repo default's 4,
 because the schedule's thresholds are counted in optimizer steps: 60,000 steps is 24.6 epochs at
 batch 3 and 32.8 at batch 4.
+
+#### Reporting all four published thresholds
+
+The paper reports AP at four IoU thresholds (0.1 0.764 / 0.3 0.563 / **0.5 0.251** / 0.7 0.059)
+while `RADDet_evaluation` took a scalar. The reference splits this across two config blocks —
+`MODEL.mAP_iou3d_threshold` 0.3 for training and validation, `EVALUATE.mAP_iou3d_threshold`
+`[0.1, 0.3, 0.5, 0.7]` for the final test — and `RADDet_train_config_reference.json` now mirrors
+that with `mAP_iou3d_threshold` plus `mAP_iou3d_threshold_list`.
+
+**All four come from one forward pass.** The IoU threshold affects only TP/FP matching, never the
+predictions, so inference and NMS are shared and only `mAP()` repeats — one accumulator per
+threshold, which is exactly what the reference does (`evaluate.py:118-146`). The extra cost is
+negligible against a forward pass over 2032 test frames.
+
+The scalar stays primary: it drives the val curve and the `mAP` key that `train()`'s
+checkpoint-selection contract reads, so nothing about selection changes. The others arrive as
+`mAP@0.1` / `@0.5` / `@0.7`, alongside per-class `AP@<thr>_<class>` — the per-class figures were
+already being computed and discarded, and every other closed row in this campaign is argued per
+class. `train()` carries all of them into `val_eval.csv` and `test_eval.csv` with no changes,
+since the val path pads extras into `history` and the test path writes the returned dict
+wholesale. Verified on the ground-truth round-trip: 1.0 at every threshold.
+
+Classes absent from a split score 0.0 rather than NaN, which is the reference's convention
+(`evaluate.py:151-154`) and matters for RADDet's tail classes — motorcycle appears once in 300
+sampled training frames.
 
 #### An anchor for this pair is possible but expensive
 

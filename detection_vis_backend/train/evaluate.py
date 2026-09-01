@@ -1259,12 +1259,24 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
     running_loss = 0.0
     batch_size = train_config['dataloader'][eval_type]['batch_size']
 
+    # The reference splits this the same way: its MODEL block carries a single
+    # mAP_iou3d_threshold (0.3) used during training/validation, while its EVALUATE block
+    # carries a LIST [0.1, 0.3, 0.5, 0.7] for the final test -- which is what the paper
+    # reports (Table I/II: AP@0.1 0.764, @0.3 0.563, @0.5 0.251, @0.7 0.059). So the
+    # scalar stays the primary and drives 'mAP' (the checkpoint-selection contract with
+    # train()); the optional list adds the other thresholds as extra keys, which
+    # train() carries into val_eval.csv and test_eval.csv unchanged.
+    primary_thr = train_config["mAP_iou3d_threshold"]
+    thresholds = [primary_thr]
+    for thr in (train_config.get("mAP_iou3d_threshold_list") or []):
+        if thr not in thresholds:
+            thresholds.append(thr)
+    class_names = getattr(net, 'class_names', None) or \
+        ["person", "bicycle", "car", "motorcycle", "bus", "truck"][:n_class]
+    ap_by_thr = {thr: [[] for _ in range(n_class)] for thr in thresholds}
+    total_by_thr = {thr: 0.0 for thr in thresholds}
     mean_ap_test = 0.0
-    ap_all_class_test = []
-    ap_all_class = []
-    for class_id in range(n_class):
-        ap_all_class.append([])
-    
+
     for iter, data in enumerate(dataloader):
         for key in data:
             if isinstance(data[key], torch.Tensor):
@@ -1288,27 +1300,35 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
                                 conf_threshold=train_config["confidence_threshold"])
             nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
                             net.input_size, sigma=0.3, method="nms")
-            mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
-                                    net.input_size, ap_all_class, \
-                                    tp_iou_threshold=train_config["mAP_iou3d_threshold"])
-            mean_ap_test += mean_ap
+            # The IoU threshold only affects TP/FP MATCHING, never the predictions, so all
+            # thresholds share this one forward pass + NMS. Same structure as the
+            # reference's evaluate.py:118-146, which keeps one accumulator per threshold
+            # and calls mAP() once per threshold with the same nms_pred.
+            for thr in thresholds:
+                mean_ap, ap_by_thr[thr] = mAP(nms_pred, raw_boxes_frame, \
+                                        net.input_size, ap_by_thr[thr], \
+                                        tp_iou_threshold=thr)
+                total_by_thr[thr] += mean_ap
+            mean_ap_test = total_by_thr[primary_thr]
 
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
             kbar.update(iter)
 
-    for ap_class_i in ap_all_class:
-        if len(ap_class_i) == 0:
-            class_ap = 0.
-        else:
-            class_ap = np.mean(ap_class_i)
-        ap_all_class_test.append(class_ap)
     # mean_ap_test accumulates once per FRAME (the batch_id loop above), so normalise by
     # the frame count. `batch_size * len(dataloader)` overestimates it whenever the split
     # is not a multiple of batch_size, which would drag mAP down.
-    mean_ap_test /= len(dataloader.dataset)
-    result = {'mAP': mean_ap_test, 'mAR': 0.0, 'mIoU': 0.0}
+    n_frames = len(dataloader.dataset)
+    result = {'mAP': total_by_thr[primary_thr] / n_frames, 'mAR': 0.0, 'mIoU': 0.0}
+    for thr in thresholds:
+        # Per-class AP was computed here before and then thrown away; the paper reports it
+        # (Table I) and every other closed row in the campaign is argued per class.
+        per_class = [float(np.mean(c)) if len(c) else 0.0 for c in ap_by_thr[thr]]
+        if thr != primary_thr:
+            result[f'mAP@{thr}'] = total_by_thr[thr] / n_frames
+        for name, ap in zip(class_names, per_class):
+            result[f'AP@{thr}_{name}'] = ap
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
     return  result

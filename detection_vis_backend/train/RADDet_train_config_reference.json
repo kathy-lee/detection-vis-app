@@ -13,7 +13,7 @@
 
     "_split_note": "The split comes from original_split_info.json (7314 train / 812 val / 2032 test), applied in train.py's RADDetDataset branch. It matches the reference's rule: test is a separate directory (2032), and splitTrain takes the last int(0.1*8126) = 812 of the train directory as validation. Note the reference reads that directory with a bare glob.glob (batch_data_generator.py:58), which is UNSORTED, so which 812 frames are validation depended on directory iteration order on the authors' machine; the json freezes one realisation. Also note `trainset_portion` 0.8 in the reference config is dead -- splitTrain hardcodes 0.1.",
 
-    "_metrics_note": "mAP_iou3d_threshold is a SINGLE value here because RADDet_evaluation takes a scalar, but the paper reports four: AP@0.1 0.764, AP@0.3 0.563, AP@0.5 0.251, AP@0.7 0.059 (and the reference's own EVALUATE block carries [0.1, 0.3, 0.5, 0.7]). 0.3 is the value the reference uses DURING TRAINING (its MODEL block), so it is the right one for the val curve. Comparing against the published table needs the other three as well -- either four evaluation passes or a change to RADDet_evaluation.",
+    "_metrics_note": "Two keys, mirroring the reference's own split. `mAP_iou3d_threshold` 0.3 is the scalar its MODEL block uses during training and validation, so it drives the val curve and the 'mAP' key train() selects on. `mAP_iou3d_threshold_list` is its EVALUATE block's [0.1, 0.3, 0.5, 0.7], which is what the paper reports (AP@0.1 0.764, @0.3 0.563, @0.5 0.251, @0.7 0.059). RADDet_evaluation computes all of them from ONE forward pass -- the IoU threshold only affects TP/FP matching, never the predictions, so the thresholds share the inference and NMS and only the matching repeats, exactly as evaluate.py:118-146 does. The extra thresholds arrive as 'mAP@0.1' etc. plus per-class 'AP@<thr>_<class>' keys, which train() carries into val_eval.csv and test_eval.csv unchanged. Classes with no instances in a split score 0.0, the reference's convention.",
 
     "default": {
         "seed": 3,
@@ -75,6 +75,7 @@
         "focal_loss_iou_threshold": 0.3,
         "confidence_threshold": 0.5,
         "nms_iou3d_threshold": 0.1,
-        "mAP_iou3d_threshold": 0.3
+        "mAP_iou3d_threshold": 0.3,
+        "mAP_iou3d_threshold_list": [0.1, 0.3, 0.5, 0.7]
     }
 }
