@@ -402,6 +402,39 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 div_factor=float(sched_cfg.get('div_factor', 10)),
                 base_momentum=0.85, max_momentum=0.95)
             step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'decay_to_floor':
+            # RADDet reference recipe (ZhangAoCanada/RADDet train.py:166-178). Its loop is
+            # step-based, not epoch-based, and the rule is
+            #     lr <- lr_end + decay * (lr - lr_end)      every `decay_gap` steps,
+            #                                               after `warmup_steps` steps
+            # i.e. GEOMETRIC DECAY OF (lr - lr_end), so lr approaches lr_end as a FLOOR.
+            # Neither StepLR nor ExponentialLR can express that: both scale lr itself and
+            # therefore decay to zero. Measured at epoch 100 (batch 3): reference 1.72e-05,
+            # StepLR(10, 0.9) 3.49e-05, ExponentialLR(0.9) 2.66e-09 -- four orders out.
+            # So this is a LambdaLR on the step count instead, stepped per iteration.
+            #
+            # Off-by-one matters and is deliberate: the reference increments global_steps
+            # BEFORE testing, and 60000 % 3000 == 0, so the first decay lands ON step
+            # 60000. Hence `+ 1` in the exponent.
+            #
+            # NOTE the thresholds are counted in OPTIMIZER STEPS, so they only mean what
+            # the reference meant if the batch size matches (3). At batch 4 the same 60000
+            # steps would cover 32.8 epochs instead of 24.6.
+            sched_cfg = train_config['lr_scheduler']
+            lr_end = float(sched_cfg['lr_end'])
+            decay = float(sched_cfg['decay'])
+            decay_gap = int(sched_cfg['decay_gap'])
+            warmup_steps = int(sched_cfg['warmup_steps'])
+
+            def _decay_to_floor(step):
+                # LambdaLR multiplies the BASE lr by this factor.
+                if step < warmup_steps:
+                    return 1.0
+                n = (step - warmup_steps) // decay_gap + 1
+                return (lr_end + (lr - lr_end) * (decay ** n)) / lr
+
+            scheduler = lr_scheduler.LambdaLR(optimizer, _decay_to_floor)
+            step_scheduler_per_iter = True
         elif train_config['lr_scheduler']['type'] == 'step':
             gamma = float(train_config['lr_scheduler']['gamma'])
             step_size = int(train_config['lr_scheduler']['step_size'])

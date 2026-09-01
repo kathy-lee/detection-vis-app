@@ -262,7 +262,19 @@ def boxDecoder(yolohead_output, input_size, anchors_layer, num_class, scale=1., 
                               torch.arange(grid_size[1]).to(device),
                               torch.arange(grid_size[2]).to(device), indexing="ij") # Added indexing style
     xyz_grid = torch.unsqueeze(torch.stack(xyz_grid, dim=-1).to(device), dim=3)
-    xyz_grid = xyz_grid.permute(1, 0, 2, 3, 4)
+    # NO transpose here. The reference has `tf.transpose(perm=[1,0,2,3,4])` at this point
+    # ("### NOTE: swap axes seems necessary, don't know why ###", head_YOLO.py:49) purely
+    # to UNDO tf.meshgrid's default indexing='xy', which returns (g1, g0, g2). torch's
+    # indexing="ij" above already yields (g0, g1, g2), so carrying the transpose over
+    # re-introduced the very swap it was written to cancel: the offset stored at cell
+    # (i, j, k) became (j, i, k). Shape-preserving on the square 16x16 range/azimuth grid,
+    # so it raised nothing, and only the 16 diagonal cells of 256 were correct.
+    # It is fatal to box regression rather than merely inaccurate: decode is
+    # (sigmoid(raw_xyz) + xyz_grid) * strides, while encodeToLabels placed the box at cell
+    # (i, j, k) because its true range lies in [i*stride, (i+1)*stride) -- fitting it would
+    # need sigmoid(raw_x) = i - j + frac, unsatisfiable for i != j since sigmoid is in (0,1).
+    # Objectness and class still train, so this presents as bad localisation, not a crash.
+    # (Verified against the reference's grid, which satisfies offset(i,j,k) == (i,j,k).)
     xyz_grid = xyz_grid.unsqueeze(0).repeat(yolohead_output.size(0), 1, 1, 1, num_anchors_layer, 1)
 
     pred_xyz = ((torch.sigmoid(raw_xyz) * scale) - 0.5 * (scale - 1) + xyz_grid) * grid_strides
@@ -319,7 +331,18 @@ def focalLoss(raw_conf, pred_conf, gt_conf, pred_box, raw_boxes, input_size, iou
 
 def categoryLoss(raw_category, pred_category, gt_category, gt_conf):
     """ Category Cross Entropy loss """
-    category_loss = gt_conf * F.binary_cross_entropy_with_logits(input=raw_category, target=gt_category)
+    # reduction='none' is REQUIRED: the reference uses tf.nn.sigmoid_cross_entropy_with_
+    # logits (loss_functions.py:55), which is elementwise, and masks by gt_conf BEFORE the
+    # sum in lossYolo. torch's default reduction='mean' returns a SCALAR averaged over all
+    # r*a*d*anchor*class elements, so `gt_conf * scalar` masked nothing: every background
+    # cell contributed, and the gradient at the one cell that owns the object was scaled by
+    # 1/N (N = 36864 here) instead of by its own gt_conf. Measured on a single-object
+    # frame: the reference gives gradient to exactly the 6 class logits of the positive
+    # cell, ours gave it to all 1152 elements with the positive cell at 0.5% of its correct
+    # magnitude. It also collapsed the loss tensor's class axis to 1, so the sum in
+    # lossYolo ran over the wrong shape. focalLoss above already passes reduction='none'.
+    category_loss = gt_conf * F.binary_cross_entropy_with_logits(
+        input=raw_category, target=gt_category, reduction='none')
     return category_loss
 
 

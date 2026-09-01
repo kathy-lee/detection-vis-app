@@ -541,6 +541,112 @@ Three things were checked before making that change:
   decompose into per-sample losses (measured: 6 of 25 batches differ, max 0.0153). Read
   MVRECORD's val loss only against itself, never against the batch-1 RD/RA curves.
 
+### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
+
+RADDet has **no reference weights**: the pre-trained `.ckpt` the README offers
+(`README.md:214`) is a Google Drive link that now 404s. So the weights-through-our-pipeline
+check that closed CARRADA and DAROD/RADDet is unavailable, and this pair falls under the
+"when no trained reference weights exist" procedure above. All six steps were run against
+a pristine worktree of `ZhangAoCanada/RADDet@75f4603` at `/home/kangle/projects/raddet-pristine`
+(the existing `RADDet` checkout is not usable as a reference — it carries uncommitted debug
+`print`s, `batch_size` 3 → 1, and a `break` after the first training batch).
+
+| step | result |
+|------|--------|
+| 1. Config against the reference's | schedule mismatch (below) and a single-vs-four mAP threshold gap; the other 12 fields match, including all four `global_*` constants, `max_boxes_per_frame` 30, the six anchors and every IoU threshold |
+| 2. Ground-truth distribution | no clamping: 0.6% of boxes in the extreme range bins, 1.3% in azimuth, all 6 anchors used |
+| 3. Do consecutive samples differ? | 0/11 identical inputs, 0/11 identical labels |
+| 4. Structural diff of model and losses | **two defects, both fixed** |
+| 5. Round-trip the evaluator on ground truth | mAP 0.9958 |
+| 6. Small-subset overfit | mAP@0.1 0.015 → **0.909** in 400 steps |
+
+**Defect 1: `boxDecoder` transposed the range and azimuth grid offsets.** The reference's
+`tf.transpose(perm=[1,0,2,3,4])` (`head_YOLO.py:49`, commented "*swap axes seems necessary,
+don't know why*") exists solely to undo `tf.meshgrid`'s default `indexing='xy'`, which
+returns `(g1, g0, g2)`. Our port switched to `indexing="ij"`, which does not swap, and kept
+the transpose — so it re-introduced the swap it was written to cancel, storing offset
+`(j, i, k)` at cell `(i, j, k)`. Shape-preserving on the square 16×16 range/azimuth grid, so
+nothing raised, and only the 64 diagonal cells of 1024 were correct. It is fatal to box
+regression rather than merely inaccurate: decode is `(sigmoid(raw_xyz) + grid) * strides`
+while `encodeToLabels` placed the box at cell `(i,j,k)` because its true range lies in
+`[i*stride, (i+1)*stride)`, so fitting it needs `sigmoid(raw_x) = i - j + frac`,
+unsatisfiable for `i != j`. Objectness and class still train, so it presents as bad
+localisation, not a crash.
+
+**Defect 2: `categoryLoss` used torch's default `reduction='mean'`.** The reference's
+`tf.nn.sigmoid_cross_entropy_with_logits` (`loss_functions.py:55`) is elementwise and is
+masked by `gt_conf` *before* the sum in `lossYolo`. Ours returned a scalar, so `gt_conf *
+scalar` masked nothing, the class axis collapsed to 1 (making `lossYolo`'s sum run over the
+wrong shape), and the gradient at the cell owning the object was scaled by `1/N` with
+N = 36,864 instead of by its own `gt_conf`. Measured on a single-object frame: the reference
+gives gradient to exactly the 6 class logits of the positive cell; ours gave it to all 1152
+elements with the positive cell at 0.5% of correct magnitude. `focalLoss` beside it already
+passed `reduction='none'`.
+
+Everything else in the model and loss path was compared and matches: backbone repeat/expansion
+schedule and max-pool downsampling, the YOLO head's two convolutions and channel-split reshape,
+`lossYolo`'s three-term aggregation, `yolo1Loss`, `focalLoss` including its broadcasting, and
+`iou3d`. Anchors match exactly once the reference's own `sortAnchorBoxes` (`loader.py:34`,
+by 3D area) is applied — the raw `anchors.txt` order is not what `train.py` uses.
+
+**Step 6 is what makes those two findings actionable**, and it doubles as their control. Same
+seed, same 20 samples, same 400 steps, only the fixes differing:
+
+| step | fixed mAP@0.1 | pre-fix mAP@0.1 | fixed loss | pre-fix loss |
+|------|---------------|-----------------|------------|--------------|
+| 100 | 0.1913 | 0.0000 | 5.24 | 1389.74 |
+| 200 | 0.6605 | 0.0219 | 3.22 | 1287.79 |
+| 400 | **0.9092** | 0.0513 | 2.24 | 1999.72 |
+
+Pre-fix the loss oscillates between 537 and 2400 with no trend — the signature of defect 1,
+whose squared position error cannot fall below the cell-offset mismatch. **A RADDet run before
+these fixes could not have produced a meaningful number at any training length.**
+
+The round-trip (step 5) does *not* cover either defect: it feeds the label tensor straight into
+`yoloheadToPredictions`, bypassing `boxDecoder` and the loss entirely. It validates NMS and mAP
+only. Its 0.42% shortfall was traced and is not a port bug — `nms_iou3d_threshold: 0.1` is
+aggressive enough to merge two genuine pedestrians 12 range bins apart (frame 6433), which is
+the reference's own configured threshold and therefore a recall ceiling inherited from the
+published setup. It is why `person` scores 0.980 while every other class is exactly 1.000.
+
+#### The reference has no reachable stopping point, and no model selection
+
+`total_train_batches = 1000 * 7314 // 3 = 2,438,000` steps with no early stopping; `train.py`
+saves every 10,000 steps until the process is killed, `CheckpointManager(max_to_keep=3)` deletes
+everything older, and `evaluate.py:80` restores `manager.latest_checkpoint`. So the published
+number is whatever the weights were when the author stopped the process — a manual judgement
+recorded nowhere in the repo, README or config. The author could watch `ap/ap_all`, logged to
+TensorBoard every 10,000 steps, and stop on a plateau.
+
+Two consequences. The **selection rule is exactly reproducible** — final weights, no best-val
+checkpoint — and `RADDet_train_config_reference.json` therefore carries neither `test_checkpoint`
+nor `early_stop`, matching the DAROD convention already used by rows 11/12. But the **run length
+is not recoverable**, and it is the one parameter that cannot be made faithful. 100 epochs
+(243,800 steps at batch 3) covers the 24.6-epoch warmup plus 61 decay events, matching the length
+used for the RECORD family; since the reference does not early-stop, treat it as a floor rather
+than an unbiased match.
+
+`RADDet_train_config_reference.json` also needed a new scheduler type. The reference's rule,
+`lr <- lr_end + decay*(lr - lr_end)` every 3000 steps after 60,000, is geometric decay of
+`(lr - lr_end)` and so approaches 1e-5 as a **floor**; `StepLR` and `ExponentialLR` both scale
+lr itself and decay to zero. At epoch 100: reference 1.72e-05, `StepLR(10, 0.9)` 3.49e-05,
+`ExponentialLR(0.9)` 2.66e-09. The `decay_to_floor` type added to `train()` is a `LambdaLR` on
+the step count stepped per iteration, verified bit-identical to the reference's loop at every
+step from 1 to 243,800. Batch size is set to the reference's 3 rather than the repo default's 4,
+because the schedule's thresholds are counted in optimizer steps: 60,000 steps is 24.6 epochs at
+batch 3 and 32.8 at batch 4.
+
+#### An anchor for this pair is possible but expensive
+
+Unlike every other closed row, running the reference needs a **second 320 GB copy**. Our
+`RADDet_reform_dataset` has a flat `RAD/*.npy`; the reference globs `train_set_dir/RAD/*/*.npy`
+(two levels, `part_1` … `part_5`) and reads train and test from separate directories. That layout
+exists only as `RADDet_dataset` on the USB disk (8126 train + 2032 test). The pristine repo also
+needs its environment rebuilt — the venv at `/home/kangle/projects/RADDet/.venv` has a Python
+3.12 interpreter against 3.10 site-packages, so TensorFlow will not import. An anchor run would
+neutralise the unknown-duration problem by running both sides for the same number of steps, which
+is the only way to make row 10's verdict as sound as the others.
+
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
 Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-
