@@ -241,6 +241,36 @@ def build_split(dataset, files, mode):
             train = [f for i, f in enumerate(seqs) if i % 8 < 6]
             val = [f for i, f in enumerate(seqs) if i % 8 == 6]
             test = [f for i, f in enumerate(seqs) if i % 8 == 7]
+        elif dataset == "UWCR":
+            # 14 / 3 / 5 by capture date, deterministic.
+            #
+            # THIS IS OUR SPLIT, AND UNLIKE CRUW'S IT CANNOT EVEN BE INDICATIVE against
+            # the published 81.23/84.25. The author states in issue #16 that all 22
+            # sequences in Automotive/ are TRAINING data for the published model, and that
+            # the only test-side sequence is 2019_05_28_pm2s012 -- which is not in
+            # Automotive/ at all, only in train_test_data/ as pre-converted RA/RV/VA
+            # slices. The paper also trained on 92,296 frames against the release's
+            # 19,754. So a number from this split measures THIS REPO's RAMP_CNN on held-out
+            # data; it is a regression baseline, not a reproduction. See the RAMP_CNN
+            # section of docs/training-validation-baselines.md.
+            #
+            # HELD OUT BY DATE, not by sequence. Sequences from one capture session share
+            # weather, sensor placement and often the same physical objects, so a
+            # per-sequence split leaks across train/test. 2019_05_29 is the natural test
+            # date: 5 of 22 sequences (23%), and its compositions (bcms, cm1s, mlms, pbms,
+            # pcms) span the range rather than clustering on one object type.
+            #
+            # Stratified on MEASURED class counts, not on the name prefixes. Those
+            # prefixes encode object composition (p=pedestrian, b=bike, c=car/cyclist,
+            # m/s=moving/static), NOT scene type as CRUW's do -- there is no public
+            # sequence-to-scene mapping for UWCR, so Table III's parking-lot / curbside /
+            # on-road breakdown cannot be reconstructed here.
+            def _date(f):
+                return f["name"][:10]
+            test = [f for f in files if _date(f) == "2019_05_29"]
+            val_names = {"2019_04_30_pbms002", "2019_04_30_pcms001", "2019_05_09_cm1s003"}
+            val = [f for f in files if f["name"] in val_names]
+            train = [f for f in files if f not in test and f not in val]
         else:
             n_val = 4
             train, val, test = files[:-n_val], files[-n_val:], []
