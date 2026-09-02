@@ -1,0 +1,89 @@
+{
+    "_about": "Published RAMP-CNN schedule, from the reference implementation Xiangyu-Gao/Radar-multiple-perspective-object-detection (config.py). Kept SEPARATE from RAMP_CNN_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over from the repo default: lr 1e-5, win_size 16, train/test stride 8, peak_thres 0.2, ols_thres 0.2, max_dets 20, and the three loss terms (_neg_loss, Cont_Loss, balance_cof=4), which the Phase 1 audit found to be faithful ports line for line.",
+
+    "_incomplete": "THIS CONFIG IS NOT YET RUNNABLE AS A FAITHFUL REPRODUCTION -- the train/val/test split is still unknown (see _split_gap). Everything else below is the reference's. Running it with a made-up split produces a number that cannot be compared to the published 81.23/84.25.",
+
+    "_scheduler_note": "The reference runs CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up=430, step_size_down=430) with IS_Steplr=False. CyclicLR is a per-BATCH schedule by construction -- step_size_up counts optimizer steps, not epochs -- so train()'s `cyclic` type steps it per iteration, alongside OneCycleLR. Note cycle_momentum is forced False: it defaults True and then requires a 'momentum' key in the optimizer's param_groups, which Adam does not have (torch raises ValueError at construction). Verified: lr rises 1e-6 -> 1e-5 over steps 0-430, falls back by 860, peaks again at 1290. Until 2026-09-02 this pair had no cyclic support and RAMP_CNN_train_config.json used StepLR(10, 0.9) as a stand-in, which decays monotonically instead of oscillating; the reference's own StepLR branch, unused here, decays with gamma 0.1 rather than 0.9.",
+
+    "_split_gap": "UNRESOLVED. `dataloader.split_sequence` below is left EMPTY deliberately -- fill in the paper's sequence split before treating any run from this config as a reproduction. (Note resolve_configs only strips `_`-prefixed keys at the TOP level, so notes cannot live inside the dataloader block.) Phase 0 recorded published scores and eval protocols but not data splits, and the RAMP-CNN paper's train/test division of the 22 UWCR sequences is not in this repo. The Phase 1 result (mAP 0.9295) used a 3-sequence smoke split with a SINGLE validation sequence -- mAR reached 1.0000 at several epochs, so it was probably an easy one -- and is not comparable to the published 81.23/84.25, which is the full dataset. Recovering the split needs the reference repo, which is not checked out locally. Leaving `split_sequence` empty here rather than inventing one.",
+
+    "_metrics_note": "AP/AR with a SIZE-ADAPTIVE DISTANCE threshold and CFAR peak extraction at 0.2 -- not IoU. Published per scene: ParkingLot 97.38/98.37, Curbside 79.25/84.21, On-road 57.07/64.85, overall 81.23/84.25 (Table III). Nighttime data is test-only and is NOT scored numerically in the paper, so any overall figure that includes it is not comparable. RAMP_CNN_evaluation returns mAP and mAR; its mIoU is structurally absent, not collapsed.",
+
+    "_metric_is_a_threshold_note": "detect_peaks requires a strict local maximum in a 3x5 window, so mAP stays at EXACTLY 0 until the predicted confmap sharpens past that bar, then rises steeply: 0.0000 through epoch 7, 0.1833 at 8, ~0.15 at 10-11, 0.5761 at 12, 0.9103 at 13, 0.9295 at 19. Every attempt before Phase 1 ran 6 epochs, entirely inside the flat region. A zero from a short run means 'not yet', never 'broken' -- do not stop this pair early on a zero.",
+
+    "_batch_size_note": "batch 3, the reference's, not the repo default's 4. Unlike RADDet this is not tied to a step-counted schedule threshold, but step_size_up=430 IS counted in optimizer steps, so the batch size determines how many epochs one half-cycle spans.",
+
+    "default": {
+        "seed": 3,
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.00001
+        },
+        "lr_scheduler": {
+            "type": "cyclic",
+            "base_lr": 0.000001,
+            "max_lr": 0.00001,
+            "step_size_up": 430,
+            "step_size_down": 430
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        }
+    },
+
+    "UWCR": {
+        "_src": "config.py: n_epoch 100, batch_size 3, learning_rate 1e-5, CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up=430, step_size_down=430), IS_Steplr=False, win_size 16, train_stride 8, test_stride 8",
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.00001
+        },
+        "lr_scheduler": {
+            "type": "cyclic",
+            "base_lr": 0.000001,
+            "max_lr": 0.00001,
+            "step_size_up": 430,
+            "step_size_down": 430
+        },
+        "dataloader": {
+            "splitmode": "",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "losses": {},
+        "win_size": 16,
+        "train_step": 1,
+        "train_stride": 8,
+        "test_step": 1,
+        "test_stride": 8,
+        "max_dets": 20,
+        "peak_thres": 0.2,
+        "ols_thres": 0.2
+    }
+}

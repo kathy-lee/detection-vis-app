@@ -402,6 +402,32 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 div_factor=float(sched_cfg.get('div_factor', 10)),
                 base_momentum=0.85, max_momentum=0.95)
             step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'cyclic':
+            # RAMP-CNN reference recipe (Xiangyu-Gao/Radar-multiple-perspective-object-
+            # detection, config.py): CyclicLR(base_lr=1e-6, max_lr=1e-5,
+            # step_size_up/down=430) with IS_Steplr=False. CyclicLR is a per-BATCH
+            # schedule by construction -- step_size_up counts optimizer steps, not epochs
+            # -- so it steps per iteration like OneCycleLR above.
+            #
+            # cycle_momentum MUST be False: it defaults to True and then writes a
+            # 'momentum' key into the optimizer's param_groups, which Adam does not have
+            # (it raises at construction). The reference uses Adam, so there is no
+            # momentum to cycle.
+            #
+            # The reference's OWN StepLR branch, taken when IS_Steplr=True, decays with
+            # gamma 0.1 -- not the 0.9 that RAMP_CNN_train_config.json's stand-in used.
+            # Neither is a substitute for the cyclic schedule, which oscillates rather
+            # than decays; that stand-in is why this branch exists.
+            sched_cfg = train_config['lr_scheduler']
+            step_up = int(sched_cfg.get('step_size_up', 430))
+            scheduler = lr_scheduler.CyclicLR(
+                optimizer,
+                base_lr=float(sched_cfg['base_lr']),
+                max_lr=float(sched_cfg['max_lr']),
+                step_size_up=step_up,
+                step_size_down=int(sched_cfg.get('step_size_down', step_up)),
+                cycle_momentum=False)
+            step_scheduler_per_iter = True
         elif train_config['lr_scheduler']['type'] == 'decay_to_floor':
             # RADDet reference recipe (ZhangAoCanada/RADDet train.py:166-178). Its loop is
             # step-based, not epoch-based, and the rule is
