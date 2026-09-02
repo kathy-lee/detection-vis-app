@@ -742,6 +742,114 @@ separate directories. That layout exists only as `RADDet_dataset` on the USB dis
 TensorFlow will not import. The one thing it would buy is neutralising the unknown-duration
 problem, by running both sides for the same number of steps.
 
+### RAMP_CNN / UWCR: the published number cannot be reproduced — 78% of the data was never released
+
+Established 2026-09-02, while preparing the Phase 2 run. This is a stronger statement than
+the earlier "RAMP_CNN's split is still unknown", and it is confirmed by the author rather
+than inferred.
+
+**The public dataset is a fifth of the paper's.** RAMP-CNN Table II gives 67,198 training
+and 25,098 test frames, 92,296 total. The public UWCR release contains 19,754 frames across
+the 22 sequences in `Automotive/` (~898 each), plus one further sequence available only in
+converted form — 20,677 over 23 sequences. Its own README states *"The overall dataset
+contains approximately 19800 frames"*, so this is the release's full extent, not a partial
+download. The paper's **test set alone (25,098) is larger than everything released.**
+
+The paper is not describing the public dataset: its §VI-A is titled "UW Camera-Radar (CR)
+Dataset" and lists parking lot, curbside, campus road, city road and freeway, while the
+release README says collection was done "on the campus, road, and parking lot **during the
+daytime**". The paper's fourth test scenario is 3,600 **nighttime** frames, which the
+release therefore cannot contain.
+
+**The author confirms both points** in
+[issue #16](https://github.com/Xiangyu-Gao/Radar-multiple-perspective-object-detection/issues/16)
+(2023-10-12), answering exactly this question:
+
+> "Yes, this raw radar set is a subset of the data where the RAMP-CNN model is trained &
+> tested."
+
+and, asked which of the 23 sequences are train vs test:
+
+> "'2019_05_28_pm2s012' is in the testing set for ramp-cnn paper, and others are in the
+> training set."
+
+**That is the decisive fact for this row.** All 22 sequences in `Automotive/` — everything
+we have in raw form — are *training* data for the published model. The only public test
+sequence is `2019_05_28_pm2s012`, which exists solely in `train_test_data/` as pre-converted
+RA/RV/VA slices (1,800 frames, a single parking-lot sequence). So:
+
+- Any test set built from the 22 sequences is made of frames the published model trained on.
+  A number from it compares generalisation against memorisation and is not interpretable
+  against 81.23 / 84.25 in either direction.
+- Table III's four-scenario breakdown (ParkingLot / Curbside / On-road / nighttime) cannot be
+  reconstructed: one public test sequence, and no nighttime data at all.
+- The repo's `config.py` demo split — train `2019_04_30_pbms002`, val/test `2019_05_28_pm2s012`
+  — is not arbitrary after all. It is a one-sequence-per-side miniature of the real split,
+  drawn from the correct sides.
+
+It also explains the Phase 1 figure. mAP 0.9295 with mAR reaching 1.0000 on a single
+validation sequence was recorded as "probably an easy one"; the likelier reason is that the
+3-sequence smoke split validated on training-side data.
+
+**Consequence for row 13: not reproducible — data not released.** What remains possible, and
+worth doing, is a measurement of *this repo's* RAMP_CNN on a split we define over the 22
+sequences. That is internally valid — our model would train and test on genuinely disjoint
+data — and useful as a regression baseline. It is **not** a comparison to the published
+figure, and must not be written as one.
+
+#### Defect found while preparing that run: unmapped class ids crashed the loader
+
+`UWCR.__getitem__` did `category = self.label_map[int(obj[1])]` with no membership check,
+and the enclosing `except` catches only `pd.errors.EmptyDataError`, so a `KeyError`
+propagated and killed the dataloader. The public labels contain class id **1**, which is in
+neither our `label_map` nor the reference's `release_dataset_label_map` (both are
+`{0, 2, 3, 5, 7, 80}`): 100 rows across 99 frames in `2019_05_09_mlms003` and 6 rows in 6
+frames of `2019_05_09_bm1s007`. **Two of the 22 sequences could not be loaded at all.**
+
+The reference guards this explicitly (`utils/convert_annotations.py:50-53`):
+
+```python
+if int(line[1]) in release_dataset_label_map:
+    type_ = release_dataset_label_map[int(line[1])]
+else:
+    continue
+```
+
+Ours now skips the same way, decrementing `n_obj`. Never seen before because every run so far
+used a 3-sequence smoke split that excluded both sequences — the same reason the split
+question went unexamined. Unmapped class *names* were already safe: `get_class_id` returns
+-1000, the reference's `noise` id, for `motorbike` and `bus`.
+
+Measured class distribution over the 22 sequences, after decoding the ids
+(`0` pedestrian, `2` car, `3` motorbike, `5` bus, `7` truck, `80` cyclist):
+
+| class | instances |
+|-------|-----------|
+| pedestrian | 14,849 |
+| car | 12,369 |
+| cyclist | 10,253 |
+| truck | 454 |
+| motorbike | 194 |
+| unmapped (id 1) | 106 |
+
+#### The paper's schedule also differs from the repo's config
+
+Worth recording because `RAMP_CNN_train_config_reference.json` was built from `config.py`
+before the paper was read:
+
+| | paper §VI-C | repo `config.py` |
+|---|---|---|
+| cyclic lr range | 5e-6 → **5e-5** | 1e-6 → 1e-5 |
+| cycle duration | 860 iterations | 430 up + 430 down = 860 ✓ |
+| phase 1 | batch **5**, 10 epochs | batch 3 |
+| phase 2 | StepLR from 5e-6, ×0.2 every 5 epochs, batch **4**, 24 epochs | absent |
+| total epochs | **34** | 100 |
+
+The paper uses a two-phase schedule at 5× the repo's learning rates, with the batch size
+changing between phases. Since the published number is unreachable anyway, the schedule
+choice for our own baseline is a judgement call rather than a fidelity requirement — but the
+config should not claim to be the paper's when it is the repo's.
+
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
 Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-

@@ -3120,6 +3120,23 @@ class UWCR(Dataset):
                 labels = pd.read_csv(self.label_filenames[frameid], header=None).values.tolist()
                 n_obj = len(labels)
                 for obj in labels:
+                    # SKIP unmapped class ids rather than raising. The reference does
+                    # exactly this (convert_annotations.py:50-53:
+                    #   if int(line[1]) in release_dataset_label_map: ... else: continue)
+                    # and its release_dataset_label_map has the same six keys as
+                    # self.label_map -- 0/2/3/5/7/80. The public UWCR labels also contain
+                    # class id 1, which is in NEITHER map: 100 rows in 2019_05_09_mlms003
+                    # and 6 in 2019_05_09_bm1s007, 106 in the 22 sequences. Indexing
+                    # label_map directly raised KeyError on those, and the enclosing
+                    # `except` catches only pd.errors.EmptyDataError, so the exception
+                    # propagated and killed the dataloader -- i.e. two of the 22 sequences
+                    # could not be loaded at all. Never seen before because every run so
+                    # far used a 3-sequence smoke split that excluded both.
+                    # (Unmapped NAMES are already safe: get_class_id returns -1000, the
+                    # reference's 'noise' id, for 'motorbike' and 'bus'.)
+                    if int(obj[1]) not in self.label_map:
+                        n_obj -= 1
+                        continue
                     category = self.label_map[int(obj[1])]
                     # class_id = self.class_ids[category]
                     x = obj[2]
