@@ -120,8 +120,12 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
 | 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
 | 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) |
+| 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) |
 
-Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU. The other runs are not yet measured
+Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
+figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
+for the reason given in its closure section — it is the only pair that does not fall short.
+The other runs are not yet measured
 against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
 RECORD on CARRADA RA/RD. An earlier revision labelled the RD result `6a`, which in that
 table is RECORDNoLstm/CARRADA-RA -- a different pair.)
@@ -661,16 +665,82 @@ Classes absent from a split score 0.0 rather than NaN, which is the reference's 
 (`evaluate.py:151-154`) and matters for RADDet's tail classes — motorcycle appears once in 300
 sampled training frames.
 
-#### An anchor for this pair is possible but expensive
+#### Closed: RADDet / RADDetDataset (Phase 2) — reproduced, above the published figures
 
-Unlike every other closed row, running the reference needs a **second 320 GB copy**. Our
-`RADDet_reform_dataset` has a flat `RAD/*.npy`; the reference globs `train_set_dir/RAD/*/*.npy`
-(two levels, `part_1` … `part_5`) and reads train and test from separate directories. That layout
-exists only as `RADDet_dataset` on the USB disk (8126 train + 2032 test). The pristine repo also
-needs its environment rebuilt — the venv at `/home/kangle/projects/RADDet/.venv` has a Python
-3.12 interpreter against 3.10 site-packages, so TensorFlow will not import. An anchor run would
-neutralise the unknown-duration problem by running both sides for the same number of steps, which
-is the only way to make row 10's verdict as sound as the others.
+100 epochs on the `_reference` config, official split, final-epoch weights. Test:
+
+| threshold | ours | published | delta |
+|-----------|------|-----------|-------|
+| AP@0.1 | **0.7776** | 0.764 | +1.8% |
+| AP@0.3 | **0.6042** | 0.563 | +7.3% |
+| AP@0.5 | **0.3037** | **0.251** | **+21.0%** |
+| AP@0.7 | **0.0694** | 0.059 | +17.6% |
+
+Per class:
+
+| class | @0.1 | @0.3 | @0.5 | @0.7 |
+|-------|------|------|------|------|
+| car | 0.864 | 0.721 | 0.418 | 0.101 |
+| person | 0.681 | 0.353 | 0.053 | 0.002 |
+| truck | 0.614 | 0.550 | 0.301 | 0.068 |
+| bus | 0.579 | 0.526 | 0.395 | 0.053 |
+| bicycle | 0.497 | 0.325 | 0.038 | 0.000 |
+| motorcycle | 0.095 | 0.095 | 0.048 | 0.000 |
+
+Bus and motorcycle are non-zero on test (0.526 and 0.095 at @0.3) after sitting at 0.000-0.111
+throughout validation — the test split carries more instances of both than the 812-frame val
+split does. Do not read the validation per-class figures for the tail classes as evidence about
+the model.
+
+**No reference anchor was run, and it is not needed here.** The anchor exists to answer one
+question: when our number falls SHORT of the paper, is that our port or the artifact? RECORD /
+CARRADA RD needed it (53.15 ours against 58.10 published; the reference itself scored 53.19, so
+the deficit was not ours). RADDet has no shortfall to explain — we are above the published
+figure at every threshold, on the official split, under the reference's own selection rule. A
+reference run scoring lower would only add a second data point about the artifact; one scoring
+higher would not invalidate ours. It would also have cost a second 320 GB copy in the original
+`train/RAD/part_N/` layout plus a TensorFlow rebuild, since the pristine repo's venv has a
+Python 3.12 interpreter against 3.10 site-packages.
+
+**Selection was reference-faithful and cost almost nothing.** No `test_checkpoint` key, so
+`train()` tested the final-epoch weights, matching `evaluate.py:80`'s `manager.latest_checkpoint`.
+Validation plateaued rather than decaying — best 0.6156 at epoch 41 against 0.5980 at epoch 99,
+so final-weights testing gave up 0.018 relative to the best epoch:
+
+```
+val mAP@0.3 every 10 epochs:
+0.232  0.565  0.591  0.600  0.600  0.609  0.611  0.602  0.609  0.600
+```
+
+That is worth recording because it was not obvious in advance. Around epoch 13 the losses
+diverged sharply and kept going — train 7.46 → 0.30 while val went 4.93 → 5.07, a 17x gap by the
+end — which looked like overfitting that the stop-whenever convention would punish. It never
+reached AP. The loss is dominated by box-regression and focal terms over all 6144 cells, while AP
+depends only on the handful of confident detections surviving NMS. **On this pair the val loss is
+not a usable proxy for the metric**, in either direction.
+
+There is also essentially **no val-to-test drop** (val @0.3 0.5980, test 0.6042), unlike MVRECORD's
+8.9-point fall on RD. So the result does not rest on a lucky checkpoint draw.
+
+Two caveats stay attached. The comparison is against the **paper**, not against the reference on
+our data, which everywhere else in this campaign has been the more honest target. And **run length
+is a free parameter**: we ran 100 epochs where the reference nominally runs 1000 and stops by
+hand, so a different stop could have landed elsewhere.
+
+`docs/phase2-raddet.json` again reads `verdict: suspect` from `smoke_sweep`'s first-vs-last
+val-loss heuristic. Here the heuristic is correct on its own terms — val loss genuinely rose from
+4.93 to 5.07 — and still says nothing about the result, for the reason above.
+
+#### If an anchor is ever wanted for this pair
+
+Not needed for row 10 (above), but recording what it would take. Running the reference needs a
+**second 320 GB copy**: our `RADDet_reform_dataset` has a flat `RAD/*.npy`, while the reference
+globs `train_set_dir/RAD/*/*.npy` (two levels, `part_1` … `part_5`) and reads train and test from
+separate directories. That layout exists only as `RADDet_dataset` on the USB disk (8126 train +
+2032 test). The pristine repo also needs its environment rebuilt — the venv at
+`/home/kangle/projects/RADDet/.venv` has a Python 3.12 interpreter against 3.10 site-packages, so
+TensorFlow will not import. The one thing it would buy is neutralising the unknown-duration
+problem, by running both sides for the same number of steps.
 
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
