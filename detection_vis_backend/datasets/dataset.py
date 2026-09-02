@@ -3135,7 +3135,6 @@ class UWCR(Dataset):
                     # (Unmapped NAMES are already safe: get_class_id returns -1000, the
                     # reference's 'noise' id, for 'motorbike' and 'bus'.)
                     if int(obj[1]) not in self.label_map:
-                        n_obj -= 1
                         continue
                     category = self.label_map[int(obj[1])]
                     # class_id = self.class_ids[category]
@@ -3162,7 +3161,21 @@ class UWCR(Dataset):
                     # ra2idx(distance, math.radians(angle), ...).
                     agl_idx, _ = find_nearest(self.agl_grid, math.radians(angle))
                     obj_in_frame.append([rng_idx, agl_idx, category])
-                confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
+                # len(obj_in_frame), NOT n_obj. n_obj counts every ROW of the label file,
+                # but three paths above skip a row without appending to obj_in_frame: the
+                # unmapped-class-id guard, the rr_min/rr_max range filter and the
+                # ra_min/ra_max angle filter. Whenever any object fell outside the radar's
+                # limits, n_obj exceeded len(obj_in_frame) and generate_confmap's
+                # `for objid in range(n_obj): ... obj_info[objid]` ran off the end with
+                # IndexError, killing the dataloader worker. The reference has no such
+                # parameter at all -- its generate_confmap(obj_info, ...) iterates the list
+                # directly (utils/confidence_map.py:30, `for rng_idx, agl_idx, class_id in
+                # obj_info`) -- so deriving the count from the list is what it does too.
+                # Latent until now: every previous run used a 3-sequence smoke split whose
+                # objects all fell inside the range/angle limits. The CRUW call site
+                # (utils.py:594) keeps passing its own n_obj, which comes from the
+                # metadata's n_objects against parallel dict lists and is authoritative.
+                confmap_gt_in_frame = generate_confmap(len(obj_in_frame), obj_in_frame, self.radar_cfg)
                 confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
                 confmap_gt_in_frame = add_noise_channel(confmap_gt_in_frame, self.radar_cfg)
                 assert confmap_gt_in_frame.shape == (self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
