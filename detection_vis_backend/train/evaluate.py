@@ -1899,13 +1899,14 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         running_mse += torch.nn.functional.mse_loss(pred_map, data["gt_mask"], reduction='sum').item()
         n_batches += 1
 
-        # validation() rebinds rather than mutates its index tensors, so the same peaks
-        # can be associated at each threshold independently.
+        # Peak detection, centre-offset and NMS do not depend on the threshold, so they
+        # run once; validation() rebinds rather than mutates its index tensors, so the
+        # same associated peaks can be scored at each threshold independently.
+        grd_idx, pred_idx, pred_intent = _detect_and_associate(
+            data["gt_mask"], pred_map, pred_c, mask, peak_cls, device)
         for t in thresholds:
-            cls_by_thresh[t] = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
-                                              pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                              tr_o=tr_o, pred_o=pred_o, cls=cls_by_thresh[t],
-                                              thresh=t, device=device)
+            cls_by_thresh[t] = validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o,
+                                          cls_by_thresh[t], dist_thresh=t, device=device)
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
@@ -1931,21 +1932,28 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
     return result
 
 
-def metrics_center(grd_map, pred_map, pred_c, mask, 
-                  peaks_cls, tr_o, pred_o, cls,
-                  thresh, device):
+def _detect_and_associate(grd_map, pred_map, pred_c, mask, peaks_cls, device):
+    """The threshold-independent half of the reference's metrics_center: peaks of the
+    target (0.8) and of the prediction (0.1), centre-offset shift, 2 m NMS."""
     grd_intent, grd_idx = peaks_detect(grd_map, mask, peaks_cls, heat_thresh=0.8)
     grd_idx = distribute(grd_idx, device)
     pred_intent, pred_idx = peaks_detect(pred_map, mask, peaks_cls, heat_thresh=0.1)
-    pred_idx= distribute(pred_idx,device)
-
+    pred_idx = distribute(pred_idx, device)
     # The reference tests `if pred_c != 0`, which raises on a real tensor; the intent is
     # "is the centre-offset head on" (the network returns the int 0 when it is not).
     if torch.is_tensor(pred_c):
         pred_idx = update_peaks(pred_c, pred_idx)
-    pred_idx, pred_intent= association(pred_intent, pred_idx, device)
-    cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
-    return cls  
+    pred_idx, pred_intent = association(pred_intent, pred_idx, device)
+    return grd_idx, pred_idx, pred_intent
+
+
+def metrics_center(grd_map, pred_map, pred_c, mask,
+                  peaks_cls, tr_o, pred_o, cls,
+                  thresh, device):
+    """The reference's metrics_center, unchanged in behaviour; the evaluator itself calls
+    the two halves separately so one association serves both thresholds."""
+    grd_idx, pred_idx, pred_intent = _detect_and_associate(grd_map, pred_map, pred_c, mask, peaks_cls, device)
+    return validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)
 
 
 def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, device='cpu'):

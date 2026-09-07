@@ -1042,9 +1042,17 @@ wrong in its configuration.
   range of the RAD cube, power, sum, dB, transpose, DC rows zeroed): line-for-line
   `dataset_process.py`. Note the AD map is **not** CARRADA's shipped `angle_doppler_*`
   (MVRECORD's input): different recipe, shape and scale, correlation 0.74 on a test frame.
-- **Evaluator** — all eight helpers (`create_default`, `peaks_detect`, `distribute`,
-  `update_peaks`, `association`, `pol2cord`, `distance`, `orent`) AST-identical to
-  `val_utils.py`; `metrics_center`/`validation` differ only in the tensor guards below.
+- **Evaluator** — `create_default`, `peaks_detect`, `pol2cord`, `distance`, `orent`
+  AST-identical to `val_utils.py`; `metrics_center`/`validation` differ only in the tensor
+  guards below. `distribute`, `update_peaks` and `association` are **vectorized
+  re-implementations** with identical output (`test_rca_association.py` compares them
+  against verbatim copies of the reference loops on random peak sets, ties included):
+  the reference's NMS is O(n²) in Python with a `torch.cat` per element, and the first
+  launch of this run spent 25 min on 17 of 83 val batches at epoch 0 — an untrained model
+  has ~10⁴ peaks per frame above the 0.1 threshold — with an ETA of 1 h 40 for one
+  epoch's validation. The only semantic addition is that `update_peaks` clamps a shifted
+  peak to the map, where the reference would raise (past row 255) or silently wrap
+  (row −2 → 254, i.e. 0.4 m → 50 m).
   The AP is `np.trapz(P, R)` with **no (0, 1) origin point**, so a perfect detector scores
   1 − 1/G — ≤0.2% on this test split (G = 471–1222 per class). Kept: it is the published
   metric. Pinned exactly by `test_rca_evaluation.py`, which also checks that a 1.37 m
