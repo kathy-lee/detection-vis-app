@@ -1016,6 +1016,101 @@ it — 78% of the paper's data was never released and all 22 public raw sequence
 control, against which future changes can be measured. Row 13 stays flagged *not
 reproducible — data not released*.
 
+### RadarCrossAttention / CARRADA: audited before Phase 2 (2026-09-07), six defects fixed
+
+Row 14, published **0.94 / 0.86** (mean AP at 2 m / 1 m over pedestrian, cyclist, car;
+per class 0.91/0.80, 0.93/0.88, 0.97/0.91 — RadarCrossAttention Table I, "Bivar Cross
+Atten. + offset loss"). Reference: `ravikothari510/crossattention_radar_detector`,
+checkout `/home/kangle/projects/crossattention_radar_detector` @3e2169c. Same pre-run
+checklist as the other families; the audit found the port faithful in its arithmetic and
+wrong in its configuration.
+
+**Faithful, verified:**
+
+- **Network** — `Encode`/`Decode`/`CrossAttention` verbatim; 11.624 M parameters at T=1 on
+  both sides. The paper's 11.05 M differs by 0.52 M, which is exactly the affine
+  parameters of `LayerNorm([256,32,32])` (2 × 262,144) — the published count evidently
+  excludes them or that layer ran without them. The code is what we follow.
+- **Losses** — focal (α=2, class weights 1.33/2.81/0.86 broadcast to 3×256×256),
+  centre-offset BCE on the 9×9 patch, heading MSE: verbatim, weights 1/1/10.
+- **Annotations** — `new_gt_anno.json` is byte-identical to the reference's `gt_anno.json`
+  (md5 `c7f74ae0…`). 30 sequences, 6,074 tracks, 8,600 instances (paper: "almost 9000").
+  Every frame inside a track interval is annotated, so T=1 windows never miss a label.
+- **GT maps** — `bi_var_gauss`/`get_center_map`/`get_orent_map`/`plain_gauss`: AST-identical
+  to `bi_gauss_update.py` (the reference's `bi_var_gauss` returns all three; ours is split).
+- **Preprocessing** — RD (double flip, DC columns 31:34 zeroed) and AD (inverse FFT over
+  range of the RAD cube, power, sum, dB, transpose, DC rows zeroed): line-for-line
+  `dataset_process.py`. Note the AD map is **not** CARRADA's shipped `angle_doppler_*`
+  (MVRECORD's input): different recipe, shape and scale, correlation 0.74 on a test frame.
+- **Evaluator** — all eight helpers (`create_default`, `peaks_detect`, `distribute`,
+  `update_peaks`, `association`, `pol2cord`, `distance`, `orent`) AST-identical to
+  `val_utils.py`; `metrics_center`/`validation` differ only in the tensor guards below.
+  The AP is `np.trapz(P, R)` with **no (0, 1) origin point**, so a perfect detector scores
+  1 − 1/G — ≤0.2% on this test split (G = 471–1222 per class). Kept: it is the published
+  metric. Pinned exactly by `test_rca_evaluation.py`, which also checks that a 1.37 m
+  localisation error passes at 2 m and fails at 1 m.
+
+**The reference as shipped cannot have produced the published numbers.** Two expressions
+evaluate a whole tensor as a bool: `noise_add`'s `if random.choice([0,1]) and r_map != 0`
+(training augmentation — raises on every noisy draw; 12 of 20 calls in a direct test) and
+`metrics_center`'s `if pred_c != 0` (evaluation with centre-offset on — raises on the first
+batch). Neither has ever been legal Python/torch. So the published run used a different
+version, and "reference on our pipeline" is not available for this row. Three more
+reference-side facts that bound what a comparison can mean:
+
+- **Split is unrecoverable and leaky.** `data_split.py` shuffles *frames* 70/15/15 with
+  `random.seed(1)` placed *after* `main()`; `test.py` scores the val list. Frames from every
+  sequence land in every split. The paper says 70/10/20.
+- **T=1 input lags its label by 4 frames.** Tracks are stacked oldest-first and the loader
+  takes `[:no_frames]` — the oldest — while the target is the track's last frame. Whether
+  the published run had this cannot be known; we feed the labelled frame (zero lag), which
+  is what "single radar frame" means.
+- **Normalization constants are stats of the un-zeroed maps.** Measured on 308 train frames:
+  RA 669.9/1459.5 vs their 678.5/1352.6; RD/AD means 32.6/33.7 vs 34.1/35.3; the RD/AD std
+  values match only before DC-zeroing (3.10/2.96 vs 2.93/2.07; zeroing inflates both to
+  ~7.9). They describe our data — unlike RAMP_CNN's — and are applied to zeroed maps in the
+  reference too, so they are copied verbatim.
+
+**Six defects fixed on our side** (all silent — the Phase 1 smoke run scored 0.4367 car-only
+through every one of them):
+
+1. **Inputs were never normalized.** The branch carried a literal `# TODO: normalize`. Now
+   `input_norm` in both train configs, applied per view in `__getitem__`.
+2. **Wrong model.** `win_size 5` and `orientation true` are the paper's *heading ablation*
+   (Table II, no AP published). Table I is "single radar frame", T=1, heading off — the
+   reference CLI defaults. Model config and both train configs changed to T=1/off.
+3. **Wrong schedule.** Batch 4 with StepLR(10, 0.9) against the reference's batch 16 with
+   `ReduceLROnPlateau(patience=4, factor=0.1)` stepped on val sum-MSE, 80 epochs, AMP.
+   `train()` gained a `plateau` scheduler branch (stepped after validation on a named
+   evaluator metric) and config-gated AMP (`"amp": true`; 1.41 GiB / 0.27 s per batch-16
+   iteration vs 2.72 GiB / 0.60 s fp32 — the reference trains under autocast+GradScaler).
+4. **Evaluator crashed with heading off** — `torch.all(pr_o)` on the int 0 the network
+   returns for a disabled head — and scored only 2 m. Now guards on `torch.is_tensor`,
+   scores 2 m and 1 m in one pass, returns per-class APs and `val_mse` (the reference's
+   plateau/checkpoint metric) as extras.
+5. **No augmentation.** The reference's evident intent (N(0, 0.1) per view with p=½, after
+   normalization, train only) is ported as `gauss_noise_std`. The paper's "horizontal flip"
+   exists nowhere in the reference code and is not invented.
+6. **AD maps recomputed every epoch** — 254 ms per frame (vs 10 ms to load the cube), so
+   ~29 worker-hours over 80 epochs. Now content-addressed on disk
+   (`carrada_ad_cache/<hash>`, 6,366 frames, 399 MB, built by
+   `scripts/build_carrada_ad_cache.py`); `__getitem__` measures 4–6 ms.
+
+**Split and expectation.** Official CARRADA 18/6/6 by sequence (`data_seq_ref.json`, the
+split the RECORD/MVRECORD/DAROD rows used): **3,815 / 1,326 / 1,225** frames at T=1, with
+5,082 / 1,676 / 1,842 instances. The published protocol trains and scores on interleaved
+frames of the same sequences; ours holds sequences out. **Expect our number below 0.94 /
+0.86 for that reason alone**, and read the gap as protocol before implementation. Test-split
+caveat: cyclists are scarce there (149 instances vs 1,222 pedestrians, 471 cars), so the
+cyclist AP will be the noisiest of the three. A protocol-matched bracket — `splitmode
+random [0.7, 0.15, 0.15]`, frame-level like the reference — is available if the official
+number needs interpreting.
+
+Pre-run checks: sample path verified on a train and a test sequence (normalized RA
+−0.06/1.19, RD −0.38/2.69, AD −0.61/3.85 — the RD/AD std > 1 is the DC-zeroing, faithful;
+noise on for train only; no heading target); evaluator round-trip on ground truth scores
+exactly 1 − 1/G at both thresholds; official-split dataloaders build to the counts above.
+
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
 Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-
