@@ -23,6 +23,7 @@ DATASET_PY = os.path.join(os.path.dirname(__file__), "..", "datasets", "dataset.
 CACHED_ARRAY_PRODUCERS = [
     ("UWCR", "frame_cache_dir"),
     ("RADDetDataset", "collapsed_cache_dir"),
+    ("CARRADA", "ad_cache_dir"),
 ]
 
 

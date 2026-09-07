@@ -1,0 +1,56 @@
+{
+    "_about": "Published RadarCrossAttention recipe, from the reference implementation ravikothari510/crossattention_radar_detector (config.yaml + train.py, checkout at /home/kangle/projects/crossattention_radar_detector @3e2169c) and the paper (arXiv:2205.08406v2 Sec. V-B). Kept SEPARATE from RadarCrossAttention_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over: Adam lr 1e-4, loss weights gauss/center/heading 1/1/10, class weights ped/cyc/car 1.33/2.81/0.86, focal alpha 2, bivariate Gaussian targets, centre-offset on. What differs from the repo default is the schedule (batch 16, 80 epochs, ReduceLROnPlateau), AMP, the noise augmentation and the single-frame input.",
+    "_frames_note": "win_size 1 because the paper's Table I -- the row this run is compared against -- is 'Model performance ... using single radar frame' (T=1); Fig. 2's caption says the same, and the reference CLI defaults to --frame 1. Multi-frame (T=3/5) is only the heading-estimation ablation (Table II), which publishes no AP. NOTE a quirk of the reference dataloader: it stacks each track's 5 frames oldest-first and takes `[:no_frames]`, i.e. the OLDEST frames, while the label is the track's LAST frame -- so at T=1 the reference's input frame is 4 frames older than its label. Ours labels the frame it feeds (zero lag). Since the shipped reference cannot run as-is (see _augmentation_note) there is no way to know whether the published run had that lag; zero lag is what 'single frame detection' means and is what we run.",
+    "_scheduler_note": "train.py:157-158: ReduceLROnPlateau(optimizer, patience=4, factor=0.1), stepped once per epoch on the val 'mMSE' from check_accuracy() -- the batch sum-MSE between sigmoid(pred_mask) and the Gaussian target, averaged over val batches (val_utils.py:44-46). Our evaluator returns exactly that as 'val_mse' and train()'s 'plateau' branch steps on it after validation. It is batch-size dependent by construction, hence val batch 16 here. No early stopping in the reference; 80 epochs is the ceiling and the duration.",
+    "_amp_note": "The reference trains under torch.cuda.amp.autocast with a GradScaler (train.py:62,107-110,165). `amp: true` selects the same in train(); measured at batch 16 on the RTX 3090: 1.41 GiB / 0.27 s per iteration against 2.72 GiB / 0.60 s in fp32.",
+    "_augmentation_note": "The reference's only augmentation in code is noise_add (Utils/transform.py:96-102): per view, with probability 1/2, add N(0, 0.1) to the normalized map. Its shipped form cannot execute -- `if random.choice([0,1]) and r_map != 0` evaluates a whole tensor as a bool and raises 'Boolean value of Tensor with more than one value is ambiguous' on every noisy draw (verified: 12 of 20 calls in this torch, and the expression has never been legal). `gauss_noise_std: 0.1` is that intent, applied train-only in the dataset. The paper additionally lists 'horizontal flip'; no flip exists anywhere in the reference code and none is added here -- flipping the angle axis would also have to flip the centre-offset and heading targets, and inventing that is not fidelity.",
+    "_split_note": "The reference splits by FRAME at random, 70/15/15 (data_split.py; the paper says 70/10/20), and test.py scores the VAL list. random.seed(1) is placed after main() returns, so the split is unseeded and unrecoverable. It is also leaky: frames from every sequence land in every split. This repo runs CARRADA's official sequence-level 18/6/6 split (data_seq_ref.json, the same one the RECORD/MVRECORD/DAROD rows used); the sequences held out for test are genuinely unseen, which the published protocol's are not. Expect our number BELOW the published one for that reason alone, and read the comparison accordingly.",
+    "_input_norm_note": "The reference's own constants, verbatim (Utils/transform.py:11-27). They describe the same public CARRADA maps we compute -- see the note in RadarCrossAttention_train_config.json for the measurements and the DC-zeroing caveat on the RD/AD std values.",
+    "_test_checkpoint_note": "The reference saves last / min-mMSE / min-mfocal checkpoints and test.py takes whichever is passed, so the published selection is unknown. The paper says '80 epochs were found to be sufficient where the evaluation losses were achieving the minima', i.e. converged; final weights are evaluated here (the campaign default), with best-val recorded alongside from the per-epoch history.",
+    "seed": 3,
+    "losses": {
+        "weight": [1, 1, 10],
+        "class_weight": [1.33, 2.81, 0.86]
+    },
+    "lr_scheduler": {
+        "type": "plateau",
+        "monitor": "val_mse",
+        "mode": "min",
+        "factor": 0.1,
+        "patience": 4
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs": 80,
+    "amp": true,
+    "dataloader": {
+        "splitmode": "",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random": [],
+        "train": {
+            "batch_size": 16,
+            "num_workers": 4
+        },
+        "val": {
+            "batch_size": 16,
+            "num_workers": 4
+        },
+        "test": {
+            "batch_size": 16,
+            "num_workers": 4
+        }
+    },
+    "win_size": 1,
+    "gauss_type": "Bivar",
+    "gauss_noise_std": 0.1,
+    "input_norm": {
+        "ra": {"mean": 678.5, "std": 1352.6},
+        "rd": {"mean": 34.1, "std": 2.93},
+        "ad": {"mean": 35.3, "std": 2.07}
+    }
+}

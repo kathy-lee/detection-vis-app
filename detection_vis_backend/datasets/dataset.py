@@ -1796,6 +1796,43 @@ class CARRADA(Dataset):
             rd = np.rot90(rd, k=2) # To align with feature display in UI
         return rd
 
+    def get_AD_map(self, idx):
+        """Angle-Doppler map as the RadarCrossAttention reference builds it.
+
+        Line-for-line dataset_process.py:get_admap: inverse FFT over the range axis of
+        the RAD cube, power, sum over range, dB, transpose to (doppler, angle), then the
+        three centre Doppler rows zeroed -- the DC component, mirroring the `[:, 31:34]`
+        columns zeroed in the RD map. float32 (64, 256).
+        """
+        rad = self.get_RAD(idx)
+        ad = np.fft.ifftshift(rad, axes=0)
+        ad = np.fft.ifft(ad, axis=0)
+        ad = pow(np.abs(ad), 2)
+        ad = np.sum(ad, axis=0)
+        ad = 10 * np.log10(ad + 1)
+        ad = np.transpose(ad)
+        ad[31:34, :] = 0
+        return np.float32(ad)
+
+    def _ad_cache_path(self, idx):
+        stem = os.path.splitext(os.path.basename(self.RAD_filenames[idx]))[0]
+        return os.path.join(self.ad_cache_dir, self.seq_name, f"{stem}.npy")
+
+    def _get_ad_cached(self, idx):
+        """get_AD_map memoized on disk; see ad_cache_dir in prepare_for_train."""
+        path = self._ad_cache_path(idx)
+        if os.path.exists(path):
+            return np.load(path)
+        ad = self.get_AD_map(idx)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Atomic: dataloader workers race on the same frame, and a torn .npy would poison
+        # every later epoch -- same pattern as RADDetDataset._get_collapsed.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.save(fh, ad)
+        os.replace(tmp, path)
+        return ad
+
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
 
@@ -1959,6 +1996,34 @@ class CARRADA(Dataset):
             self.gauss_type = train_cfg['gauss_type']
             self.center_offset = model_cfg['center_offset']
             self.orientation = model_cfg['orientation']
+
+            # Per-view input standardization, applied in __getitem__. The reference does it
+            # in Utils/transform.py data_transform(): one torchvision Normalize per view with
+            # a single mean/std, which broadcasts over all T frames -- so one constant pair
+            # per VIEW here too. Ours never did this until 2026-09-07 (the branch carried a
+            # literal `# TODO: normalize`). Constants come from the train config; see the
+            # `_input_norm_note` there for why the reference's own values are used verbatim.
+            self.input_norm = train_cfg.get('input_norm')
+            if not self.input_norm:
+                logger.warning("RadarCrossAttention: no 'input_norm' in train config -- inputs "
+                               "will be fed unnormalized, which the reference never does.")
+            # Train-only augmentation: the reference's noise_add adds N(0, 0.1) to each view
+            # with probability 1/2 (Utils/transform.py:96-102), after normalization. Its
+            # shipped version cannot run (`if random.choice([0,1]) and r_map != 0` on a
+            # tensor raises on every noisy draw); this is what it evidently intends. Absent
+            # from the config -> 0 -> no noise. splittype None means one instance backs all
+            # splits ('random' splitmode); treat it as train, as the RECORD branch does.
+            self.noise_std = (float(train_cfg.get('gauss_noise_std') or 0.0)
+                              if splittype in (None, 'train') else 0.0)
+            # AD maps are derived from the 16 MB RAD cube by an FFT over range -- measured
+            # 254 ms per frame against 10 ms to load the cube -- and recomputed identically
+            # every epoch. Memoized on disk under a hash of the producing code, so an edit to
+            # get_AD_map/get_RAD misses the cache instead of silently serving stale arrays
+            # (same guard as UWCR.frame_cache_dir / RADDetDataset.collapsed_cache_dir).
+            _src = "".join(inspect.getsource(fn) for fn in (CARRADA.get_AD_map, CARRADA.get_RAD))
+            self.ad_cache_dir = os.path.join(
+                os.environ.get("TMP_ROOTDIR", "/tmp"), "carrada_ad_cache",
+                hashlib.sha1(_src.encode()).hexdigest()[:10])
         return
 
     def __len__(self):
@@ -2188,17 +2253,22 @@ class CARRADA(Dataset):
                 rd_map_temp[:, 31:34]=0 # removing dc component
                 rd_map[i, ::] = np.float32(rd_map_temp)
 
-                rad_map = self.get_RAD(frame_id)
-                ad_map_temp = np.fft.ifftshift(rad_map, axes=0)
-                ad_map_temp = np.fft.ifft(ad_map_temp, axis=0)
-                ad_map_temp = pow(np.abs(ad_map_temp), 2)
-                ad_map_temp = np.sum(ad_map_temp, axis=0)
-                ad_map_temp = 10*np.log10(ad_map_temp + 1)
-                ad_map_temp = np.transpose(ad_map_temp)
-                ad_map_temp[31:34,:]=0
-                ad_map_temp = np.float32(ad_map_temp)
-                ad_map[i, ::] = ad_map_temp
-            # TODO: normalize rd_map, ad_map, rd_map
+                ad_map[i, ::] = self._get_ad_cached(frame_id)
+
+            # Standardize each view with one constant pair per view (the reference's
+            # torchvision Normalize broadcasts a single mean/std over every frame of the
+            # stack), then the train-only noise. See prepare_for_train for provenance.
+            ra_map = ra_map.astype(np.float32)
+            rd_map = rd_map.astype(np.float32)
+            ad_map = ad_map.astype(np.float32)
+            if self.input_norm:
+                for arr, key in ((ra_map, 'ra'), (rd_map, 'rd'), (ad_map, 'ad')):
+                    arr -= np.float32(self.input_norm[key]['mean'])
+                    arr /= np.float32(self.input_norm[key]['std'])
+            if self.noise_std > 0:
+                for arr in (ra_map, rd_map, ad_map):
+                    if np.random.randint(2):
+                        arr += np.random.normal(0.0, self.noise_std, arr.shape).astype(np.float32)
             raw_index = str(raw_index).zfill(6)
             # These read the new_gt_anno.json schema, which now lives in self.rca_annos rather
             # than overwriting parse()'s self.annos.

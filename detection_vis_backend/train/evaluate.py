@@ -1787,17 +1787,80 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
     return result
 
 
-def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, thresh=2):
+RCA_CLASS_NAMES = ('ped', 'cyc', 'car')   # bi_var_gauss channel order: cls 1/2/3 -> 0/1/2
+
+
+def _rca_class_ap(cls, tag):
+    """Per-class AP from the accumulated confidence/TP lists, as the reference computes
+    it (Utils/val_utils.py:131-145): rank by confidence, trapezoid over the P/R curve.
+
+    Returns (aps, mAP): one AP per class (nan where the split has no ground truth for
+    it) and the mean over the classes that do occur.
+    """
+    aps = []
+    for idx in range(len(cls)):
+        categ = cls[f"{idx}"]
+        GT = categ['grd_no']
+        if GT == 0:
+            # No ground truth for this class in this split: recall is undefined, so
+            # TP/GT gave 0/0 -> nan -> np.trapz -> nan, and the nan then propagated into
+            # the 3-class mean, reporting mAP as nan for a model that was detecting
+            # perfectly well. Seen in the Phase 1 smoke sweep, whose 3-file sequence split
+            # of CARRADA contains no pedestrian or cyclist frames: classes 0 and 1 had
+            # GT 0 while class 2 scored AP 0.418 at recall 0.93.
+            # Exclude the class instead, which is also what COCO-style mAP does with
+            # absent categories.
+            categ['AP'] = float('nan')
+            aps.append(float('nan'))
+            logger.info(f"{tag} {RCA_CLASS_NAMES[idx]} | no ground truth in this split, excluded from mAP")
+            continue
+        index = np.argsort(-np.asarray(categ['Conf']))
+        P, R, TP = [], [], 0
+        for cnt, i in enumerate(index):
+            TP += categ['TP'][i]
+            P = np.append(P, TP / (cnt + 1))
+            R = np.append(R, TP / GT)
+        categ['P'] = P
+        categ['R'] = R
+        # No predictions at all for a class that does occur is AP 0, not a crash.
+        categ['AP'] = float(np.trapz(P, R)) if len(P) else 0.0
+        n_pred = len(categ['TP'])
+        n_tp = float(np.sum(categ['TP']))
+        logger.info(f"{tag} {RCA_CLASS_NAMES[idx]} | AP {categ['AP']:.4f}  "
+                    f"P {n_tp / n_pred if n_pred else float('nan'):.3f}  R {n_tp / GT:.3f}  "
+                    f"GT {GT}  preds {n_pred}")
+        aps.append(categ['AP'])
+    # Average over the classes that actually occur, not a hardcoded 3 -- see the GT == 0
+    # branch above. A single absent class used to make the whole metric nan.
+    present = [aps[i] for i in range(len(cls)) if cls[f"{i}"]['grd_no'] > 0]
+    mAP = float(np.mean(present)) if present else 0.0
+    if len(present) < len(cls):
+        logger.warning(f"{tag}: mAP averaged over {len(present)} of {len(cls)} classes; the rest "
+                       f"have no ground truth in this split and cannot be scored.")
+    return aps, mAP
+
+
+def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device,
+                                   thresholds=(2, 1)):
+    """AP at distance thresholds, per class, as the reference's evaluation() scores it.
+
+    Scored at BOTH 2 m and 1 m in one pass (the paper's Table I reports both; the
+    reference scores one threshold per invocation). 'mAP' is the 2 m headline; the 1 m
+    mean and the six per-class APs come back as extras. For 'val' it also returns
+    'val_mse', the reference's checkpoint-selection and ReduceLROnPlateau metric
+    (Utils/val_utils.py:44-46): the sum-MSE between sigmoid(pred_mask) and the Gaussian
+    target per batch, averaged over batches -- batch-size dependent by construction, so
+    the val batch size should match the reference's 16 for the numbers to be comparable.
+    """
     net.eval()
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    running_mse = 0.0
+    n_batches = 0
     batch_size = train_config['dataloader'][eval_type]['batch_size']
 
-    cls = dict()
     temp_dict = {'grd_no':0,'Conf':[],'O_P':[],'O_T':[],'TP':[],'P':[],'R':[],'AP':[],'asc':{'gt_r':[],'gt_a':[],'pd_r':[],'pd_a':[]}}
-    cls['0'] = deepcopy(temp_dict)
-    cls['1'] = deepcopy(temp_dict)
-    cls['2'] = deepcopy(temp_dict)
+    cls_by_thresh = {t: {str(i): deepcopy(temp_dict) for i in range(3)} for t in thresholds}
 
     prev_size = 0
 
@@ -1824,61 +1887,47 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         prev_size = data['RA'].shape[0]
 
         pred_map = torch.sigmoid(outputs["pred_mask"])
-        pred_c = 8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
+        # Centre-offset and heading are optional heads: the network returns the int 0 for
+        # a disabled one (as the reference does) and the dataset then carries no
+        # gt_orent_map. metrics_center/validation test torch.is_tensor for these, where
+        # the reference's `if pred_c != 0` raises on any real tensor.
+        pred_c = (8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
+                  if torch.is_tensor(outputs["pred_center"]) else 0)
+        tr_o = data.get("gt_orent_map", 0)
+        pred_o = outputs["pred_orent"]
 
-        # pred_c shape: torch.Size([16, 2, 256, 256])
-        cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
-                                pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                tr_o=data["gt_orent_map"], pred_o=outputs["pred_orent"], cls=cls,
-                                thresh=thresh, device=device)
+        running_mse += torch.nn.functional.mse_loss(pred_map, data["gt_mask"], reduction='sum').item()
+        n_batches += 1
+
+        # validation() rebinds rather than mutates its index tensors, so the same peaks
+        # can be associated at each threshold independently.
+        for t in thresholds:
+            cls_by_thresh[t] = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
+                                              pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
+                                              tr_o=tr_o, pred_o=pred_o, cls=cls_by_thresh[t],
+                                              thresh=t, device=device)
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
             kbar.update(iter)
     logger.info("Val data loop finished.")
 
-    for idx in range(len(cls)):
-        categ = cls[f"{idx}"]
-        P =[]
-        R=[]
-        TP = 0
-        GT = categ['grd_no']
-        if GT == 0:
-            # No ground truth for this class in this split: recall is undefined, so
-            # TP/GT gave 0/0 -> nan -> np.trapz -> nan, and the nan then propagated into
-            # the 3-class mean, reporting mAP as nan for a model that was detecting
-            # perfectly well. Seen in the Phase 1 smoke sweep, whose 3-file sequence split
-            # of CARRADA contains no pedestrian or cyclist frames: classes 0 and 1 had
-            # GT 0 while class 2 scored AP 0.418 at recall 0.93.
-            # Exclude the class instead, which is also what COCO-style mAP does with
-            # absent categories.
-            categ['AP'] = float('nan')
-            cls[f"{idx}"] = categ
-            logger.info(f"{idx} | no ground truth in this split, excluded from mAP")
-            continue
-        index = np.argsort(-categ['Conf'])
-        for cnt, i in enumerate(index):
-            TP += categ['TP'][i]
-            P = np.append(P,TP/(cnt+1))
-            R = np.append(R, TP/GT)
-        categ['P']= P
-        categ['R'] = R
-        categ['AP'] = np.trapz(P,R)
-        prec = np.sum(categ['TP'])
-        rec =  len(categ['TP'])
-        logger.info(f"{idx} | AP: {categ['AP']}, P: {prec / rec}, R: {prec / GT}, GT: {GT}, Heading Accuracy: {cls[f'{idx}']['O_T']}, {cls[f'{idx}']['O_P']}")
-        cls[f"{idx}"] = categ
+    aps, maps = {}, {}
+    for t in thresholds:
+        aps[t], maps[t] = _rca_class_ap(cls_by_thresh[t], f"AP@{t}m")
     
-    # Average over the classes that actually occur, not a hardcoded 3 -- see the GT == 0
-    # branch above. A single absent class used to make the whole metric nan.
-    present = [cls[f"{i}"]['AP'] for i in range(len(cls)) if cls[f"{i}"]['grd_no'] > 0]
-    mAP = float(np.mean(present)) if present else 0.0
-    if len(present) < len(cls):
-        logger.warning(f"mAP averaged over {len(present)} of {len(cls)} classes; the rest "
-                       f"have no ground truth in this split and cannot be scored.")
-    result = {'mAP': mAP, 'mAR': 0, 'mIoU': 0}
+    # 'mAP' is the first threshold (2 m, the paper's headline); everything else rides
+    # along as extras, which train() carries into history and val_eval.csv.
+    headline = thresholds[0]
+    result = {'mAP': maps[headline], 'mAR': 0, 'mIoU': 0}
+    for t in thresholds:
+        if t != headline:
+            result[f'mAP_{t}m'] = maps[t]
+        for name, ap in zip(RCA_CLASS_NAMES, aps[t]):
+            result[f'AP{t}m_{name}'] = ap
     if eval_type == 'val':
-        result.update({'loss': running_loss / len(dataloader.dataset)})
+        result.update({'loss': running_loss / len(dataloader.dataset),
+                       'val_mse': running_mse / max(n_batches, 1)})
     return result
 
 
@@ -1890,8 +1939,9 @@ def metrics_center(grd_map, pred_map, pred_c, mask,
     pred_intent, pred_idx = peaks_detect(pred_map, mask, peaks_cls, heat_thresh=0.1)
     pred_idx= distribute(pred_idx,device)
 
-    #if pred_c!=0:
-    if torch.all(pred_c)!=0: 
+    # The reference tests `if pred_c != 0`, which raises on a real tensor; the intent is
+    # "is the centre-offset head on" (the network returns the int 0 when it is not).
+    if torch.is_tensor(pred_c):
         pred_idx = update_peaks(pred_c, pred_idx)
     pred_idx, pred_intent= association(pred_intent, pred_idx, device)
     cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
@@ -1930,7 +1980,9 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
                 cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'], 1)
                 
                 p_fr = int(p_fr)
-                if torch.all(pr_o) != 0:
+                # Heading is scored only when the head is on AND the split carries the
+                # heading target; both are the int 0 otherwise (see metrics_center).
+                if torch.is_tensor(pr_o) and torch.is_tensor(tr_o):
                         
                     tro_id = torch.nonzero(tr_o[p_fr, 1, ::], as_tuple=True)
                     if len(tro_id[0])>0 :

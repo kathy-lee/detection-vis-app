@@ -1,4 +1,6 @@
 {
+    "_model_config_note": "win_size here must equal win_size in RadarCrossAttention_model_config.json: the dataset stacks that many frames per view and the encoders take that many input channels. Both are 1 as of 2026-09-07 -- the paper's Table I detection model is single-frame (T=1, 'Model performance ... using single radar frame'); T=3/5 is only its heading-estimation ablation, for which no AP is published. The model config also has orientation false for the same reason (the reference CLI default is --oren 0). Notes cannot live in the model config because it is splatted into the network constructor.",
+    "_input_norm_note": "Per-view input standardization, matching the reference's Utils/transform.py data_transform() -- torchvision Normalize with one mean/std per view, broadcast over all frames. The constants are the reference's own, verbatim: unlike RAMP_CNN, they describe the same public CARRADA maps we compute (checked over 308 train frames: RA 669.9/1459.5 against 678.5/1352.6, RD and AD means 32.6/33.7 against 34.1/35.3). The RD/AD std values are stats of the maps BEFORE the three DC columns/rows are zeroed (un-zeroed: RD 3.10, AD 2.96) -- zeroing inflates the std to ~7.9 -- and the reference applies them to the zeroed maps regardless; so do we, since that is what its network was trained on. Kept identical to RadarCrossAttention_train_config_reference.json: this is a pipeline correctness fix, not a choice of recipe.",
     "seed":3,
     "losses": {
         "weight": [1, 1, 10],
@@ -35,6 +37,11 @@
         }
     },
 
-    "win_size": 5,
-    "gauss_type": "Bivar"
+    "win_size": 1,
+    "gauss_type": "Bivar",
+    "input_norm": {
+        "ra": {"mean": 678.5, "std": 1352.6},
+        "rd": {"mean": 34.1, "std": 2.93},
+        "ad": {"mean": 35.3, "std": 2.07}
+    }
 }
