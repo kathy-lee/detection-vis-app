@@ -121,11 +121,15 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
 | 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) |
 | 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) |
+| 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only |
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
 for the reason given in its closure section — it is the only pair that does not fall short.
-The other runs are not yet measured
+**Row 13 is not a comparison at all**: its "published" cell is filled in only to show what it
+is *not* being measured against. 78% of RAMP-CNN's data was never released and every public
+raw sequence is training-side for the published model, so no split we can build is
+interpretable against 81.23 / 84.25. The other runs are not yet measured
 against their baselines. (Row ids follow the published-baselines table above: 4a/4b are
 RECORD on CARRADA RA/RD. An earlier revision labelled the RD result `6a`, which in that
 table is RECORDNoLstm/CARRADA-RA -- a different pair.)
@@ -849,6 +853,168 @@ The paper uses a two-phase schedule at 5× the repo's learning rates, with the b
 changing between phases. Since the published number is unreachable anyway, the schedule
 choice for our own baseline is a judgement call rather than a fidelity requirement — but the
 config should not claim to be the paper's when it is the repo's.
+
+#### Preprocessing audit (2026-09-05): our slices are faithful; `train_test_data` is not a valid target
+
+The first full-split run reached val mAP **0.1586**, far under the smoke split's 0.9295, so
+the preprocessing was audited end to end against the reference. **It came back clean**, and
+the negative result is recorded here so it is not re-derived.
+
+What was checked, in order:
+
+1. **Code.** `get_ADC` / `get_RD` / `get_RA` / `get_RV_VA_slice` are line-for-line ports of
+   `slice3d.py`'s `range_fft` / `produce_RA_slice` / `produce_RV_slice` / `produce_VA_slice`.
+2. **Input.** The reference ships nine frames of its own `slice_sample_data` (key `adc_data`,
+   already in `samples × antennas × chirps`) that overlap the public `Automotive/` raw ADC
+   (key `adcData`, `128×255×4×2`). Our `get_ADC` conversion — concatenate the two TX groups
+   along the antenna axis, then swap axes — is **bit-identical** to the reference's own
+   array on all nine: `array_equal = True`, `maxabsdiff = 0`.
+3. **Output.** Running the reference's **unmodified** `slice3d.py` on the reference's **own**
+   `slice_sample_data` and comparing against the reference's **own** shipped
+   `train_test_data` gives, for frames 2–10: RA *r* 0.137–0.442, RV 0.367–0.495, VA
+   0.954–0.969 — essentially the same numbers ours produces.
+
+**The reference's own code, on its own input, does not reproduce its own shipped slices.**
+`train_test_data` is therefore a **different vintage of the data** and cannot serve as a
+verification target for anything. `slice_sample_data` is the valid artifact, and against it
+we are exact.
+
+Two hypotheses were pursued and killed along the way; both are dead ends, do not revisit:
+
+- **Missing DC-offset removal in `get_ADC`.** The ADC carries a large DC term (52.2% of
+  range-FFT energy in bin 0), and removing it raises agreement with `train_test_data` to
+  0.974–0.997. That is real but it is **agreement with the wrong vintage** — the reference
+  does no such thing, and adding it would make us *diverge* from the reference. A fix, a
+  cache purge and a discarded 73-epoch run were all proposed on this basis and all withdrawn.
+- **`filter_static`** (`slice3d.py:81`, subtract the mean over chirps). Defined but **never
+  called anywhere** in the reference repo; `main()`'s "after the denoise" docstring is stale.
+
+Methodological note: an "ours vs reference" correlation is uninterpretable without a
+"reference vs reference" control. RA complex-correlation of 0.022 was briefly flagged as a
+defect; the control showed the reference's own *adjacent frames* correlate at 0.067 in the
+same 2-channel representation, because phase decorrelates frame to frame. **Magnitude**
+correlation is the meaningful statistic for RA. Run the control first.
+
+#### Defect found by that audit: inputs were never normalized
+
+The audit did turn up one genuine gap. **The reference standardizes every input view before
+the forward pass, unconditionally** — `train_dop.py:91` sets `Norm = True` as a plain local
+in `main()` (no flag, no config override) and applies it to all three views at `:228-234`;
+`test.py` does the same at `:17` and `:177-189`. The `finished ra normalization` lines in the
+reference README's own sample output (`:98-99`) are that code running.
+
+Our `UWCR.__getitem__` did not. Its only `normalize_*` call was `normalize_confmap`, which
+acts on the **label** confmap, not the input.
+
+The reference's `config.py` constants **cannot be copied**, because they describe the
+`train_test_data` vintage: its slices sit at RA std ~0.008 / RV ~0.035 / VA ~0.024, while
+slices computed from the public raw ADC are **~11,000× larger**. So the constants were
+re-derived on our own 14-sequence train split (`scripts/compute_uwcr_norm.py`, over 819M RA
+elements; val and test excluded):
+
+| view | our mean | our std | ref `mean1`/`std1` | mean÷std, ours vs ref | std ratio |
+|------|---------:|--------:|-------------------:|:---------------------:|----------:|
+| RA | -0.3253 | 328.464 | -5.052e-05 / 0.029227 | -0.0010 vs -0.0017 | 11,238× |
+| RV | +442.468 | 1843.665 | 0.038193 / 0.167542 | 0.2400 vs 0.2280 | 11,005× |
+| VA | +715.317 | 1172.141 | 0.062615 / 0.087097 | 0.6103 vs 0.7189 | 13,458× |
+
+The **ratios** matching the reference's is the check that ours are the same quantity, merely
+at a different scale (RA's ~0 mean is what real/imag parts of a complex FFT must give).
+
+Wired as `input_norm` in both `RAMP_CNN_train_config.json` and `..._reference.json` — the two
+are kept identical here because this is a pipeline correctness fix, not a choice of recipe —
+read in `prepare_for_train`, applied in `__getitem__`. One constant pair per **view**, pooled
+over that view's channels, matching the reference's `data[ib, :] = (data[ib, :] - mean1) /
+std1`, which hits RA's real and imaginary channels together. Deliberately **not** folded into
+`get_frame_slices`: that source is hashed into `frame_cache_dir`, so every constant change
+would invalidate 7.5 GB of cache for an elementwise affine map. The reference likewise
+normalizes at consumption, in the train loop.
+
+The reference keys two constant sets off capture month (`date_detail < 9` picks `mean1` vs
+`mean2`). Every UWCR sequence we hold is month 04 or 05, so one set covers all of them and
+that branch has nothing to select between. Note the `config.py` comments call these "old
+data" / "new data", but the *selector* is calendar month.
+
+**Consequence for the paused run.** The epoch-73 checkpoint (val mAP 0.1586) was trained on
+unnormalized inputs whose scale is ~11,000× what the network now receives. It **cannot be
+resumed** across this change — its first-layer weights are fit to the old scale. It is
+instead the **unnormalized control** for a clean A/B against a fresh normalized run.
+
+`README:73` shows the reference's own sample run printing `No data augmentation`, so the
+missing augmentation port is *not* a fidelity gap against the repo's default recipe and is
+deprioritized.
+
+#### Result of the A/B: normalization helps, and it is not what explains 0.9295 → 0.1586
+
+Two runs on the identical 14/3/5 date-held-out split and the identical `_reference` config,
+differing **only** in whether `input_norm` is applied:
+
+| run | epochs on disk | best AP | best AR | at epoch |
+|---|---|---|---|---|
+| control, unnormalized (`Sep-02-2026_21:57:47`) | 13–73 | 0.1586 | 0.2668 | 63 |
+| normalized (`Sep-05-2026_12:38:17` + `_20:12:04`) | 0–40 | **0.1799** | **0.3179** | **28** |
+
+Compared over the **same 28 epochs** (13–40), which is the honest comparison since the runs
+are of different length:
+
+| | control | normalized | delta |
+|---|---:|---:|---:|
+| mean AP | 0.1286 | 0.1367 | **+6.3%** |
+| mean AR | 0.2226 | 0.2399 | **+7.8%** |
+| peak AP | 0.1579 | 0.1799 | **+13.9%** |
+| peak AR | 0.2633 | 0.3179 | **+20.7%** |
+
+**Verdict: the fix is real but modest.** Take the mean columns as the effect size (+6–8%);
+the peak columns flatter it, because a peak over 28 noisy epochs is partly a max-statistic.
+The clearer win is *when*: the normalized run beat the control's 73-epoch best at epoch 28,
+and its val loss bottomed at 16.60 (epoch 10) against the control's best visible 18.53
+(epoch 13; the control's epochs 0–12 are no longer on disk, so its true minimum is unknown).
+
+**This closes the open question above, negatively.** Normalization does not account for the
+0.9295 → 0.1586 gap — it moves the number by ~6%, not by 6×. The gap is the split. The 0.9295
+was measured on a 3-sequence smoke split validating on training-side data (see above); ~0.15
+is what this implementation scores when train and val are genuinely disjoint by capture date.
+Nothing further is attributable to a preprocessing defect, and the preprocessing audit found
+none.
+
+#### Stopped at epoch 40 of 100, deliberately
+
+Both runs plateau, and the second one was ended early on that evidence rather than run to the
+config's 100-epoch ceiling:
+
+```
+epoch  28      29      30      31      32      33      34      35      36      37      38      39      40
+AP     0.1799  0.1369  0.1406  0.1258  0.1479  0.1455  0.1402  0.1110  0.1476  0.1391  0.1517  0.1480  0.1292
+loss   20.99   25.06   26.10   29.63   23.58   27.79   26.98   25.38   28.68   27.79   25.97   28.06   33.42
+```
+
+Twelve epochs with no new best (closest 0.1517 at 38, 16% under epoch 28), while **val loss
+climbs monotonically** — minimum 16.60 at epoch 10, and epoch 40's 33.42 is the worst of the
+run, double that. AP flat while val loss doubles is overfitting that began well before epoch
+28, which also means epoch 28 is likely a favourable fluctuation on a plateau rather than a
+peak still being climbed.
+
+The control is the reason to trust that reading rather than suspect a premature stop: it
+*did* run past this point, for 60 more epochs, and stayed flat the whole way — 0.11–0.158
+from epoch 22 to 73, with its "best" 0.1586 at epoch 63 barely above its 0.1579 at epoch 35.
+A late peak there was noise on a plateau, not late learning. Two independent runs showing the
+same plateau is enough; the remaining 60 epochs would have cost ~10 h to re-confirm it.
+
+There is **no early-stopping criterion in the RAMP-CNN recipe** to appeal to here (unlike
+RECORD/CRUW, which stopped itself), so this is our judgement call and is recorded as one.
+
+#### Row 13 status: measured, not reproduced
+
+**AP 0.1799 / AR 0.3179**, RAMP_CNN on UWCR, our 14/3/5 date-held-out split, epoch 28 of a
+41-epoch run under the repo's `config.py` recipe with inputs standardized on train-split
+constants.
+
+This is **not** comparable to the published 81.23 / 84.25 and must never be quoted against
+it — 78% of the paper's data was never released and all 22 public raw sequences are on the
+*training* side of the published split (see the top of this section). The number is a
+**regression baseline for this repo**: a value this implementation reaches on a split we
+control, against which future changes can be measured. Row 13 stays flagged *not
+reproducible — data not released*.
 
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
