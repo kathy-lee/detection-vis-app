@@ -2374,8 +2374,23 @@ class RADDetDataset(Dataset):
         self.data_std = train_cfg.get("data_std")
         # Cache under TMP_ROOTDIR, not the dataset dir: the dataset lives on an external
         # disk that may be mounted read-only, and this is derived data.
+        #
+        # The path carries a hash of the code that PRODUCES the collapsed maps, so editing
+        # any of them misses the cache instead of silently serving values computed by the
+        # old code. A stale numerical cache is a silent-wrong-answer failure -- the run
+        # completes, the metric is simply wrong, and nothing in the output says so. Same
+        # guard as UWCR.frame_cache_dir; this one is the reason that comment exists.
+        #
+        # complexTo2Channels is included because it is the actual transform (log10(|.|^2+1));
+        # get_RAD because it decides what is read off disk. Hash only what feeds the cached
+        # ARRAY -- not __getitem__, whose later steps (DAROD's data_mean/data_std, the flip
+        # augmentation) run downstream of the cache on every read and so cannot go stale.
+        _src = "".join(inspect.getsource(fn) for fn in
+                       (RADDetDataset._get_collapsed, RADDetDataset.get_RAD,
+                        complexTo2Channels))
         self.collapsed_cache_dir = os.path.join(
-            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache")
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
         return
 
     def transform(self, frame, gt_boxes):
@@ -3056,8 +3071,8 @@ class UWCR(Dataset):
         # The path carries a hash of the code that PRODUCES the slices, so editing any of
         # get_RD/get_RA/get_RV_VA_slice misses the cache instead of silently serving
         # values computed by the old code. A stale numerical cache is a silent-wrong-answer
-        # failure, which is the hardest kind to notice -- the RADDet cache relies on a
-        # hand-deletion note instead, which is weaker.
+        # failure, which is the hardest kind to notice. RADDetDataset.collapsed_cache_dir
+        # is guarded the same way.
         _src = "".join(inspect.getsource(fn) for fn in
                        (UWCR.get_RD, UWCR.get_RA, UWCR.get_RV_VA_slice))
         self.frame_cache_dir = os.path.join(
