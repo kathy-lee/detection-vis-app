@@ -48,6 +48,14 @@
 
     "UWCR": {
         "_src": "config.py: n_epoch 100, batch_size 3, learning_rate 1e-5, CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up=430, step_size_down=430), IS_Steplr=False, win_size 16, train_stride 8, test_stride 8",
+
+        "_input_norm_note": "The reference standardizes every input view before the forward pass, unconditionally: train_dop.py:91 sets `Norm = True` as a plain local in main() -- no flag, no config override -- and applies it to all three views at :228-234; test.py does the same (:17, :177-189), and the 'finished ra normalization' lines in the reference README's sample output (:98-99) are that code running. Our UWCR __getitem__ did not do this until 2026-09-05; its only normalize_* call was normalize_confmap, which acts on the LABEL, not the input. The constants below are DERIVED FROM OUR TRAIN SPLIT by scripts/compute_uwcr_norm.py, not copied from the reference's config.py. Copying would have been wrong: the reference's mean1/std1 were fit to its shipped train_test_data (RA std ~0.008, RV ~0.035, VA ~0.024), and slices computed from the public raw ADC are ~11000x larger. That gap is not our bug -- the reference's OWN unmodified slice3d.py, run on its OWN slice_sample_data, does not reproduce its OWN train_test_data either (RA r 0.14-0.44, RV 0.37-0.50, VA 0.95-0.97), so train_test_data is a different data vintage and its statistics do not transfer. Sanity check that ours are the same quantity: the mean/std RATIOS match the reference's closely (RV 0.240 vs 0.228, VA 0.610 vs 0.719, RA ~0 in both, as real/imag of a complex FFT must be). Fit on the 14 TRAIN sequences only -- never val or test. The reference keys two constant sets off capture month (`date_detail < 9`); every UWCR sequence we hold is month 04 or 05, so one set covers all of them and the month branch has nothing to select between.",
+        "input_norm": {
+            "ra": {"mean": -0.3252922589491787, "std": 328.46442727217163},
+            "rv": {"mean": 442.4675409589698, "std": 1843.6647365109354},
+            "va": {"mean": 715.3170940185574, "std": 1172.1408370423803}
+        },
+
         "num_epochs": 100,
         "optimizer": {
             "lr": 0.00001

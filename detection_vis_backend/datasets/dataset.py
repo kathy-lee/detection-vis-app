@@ -3064,12 +3064,36 @@ class UWCR(Dataset):
             os.environ.get("TMP_ROOTDIR", "/tmp"), "uwcr_frame_cache",
             hashlib.sha1(_src.encode()).hexdigest()[:10])
 
+        # Per-view input standardization, applied in __getitem__.
+        #
+        # The reference does this unconditionally: train_dop.py:91 sets `Norm = True` as a
+        # plain local in main() -- no flag, no config override -- and applies it to all
+        # three views at :228-234; test.py does the same at :17 and :177-189, which is what
+        # prints the "finished ra normalization" lines in the reference README's own sample
+        # output (:98-99). We did not, until 2026-09-05.
+        #
+        # Constants live in the train config and are DERIVED FROM OUR TRAIN SPLIT by
+        # scripts/compute_uwcr_norm.py, never copied from the reference's config.py --
+        # those were fit to its shipped train_test_data, which is a different vintage
+        # ~11000x smaller in scale (see that script's docstring for why train_test_data
+        # cannot be used as ground truth here).
+        #
+        # NOT folded into get_frame_slices: that would put the constants inside the source
+        # hashed for frame_cache_dir above, so every constant change would invalidate 7.5 GB
+        # of cache for an elementwise affine map. Normalizing at consumption also mirrors
+        # the reference, which normalizes in the train loop after loading.
+        self.input_norm = train_cfg.get('input_norm')
+        if not self.input_norm:
+            # Loud, because silently training unnormalized is exactly the bug this fixes.
+            logger.warning("UWCR: no 'input_norm' in train config -- inputs will be fed "
+                           "unnormalized, which the RAMP-CNN reference never does.")
+
         n_frame = self.frame_sync
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
         self.noise_channel = False
-        return 
+        return
 
     def __len__(self):
         return self.datasamples_length
@@ -3186,6 +3210,17 @@ class UWCR(Dataset):
             confmap_gt[idx, :, :, :] = confmap_gt_in_frame
             obj_info.append(obj_in_frame)
             
+        # Standardize each view. One constant pair per VIEW, pooled over that view's
+        # channels -- the reference's `data[ib, :] = (data[ib, :] - mean1) / std1` hits the
+        # whole RA tensor including both the real and the imaginary channel, so RA is not
+        # standardized per channel here either. See prepare_for_train for provenance.
+        if self.input_norm:
+            for arr, key in ((radar_npy_win_ra, 'ra'),
+                             (radar_npy_win_rv, 'rv'),
+                             (radar_npy_win_va, 'va')):
+                arr -= np.float32(self.input_norm[key]['mean'])
+                arr /= np.float32(self.input_norm[key]['std'])
+
         radar_npy_win_ra = np.transpose(radar_npy_win_ra, (3, 0, 1, 2))
         radar_npy_win_rv = np.transpose(radar_npy_win_rv, (3, 0, 1, 2))
         radar_npy_win_va = np.transpose(radar_npy_win_va, (3, 0, 1, 2))
