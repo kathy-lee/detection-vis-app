@@ -1,0 +1,44 @@
+{
+    "_about": "Published FFTRadNet schedule, from the paper (arXiv:2104.10646 / CVPR 2021, Sec. 6.1) and the reference implementation valeoai/RADIal (FFTRadNet/config/config_FFTRadNet_192_56.json, checkout at /home/kangle/projects/RADIal @66cdf19). Kept SEPARATE from FFTRadNet_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged: seed 3, Adam lr 1e-4, StepLR(step_size 10, gamma 0.9), loss weights [1,100,100], FocalLoss classification, BCEWithLogitsLoss segmentation, batch sizes 4/4/1. The ONLY difference from the repo default is num_epochs.",
+    "_epochs_note": "100, per the paper: 'The training process uses the Adam optimizer during 100 epochs, with an initial learning rate of 1e-4 and a decay of 0.9 every 10 epochs' (Sec. 6.1). The reference config carries 100 as well -- the local checkout shows 1 only because it was edited for debugging (git diff against HEAD: num_epochs 100 -> 1, plus `break` statements in the train loop and debug prints). The repo default of 20 gives two lr decays instead of ten and stops at roughly a fifth of the published schedule.",
+    "_regression_loss_note": "'smoothL1Loss' is deliberately spelled to match the reference's config. Both implementations test `== 'SmoothL1Loss'` (capital S) and therefore fall through to nn.L1Loss(reduction='sum'). So the published model was trained with L1, not the smooth L1 the paper's Eq. 1 describes. Bug-compatible on purpose: changing the string here would silently diverge from the weights the paper reports.",
+    "_split_note": "The official RADIal split is sequence-level and hardcoded in the reference (FFTRadNet/dataset/dataloader.py:7-8): 4 validation and 4 test sequences, everything else train. train.py's RADIal branch carries the same eight names; verified present in labels.csv, giving 6231 train / 986 val / 1035 test frames. The paper's 70/15/15 'random' mode exists in the reference but is not what Table 2 uses -- it states frames from the same sequence never span sets.",
+    "_evaluation_note": "The reference evaluates twice, and so do we (evaluate.py FFTRadNet_evaluation dispatches on eval_type). Per epoch: run_evaluation -- ONE confidence threshold (0.2), IoU 0.5, via the Metrics class. Once at the end on TEST: run_FullEvaluation -- GetFullMetrics sweeping thresholds 0.1..0.9 at IoU 0.5, plus freespace mIoU over [0,50] m. Table 2's 96.84 AP / 82.18 AR and Table 3's 74.0 mIoU are the LATTER, on the test split, with all samples (difficult=True, our parse default = the paper's 'Overall' column). The Easy/Hard columns come from re-running with the Difficult flag and are not produced here.",
+    "seed": 3,
+    "losses": {
+        "classification": "FocalLoss",
+        "regression": "smoothL1Loss",
+        "segmentation": "BCEWithLogitsLoss",
+        "weight": [1, 100, 100]
+    },
+    "lr_scheduler": {
+        "type": "step",
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4
+    },
+    "num_epochs": 100,
+    "dataloader": {
+        "splitmode": "",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random": [],
+        "train": {
+            "batch_size": 4,
+            "num_workers": 4
+        },
+        "val": {
+            "batch_size": 4,
+            "num_workers": 4
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    }
+}

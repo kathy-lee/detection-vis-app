@@ -22,13 +22,25 @@ from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 
 
 
-def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device='cpu'):
+def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=True, device='cpu'):
+    """Per-epoch validation, a port of the reference's run_evaluation
+    (RADIal FFTRadNet utils/evaluation.py:6-64).
+
+    ONE confidence threshold (0.2) through the Metrics class, not the 0.1..0.9 sweep of
+    GetFullMetrics -- that sweep is run_FullEvaluation, which the reference invokes once
+    from 3-Evaluation.py on the TEST split to produce the paper's Table 2. Running it
+    every epoch costs 9x and reports a quantity the reference never reports per-epoch;
+    it is also what made this pair's validation unfinishable before the metric helpers
+    were vectorized. Dispatch lives in FFTRadNet_evaluation below.
+
+    check_perf defaults True: the reference passes check_perf=(epoch>=0), i.e. always.
+    """
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
     metrics = Metrics()
     metrics.reset()
-    
+
     for i, data in enumerate(loader):
         for key in data:
             if isinstance(data[key], torch.Tensor):
@@ -55,10 +67,24 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
         kbar.update(i)
         
     mAP,mAR, mIoU = metrics.GetMetrics()
-    return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
+    # The reference returns the raw running sum; normalized here so val_loss is
+    # comparable across splits and runs, as every other pair in this repo reports it.
+    return {'loss':running_loss / len(loader.dataset), 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
 def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
+    """Split the reference's two evaluations the way the reference does.
+
+    val  -> run_evaluation      : single threshold 0.2, cheap, every epoch.
+    test -> run_FullEvaluation  : GetFullMetrics sweeping 0.1..0.9 plus the freespace
+                                  mIoU over [0, 50] m -- the paper's Table 2 / Table 3.
+    """
+    if eval_type == "val":
+        return FFTRadNet_val_evaluation(net, loader, train_config, check_perf=True, device=device)
+    return FFTRadNet_full_evaluation(net, loader, train_config, features, output_path, eval_type, device)
+
+
+def FFTRadNet_full_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
@@ -207,15 +233,21 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     perfs['precision']=precision
     perfs['recall']=recall
 
-    F1_score = (np.mean(precision)*np.mean(recall))/((np.mean(precision) + np.mean(recall))/2)
+    mAP_ = float(np.mean(precision))
+    mAR_ = float(np.mean(recall))
+    # A model that detects nothing at any threshold gives 0/0 here. The reference returns
+    # nan; report 0 instead, because a nan is indistinguishable from a broken metric --
+    # the same confusion the RadarCrossAttention evaluator's absent-class nan caused.
+    F1_score = (mAP_ * mAR_) / ((mAP_ + mAR_) / 2) if (mAP_ + mAR_) > 0 else 0.0
     logger.info('------- Detection Scores ------------')
-    logger.info(f"  mAP: {np.mean(perfs['precision'])}")
-    logger.info(f"  mAR: {np.mean(perfs['recall'])}")
+    logger.info(f"  mAP: {mAP_}")
+    logger.info(f"  mAR: {mAR_}")
     logger.info(f"  F1 score: {F1_score}")
 
     logger.info('------- Regression Errors------------')
-    logger.info(f"  Range Error: {np.mean(RangeError)} m")
-    logger.info(f"  Angle Error: {np.mean(AngleError)} degree")
+    # Empty when no threshold produced a true positive; np.mean([]) is nan with a warning.
+    logger.info(f"  Range Error: {np.mean(RangeError) if RangeError else float('nan')} m")
+    logger.info(f"  Angle Error: {np.mean(AngleError) if AngleError else float('nan')} degree")
 
     mAP = np.mean(perfs['precision'])
     mAR = np.mean(perfs['recall'])
