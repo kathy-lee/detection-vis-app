@@ -182,8 +182,16 @@ def build_split(dataset, files, mode):
     smoke    -- a few files / a small random fraction. Fast, exercises the whole stack.
     original -- the official split where train.py provides one; the protocol split
                 otherwise (CRUW 36/4 per the RECORD paper; UWCR 18/4).
+    random   -- every file, split 70/15/15 at the SAMPLE level (train.py's random_split,
+                seeded by the config seed). Frames of every sequence land in every split,
+                so val/test are not held out: this reproduces the protocol of references
+                that split by frame (RadarCrossAttention's data_split.py) and exists to
+                bracket the official-split number against it, not to replace it.
     """
     by_name = {f["name"]: f for f in files}
+
+    if mode == "random":
+        return files, {"splitmode": "random", "split_random": [0.7, 0.15, 0.15]}
 
     if dataset == "CARRADA":
         if mode == "original":
@@ -478,7 +486,7 @@ def main():
     p.add_argument("--only", help="substring filter on the run id, e.g. RECORD or CARRADA")
     p.add_argument("--exclude", action="append", default=[], metavar="SUBSTR",
                    help="skip runs whose id contains SUBSTR; repeatable")
-    p.add_argument("--split", choices=["smoke", "original"], default="smoke")
+    p.add_argument("--split", choices=["smoke", "original", "random"], default="smoke")
     p.add_argument("--epochs", type=int, help="override num_epochs (default: config value)")
     # Repeat a pair across seeds to measure run-to-run spread. With --split original the
     # split is fixed by sequence/frame lists, so the seed only moves weight init, batch

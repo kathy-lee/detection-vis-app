@@ -132,7 +132,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             dataset_inst_list = []
             for file in datafiles:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
+                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='train')
                 logger.debug(f"file {file['id']} prepare for train, length: {len(dataset_inst)} data samples.")
                 dataset_inst_list.append(dataset_inst)
                 for i in range(len(dataset_inst)):
@@ -163,14 +163,27 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 train_ids = [id for id in train_ids if id in valid_ids_set]
                 val_ids = [id for id in val_ids if id in valid_ids_set]
                 test_ids = [id for id in test_ids if id in valid_ids_set]
-                datasets['train'] = Subset(dataset, train_ids)
-                datasets['val'] = Subset(dataset, val_ids)
-                datasets['test'] = Subset(dataset, test_ids)
-                logger.debug(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}") 
-            else:
-                datasets['train'] = train_dataset
-                datasets['val'] = val_dataset
-                datasets['test'] = test_dataset
+                logger.debug(f"After filtering samples with empty annotations: train: {len(train_ids)}, val: {len(val_ids)}, test: {len(test_ids)}")
+
+            # The indices were drawn over instances prepared as 'train'. Val and test get
+            # their own request copies prepared for their split, indexed identically (same
+            # files, same config, same lengths): augmentation is decided from the
+            # instance's split at prepare time (CARRADA's flips, RADDet's flips, the RCA
+            # noise), and one shared instance would have augmented every evaluation --
+            # the sequence and original splitmodes already build one instance per split.
+            eval_concat = {}
+            for split_type in ('val', 'test'):
+                insts = []
+                for file in datafiles:
+                    inst = dataset_factory.get_instance(file['parse'], file['id'])
+                    inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    insts.append(inst)
+                eval_concat[split_type] = ConcatDataset(insts)
+                assert len(eval_concat[split_type]) == len(dataset), \
+                    f"{split_type} instances index differently from the train ones"
+            datasets['train'] = Subset(dataset, train_ids)
+            datasets['val'] = Subset(eval_concat['val'], val_ids)
+            datasets['test'] = Subset(eval_concat['test'], test_ids)
 
             split_samples_info['train'] = [samples_info[id] for id in train_ids]
             split_samples_info['val'] = [samples_info[id] for id in val_ids]
