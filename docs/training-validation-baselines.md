@@ -123,10 +123,16 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) |
 | 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only |
 | 14 | RadarCrossAttention / CARRADA | **0.888 / 0.784** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **0.427 / 0.343** on the official sequence split (1 seed each, final weights) | 0.94 / 0.86 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences |
+| 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) |
+| 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) |
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
 for the reason given in its closure section — it is the only pair that does not fall short.
+Rows 15/16 are VoD **validation**-split numbers (VoD has no public test split), entire-area
+mAP in percent from the official devkit, final weights with the best epoch alongside; they
+come from the July slice gates recorded in
+`docs/superpowers/specs/2026-07-16-radarpillar-design.md:144-164` — see the closure below.
 **Row 13 is not a comparison at all**: its "published" cell is filled in only to show what it
 is *not* being measured against. 78% of RAMP-CNN's data was never released and every public
 raw sequence is training-side for the published model, so no split we can build is
@@ -1196,6 +1202,36 @@ signatures barely generalise across scenes, lose almost everything once they can
 memorised (cyclist 0.83 → 0.07). Row 14 carries both figures; the official-split one is
 what this model earns on unseen data and is the regression baseline for this repo.
 
+### Closed: PointPillar and RadarPillar / ViewOfDelft — the July slice gates stand (2026-09-08)
+
+Rows 15/16 were measured in July under the RadarPillar implementation spec, whose gates
+were stricter than this campaign's: an overfit-one-batch gate, a decode/NMS round-trip
+gate, then the like-for-like training run — which **failed first** (32.4 mAP, run
+`…Jul-17-2026_18:51:11`), was diagnosed by source audit against the official VoD devkit
+and the fthbng77 yamls (4 vs 7 point features, no augmentation, no FOV filter, no point
+shuffle), passed on the aligned recipe, and was then lifted by a second audit that found
+OpenPCDet's BatchNorm `eps=1e-3, momentum=0.01`. Full record:
+`docs/superpowers/specs/2026-07-16-radarpillar-design.md:144-164`.
+
+| | params | best (epoch) | **final weights** | published | run |
+|---|---|---|---|---|---|
+| PointPillar (base, wide backbone) | 4.835 M | 52.27 (64) | **49.41** | 46.7 | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` |
+| RadarPillar (C=32, BN aligned) | 0.184 M | 50.72 (75) | **50.48** | 50.7 | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
+
+Both under the same conditions as the other closed rows: official split, official metric,
+one seed (3407), 80 epochs of the reference's OneCycle recipe, `radar_5frames`. The paper's
++4.0 RadarPillars-over-PointPillars delta does **not** reproduce on this pipeline — our
+PointPillar already carries RadarPillars' data recipe (32 points/pillar, rotation
+augmentation) that the paper's 46.7 baseline lacks, so the base lands 5.6 above the paper's
+and the extras trade ~2 mAP for a 26× parameter reduction (spec §slice 4).
+
+**Why no re-run in September.** The one open caveat was "predates the current code".
+Checked: since the last of those runs, exactly one commit touches `view_of_delft.py`,
+`radarpillar.py` or the VoD evaluator — the BN alignment, which *is* the Jul-21 run; the
+evaluator is unchanged since 2026-07-18; and the shared trainer's default path (no AMP,
+clock scheduler, `original` split) was proved bit-identical before and after this
+session's changes. Nothing those numbers depend on has moved.
+
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
 Reference config (`--config-variant _reference`: lr 1e-3, batch 16, ExponentialLR-
@@ -1470,7 +1506,8 @@ between the two is not evidence of a bug.
 
 - An existing RadarPillar/VoD run in `trained_models/…Jul-21-2026_08:56:49` peaked at
   **val mAP 50.7**, matching RadarPillars' published 50.7 for the 5-frame entire-area
-  setting. Encouraging, though it predates the current code.
+  setting. Promoted to rows 15/16 on 2026-09-08 after confirming its code paths are
+  unchanged since (see the Pillar closure).
 - That same run reports `mAR` and `mIoU` as exactly `0.0000` for all 80 epochs while mAP
   climbs. This is **not** a degeneracy: `RadarPillar_evaluation` returns
   `{'mAP': mAP, 'mAR': 0.0, 'mIoU': 0.0}` (`evaluate.py:1930`) — the two zeros are
