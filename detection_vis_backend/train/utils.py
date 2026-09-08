@@ -11,7 +11,6 @@ import json
 import math
 
 
-from shapely.geometry import Polygon
 from typing import Optional
 from loguru import logger
 
@@ -139,31 +138,35 @@ def decode(map,threshold):
         
         range_bins,angle_bins = np.where(map[0,:,:]>=threshold)
 
-        coordinates = []
+        # Vectorized form of the reference's per-cell loop (RADIal FFTRadNet
+        # dataset/encoder.py:60-72), same arithmetic term for term; an untrained model
+        # passes ~10^4 cells at 0.05 and the loop cost ~0.2 s per frame. The float64
+        # casts matter: the loop multiplies float32 SCALARS by Python floats, which
+        # NumPy promotes to float64, whereas a float32 ARRAY times a Python float stays
+        # float32 -- 1e-7 off the reference. test_fftradnet_metrics.py pins bit equality.
+        reg_r = map[1,range_bins,angle_bins].astype(np.float64)
+        reg_a = map[2,range_bins,angle_bins].astype(np.float64)
+        R = range_bins*4*geometry['resolution'][0] + reg_r * statistics['reg_std'][0] + statistics['reg_mean'][0]
+        A = (angle_bins-OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + reg_a * statistics['reg_std'][1] + statistics['reg_mean'][1]
+        C = map[0,range_bins,angle_bins].astype(np.float64)
 
-        for range_bin,angle_bin in zip(range_bins,angle_bins):
-            R = range_bin*4*geometry['resolution'][0] + map[1,range_bin,angle_bin] * statistics['reg_std'][0] + statistics['reg_mean'][0]
-            A = (angle_bin-OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + map[2,range_bin,angle_bin] * statistics['reg_std'][1] + statistics['reg_mean'][1]
-            C = map[0,range_bin,angle_bin]
-        
-            coordinates.append([R,A,C])
-       
-        return coordinates
+        return np.stack((R, A, C), axis=1).tolist() if len(R) else []
 
 
 def RA_to_cartesian_box(data):
+    """(range, angle, ...) rows -> axis-aligned 4 x 1.8 m boxes as 8 corner coordinates
+    [x1,y1, x2,y1, x2,y2, x1,y2], the reference's RA_to_cartesian_box vectorized."""
     L = 4
     W = 1.8
-    
-    boxes = []
-    for i in range(len(data)):
-        
-        x = np.sin(np.radians(data[i][1])) * data[i][0]
-        y = np.cos(np.radians(data[i][1])) * data[i][0]
 
-        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L])
-              
-    return boxes
+    data = np.asarray(data, dtype=np.float64)
+    if data.size == 0:
+        return []
+    data = data.reshape(len(data), -1)          # rows may carry more than (R, A)
+    x = np.sin(np.radians(data[:, 1])) * data[:, 0]
+    y = np.cos(np.radians(data[:, 1])) * data[:, 0]
+    boxes = np.stack((x - W/2, y, x + W/2, y, x + W/2, y + L, x - W/2, y + L), axis=1)
+    return boxes.tolist()
 
 def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
 
@@ -190,31 +193,25 @@ def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
     return sorted_class_predictions, sorted_box_predictions
 
 def bbox_iou(box1, boxes):
+    """IoU of one box against many, for the axis-aligned boxes RA_to_cartesian_box emits.
 
-    # currently inspected box
-    box1 = box1.reshape((4,2))
-    rect_1 = Polygon([(box1[0, 0], box1[0, 1]), (box1[1, 0], box1[1, 1]), (box1[2, 0], box1[2, 1]),
-                      (box1[3, 0], box1[3, 1])])
-    area_1 = rect_1.area
-
-    # IoU of box1 with each of the boxes in "boxes"
-    ious = np.zeros(boxes.shape[0])
-    for box_id in range(boxes.shape[0]):
-        box2 = boxes[box_id]
-        box2 = box2.reshape((4,2))
-        rect_2 = Polygon([(box2[0, 0], box2[0, 1]), (box2[1, 0], box2[1, 1]), (box2[2, 0], box2[2, 1]),
-                          (box2[3, 0], box2[3, 1])])
-        area_2 = rect_2.area
-
-        # get intersection of both bounding boxes
-        inter_area = rect_1.intersection(rect_2).area
-
-        # compute IoU of the two bounding boxes
-        iou = inter_area / (area_1 + area_2 - inter_area)
-
-        ious[box_id] = iou
-
-    return ious
+    The reference (RADIal FFTRadNet utils/metrics.py) builds a shapely Polygon per box
+    and intersects them in a Python loop; perform_nms calls it O(n^2) per frame per
+    confidence threshold, and an untrained model has ~10^4 candidates per frame -- the
+    July attempts spent 4.7 min per threshold on 1,650 val frames and never finished an
+    epoch. Every box here is an axis-aligned rectangle by construction (corners
+    [x1,y1, x2,y1, x2,y2, x1,y2]), so the polygon intersection IS the rectangle
+    intersection; test_fftradnet_metrics.py checks this against the shapely version.
+    """
+    b1 = np.asarray(box1, dtype=np.float64).reshape(-1)
+    bs = np.asarray(boxes, dtype=np.float64).reshape(-1, 8)
+    x1a, y1a, x2a, y2a = b1[0], b1[1], b1[4], b1[5]
+    x1b, y1b, x2b, y2b = bs[:, 0], bs[:, 1], bs[:, 4], bs[:, 5]
+    area_1 = (x2a - x1a) * (y2a - y1a)
+    area_2 = (x2b - x1b) * (y2b - y1b)
+    inter = (np.clip(np.minimum(x2a, x2b) - np.maximum(x1a, x1b), 0, None)
+             * np.clip(np.minimum(y2a, y2b) - np.maximum(y1a, y1b), 0, None))
+    return inter / (area_1 + area_2 - inter)
 
 
 def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_threshold=0.05):

@@ -127,7 +127,10 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     RangeError = []
     AngleError = []
 
-    for threshold in np.arange(0.2,0.96,0.1):
+    # The reference sweeps 0.1..0.9 (utils/metrics.py:120); this loop started at 0.2 from
+    # 2023-08 to 2026-09, which drops the lowest-precision point from the mean and so
+    # overstated mAP relative to the published protocol.
+    for threshold in np.arange(0.1,0.96,0.1):
         logger.info(f"\nEvaluation with threshold = {threshold}")
         iou_threshold.append(threshold)
 
