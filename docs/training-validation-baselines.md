@@ -112,23 +112,35 @@ Protocol: official split, the paper's own schedule, repo default configs, **thre
 (3/7/11)** per pair, final-epoch weights (which is also what the reference's `eval.py`
 evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 
-| # | pair | ours (mean ± sd) | published | reference on OUR pipeline | verdict |
-|---|------|------------------|-----------|---------------------------|---------|
-| 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) |
-| 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) |
-| 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) |
-| 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) |
-| 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) |
-| 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) |
-| 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) |
-| 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only |
-| 14 | RadarCrossAttention / CARRADA | **0.888 / 0.784** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **0.427 / 0.343** on the official sequence split (1 seed each, final weights) | 0.94 / 0.86 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences |
-| 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) |
-| 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) |
+| # | pair | ours (mean ± sd) | published | reference on OUR pipeline | verdict | run dir under `$MODEL_ROOTDIR` |
+|---|------|------------------|-----------|---------------------------|---------|--------------------------------|
+| 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) | `RODNet_CDC_CRUW_Aug-20-2026_16:39:39` |
+| 3 | RECORD / CRUW | **41.6 / 48.2** test AP/AR (1 seed, our split; best val 55.6 @ epoch 17) | 72.8 / 82.8 | — | ladder rung 1 — see closure section | `RECORD_CRUW_Aug-23-2026_06:58:13` |
+| 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) | ⚠ **not on disk** — closest survivors are `RECORD_CARRADA_Aug-23-2026_20:58:15` (RD, 72 ckpts, interrupted before test) and `RECORD_CARRADA_Aug-23-2026_16:20:30` (RD, early-stopped, test mIoU 42.40) |
+| 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) | `RECORD_CARRADA_Aug-25-2026_17:28:24` |
+| 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) | `MVRECORD_CARRADA_Aug-30-2026_21:26:56` |
+| 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) | `RADDet_RADDetDataset_Sep-01-2026_20:49:42` |
+| 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) | `DAROD_CARRADA_Aug-08-2026_08:09:24` + `…_08:47:05` + `…_09:23:58` (3 seeds) |
+| 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) | `DAROD_RADDetDataset_Aug-07-2026_22:47:24` + `…_23:42:36` + `DAROD_RADDetDataset_Aug-08-2026_00:38:34` (3 seeds) |
+| 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only | `RAMP_CNN_UWCR_Sep-05-2026_20:12:04` (ep 19–40, holds epoch 28) + `RAMP_CNN_UWCR_Sep-05-2026_12:38:17` (ep 0–18); unnormalized control `RAMP_CNN_UWCR_Sep-02-2026_21:57:47` |
+| 14 | RadarCrossAttention / CARRADA | **0.888 / 0.784** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **0.427 / 0.343** on the official sequence split (1 seed each, final weights) | 0.94 / 0.86 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences | `RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29` (frame-random) + `RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01` (official split) |
+| 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` (the base model shares the radarpillar.py path, hence the dir name) |
+| 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
+
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
 for the reason given in its closure section — it is the only pair that does not fall short.
+The last column names the run directory under `$MODEL_ROOTDIR`
+(`/home/kangle/dataset/trained_models`), so the weights behind every number can be found —
+and so that pruning old runs does not destroy the campaign's evidence by accident. Each was
+identified by matching the reported metric back to the run's `test_eval.csv` / checkpoint
+filenames, not by name: several rows come from directories no prose in this file mentions,
+some are two directories because the run was resumed, and **row 4b's directory is already
+gone** (found 2026-09-08 while auditing; the number stands, its weights do not). Row 3 has
+no published-baseline row of its own — its target is the ladder ordering, not an absolute
+figure — but it is listed here so its runs are protected too.
+
 Rows 15/16 are VoD **validation**-split numbers (VoD has no public test split), entire-area
 mAP in percent from the official devkit, final weights with the best epoch alongside; they
 come from the July slice gates recorded in
