@@ -122,6 +122,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) |
 | 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) |
 | 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only |
+| 14 | RadarCrossAttention / CARRADA | **0.888 / 0.784** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **0.427 / 0.343** on the official sequence split (1 seed each, final weights) | 0.94 / 0.86 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences |
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
@@ -1118,6 +1119,82 @@ Pre-run checks: sample path verified on a train and a test sequence (normalized 
 −0.06/1.19, RD −0.38/2.69, AD −0.61/3.85 — the RD/AD std > 1 is the DC-zeroing, faithful;
 noise on for train only; no heading target); evaluator round-trip on ground truth scores
 exactly 1 − 1/G at both thresholds; official-split dataloaders build to the counts above.
+
+#### Result on the official split (2026-09-07): 0.427 / 0.343 — not a match
+
+`RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01`, 80 epochs in 65 min, final weights,
+test = the 6 held-out sequences (1,225 frames):
+
+| AP | ped | cyc | car | **mean** |
+|---|---|---|---|---|
+| @2m, ours | 0.395 | **0.066** | 0.820 | **0.427** |
+| @1m, ours | 0.311 | 0.060 | 0.660 | **0.343** |
+| @2m / @1m, published | 0.91 / 0.80 | 0.93 / 0.88 | 0.97 / 0.91 | **0.94 / 0.86** |
+
+Less than half the published mean, and the per-class shape carries the information: car
+is close (0.82 vs 0.97), pedestrian is halved, cyclist has collapsed — 885 predictions
+for 155 ground truths, precision 0.044. Val, also held out by sequence, agrees on the
+shape (final ped 0.31 / cyc 0.22 / car 0.91).
+
+**Checkpoint selection is not the explanation.** The best-val checkpoint (epoch 14, val
+mAP 0.511 against 0.481 final) scores **0.417 / 0.338** on test — no better: car worse
+(0.755), cyclist marginally better (0.094). The val peak did not transfer.
+
+**The reference's schedule selected against the VRU classes.** Val trajectory:
+
+| epoch | mAP@2m | ped | cyc | car | val MSE | lr |
+|---|---|---|---|---|---|---|
+| 9 | 0.381 | 0.153 | 0.114 | 0.876 | 3169 | 1e-4 (val focal loss minimum) |
+| 14 | **0.511** | **0.424** | 0.252 | 0.856 | 2337 | 1e-4 |
+| 17 | 0.460 | 0.316 | **0.281** | 0.868 | 2088 | 1e-4 |
+| 30 | 0.448 | 0.251 | 0.184 | 0.908 | 1634 | → 1e-5 (first plateau drop) |
+| 39 | 0.478 | 0.296 | 0.223 | **0.916** | 1363 | → 1e-6 |
+| 79 | 0.481 | 0.312 | 0.221 | 0.909 | 1323 | 1e-8 (drops at 57, 62) |
+
+`ReduceLROnPlateau` steps on the val sum-MSE between the sigmoid map and the Gaussian
+target — the reference's own criterion — and that quantity **improved monotonically to
+the end** while pedestrian AP fell 26% and cyclist 21% from their epoch-14/17 peaks. The
+MSE is dominated by background pixels and the large, bright car blobs; the classes the
+paper's contribution is about barely register in it. So the schedule kept the LR at 1e-4
+for 30 epochs past the VRU peak (val focal loss had bottomed at epoch 9), then froze the
+weights in the overfit state. Faithful to the recipe, and the recipe is what did it.
+
+Test-split caveat, pre-registered above: 155 cyclists is a thin sample, and val (345
+cyclists) scores that class at 0.22 rather than 0.07 — the test number is noisy as well
+as low.
+
+The published protocol scores val frames interleaved with training frames of the same
+sequences; the bracket run on that protocol (`--split random`, 70/15/15 by frame, seeded)
+is recorded below, and is what decides between "protocol" and "implementation".
+
+#### Bracket on the published protocol: 0.888 / 0.784 — match; the gap is the split
+
+`RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29`, identical code, recipe and seed;
+`--split random` = train.py's `random_split` over all 6,366 frames, 70/15/15 (4,456 /
+954 / 956), seeded — frames of every sequence in every split, as the reference's
+`data_split.py` does. Val/test built from their own instances (noise off); the `random`
+splitmode used to slice all three splits from one train-prepared instance, which would
+have evaluated on augmented inputs — fixed for every model as part of this run.
+
+| test AP | ped | cyc | car | **mean** | vs published |
+|---|---|---|---|---|---|
+| @2m | 0.887 | 0.826 | 0.951 | **0.888** | −5.5% |
+| @1m | 0.760 | 0.739 | 0.853 | **0.784** | −8.8% |
+| published | 0.91 / 0.80 | 0.93 / 0.88 | 0.97 / 0.91 | 0.94 / 0.86 | |
+
+Every class within 11% at both thresholds; val peaked at 0.899 (epoch 47) and finished at
+0.895, with the plateau drops landing at 46/67/76 instead of 30/39/57 — the leaky split
+keeps val MSE improving longer, so the schedule also behaves as the paper describes ("80
+epochs ... where the evaluation losses were achieving the minima").
+
+**Verdict: match on the published protocol (−5.5% / −8.8%, inside the ~20% rule).** The
+same weights-recipe scores **0.427 / 0.343** when sequences are held out and **0.888 /
+0.784** when frames are — a 2.1× difference that is entirely the split, since nothing else
+changed. The published 0.94 / 0.86 is a frame-leaky number: neighbouring frames of the
+same pedestrian sit on both sides of the split, and the VRU classes, whose radar
+signatures barely generalise across scenes, lose almost everything once they cannot be
+memorised (cyclist 0.83 → 0.07). Row 14 carries both figures; the official-split one is
+what this model earns on unseen data and is the regression baseline for this repo.
 
 ### Closed: RECORD / CRUW (Phase 2) — first ladder rung, ordering confirmed
 
