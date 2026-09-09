@@ -114,19 +114,73 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 
 | # | pair | ours (mean ± sd) | published | reference on OUR pipeline | verdict | run dir under `$MODEL_ROOTDIR` |
 |---|------|------------------|-----------|---------------------------|---------|--------------------------------|
+| 1 | FFTRadNet / RADIal | **95.55 / 86.07** test AP/AR @ IoU 0.5 (1 seed, official split, final weights; freespace mIoU **77.23**, range err 0.122 m, angle err 0.112°) | 96.84 / 82.18 (mIoU 74.0, 0.11 m, 0.17°) | not run (the paper's own split and data are intact — see closure) | **reproduced** (AP −1.3%; AR, mIoU and angle error all *above* published) | `FFTRadNet_RADIal_Sep-08-2026_22:38:45` |
 | 2a | RODNet_CDC / CRUW | **38.5 / 44.6** test AP/AR (1 seed, our split; best-val epoch 7) | 74.29 / 77.85 | — | **inconclusive-by-protocol** (see closure section) | `RODNet_CDC_CRUW_Aug-20-2026_16:39:39` |
 | 3 | RECORD / CRUW | **41.6 / 48.2** test AP/AR (1 seed, our split; best val 55.6 @ epoch 17) | 72.8 / 82.8 | — | ladder rung 1 — see closure section | `RECORD_CRUW_Aug-23-2026_06:58:13` |
 | 4b | RECORD / CARRADA / RD | **53.15** test mIoU (1 seed, official split) | 58.10 | **53.19** | **match** (−0.08% vs reference) | `RECORD_CARRADA_Aug-23-2026_20:58:15`, **epoch 71** (best val mIoU 63.86) |
 | 4a | RECORD / CARRADA / RA | **32.74** test mIoU (1 seed, official split) | 34.80 | **33.08** | **match** (−1.0% vs reference) | `RECORD_CARRADA_Aug-25-2026_17:28:24` |
 | 9 | MVRECORD / CARRADA | **54.83 RD / 38.89 RA** test mIoU (1 seed, official split) | 63.2 RD / 44.5 RA | **56.35 RD / 38.09 RA** | **match** (−2.7% RD, +2.1% RA vs reference) | `MVRECORD_CARRADA_Aug-30-2026_21:26:56` |
-| 10 | RADDet / RADDetDataset | **0.3037** test AP@0.5 (1 seed, official split; @0.1 0.7776 / @0.3 0.6042 / @0.7 0.0694) | 0.251 (@0.1 0.764 / @0.3 0.563 / @0.7 0.059) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) | `RADDet_RADDetDataset_Sep-01-2026_20:49:42` |
-| 11 | DAROD / CARRADA | **0.5642 ± 0.0140** | 0.5583 | 0.5581 | **match** (+1.1%, 0.4 sd) | `DAROD_CARRADA_Aug-08-2026_08:09:24` + `…_08:47:05` + `…_09:23:58` (3 seeds) |
-| 12 | DAROD / RADDetDataset | **0.4463 ± 0.0186** | 0.4657 | 0.4478 | **match** (−0.3% vs reference, 0.1 sd) | `DAROD_RADDetDataset_Aug-07-2026_22:47:24` + `…_23:42:36` + `DAROD_RADDetDataset_Aug-08-2026_00:38:34` (3 seeds) |
-| 13 | RAMP_CNN / UWCR | **0.1799 AP / 0.3179 AR** val (1 seed, **our** date-held-out split; best epoch 28 of 41) | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data not released**; recorded as this repo's regression baseline only | `RAMP_CNN_UWCR_Sep-05-2026_20:12:04` ; unnormalized control `RAMP_CNN_UWCR_Sep-02-2026_21:57:47` |
-| 14 | RadarCrossAttention / CARRADA | **0.888 / 0.784** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **0.427 / 0.343** on the official sequence split (1 seed each, final weights) | 0.94 / 0.86 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences | `RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29` (frame-random) + `RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01` (official split) |
+| 10 | RADDet / RADDetDataset | **30.37** test AP@0.5 (1 seed, official split; @0.1 77.76 / @0.3 60.42 / @0.7 6.94) | **25.1** AP@0.5 (@0.1 76.4 / @0.3 56.3 / @0.7 5.9) | not run (not needed — see below) | **reproduced, exceeds published** (+21% @0.5, above at all four thresholds) | `RADDet_RADDetDataset_Sep-01-2026_20:49:42` |
+| 11 | DAROD / CARRADA | **56.42 ± 1.40** test mAP@0.5 (3 seeds, official split, final weights) | 55.83 | 55.81 | **match** (+1.1%, 0.4 sd) | `DAROD_CARRADA_Aug-08-2026_08:09:24` + `…_08:47:05` + `…_09:23:58` (3 seeds) |
+| 12 | DAROD / RADDetDataset | **44.63 ± 1.86** test mAP@0.5 (3 seeds, official split, final weights) | 46.57 | 44.78 | **match** (−0.3% vs reference, 0.1 sd) | `DAROD_RADDetDataset_Aug-07-2026_22:47:24` + `…_23:42:36` + `DAROD_RADDetDataset_Aug-08-2026_00:38:34` (3 seeds) |
+| 13 | RAMP_CNN / UWCR | **13.09 / 29.31** test AP/AR (**our** split, epoch 28; final weights 6.07 / 15.74). Unnormalized control: **17.86 / 34.22** — higher | 81.23 / 84.25 | impossible (no released weights, no reference-side data) | **not reproducible — data only partly released**; regression baseline only | `RAMP_CNN_UWCR_Sep-05-2026_20:12:04` ; unnormalized control `RAMP_CNN_UWCR_Sep-02-2026_21:57:47` |
+| 14 | RadarCrossAttention / CARRADA | **88.8 / 78.4** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **42.7 / 34.3** on the official sequence split (1 seed each, final weights) | 94.0 / 86.0 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences | `RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29` (frame-random) + `RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01` (official split) |
 | 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` (the base model shares the radarpillar.py path, hence the dir name) |
 | 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
 
+
+**All three numeric columns are percentages**, so a row can be read across without unit
+conversion. Rows 10, 11, 12, 13 and 14 were normalized on 2026-09-09; their sources publish
+fractions (RADDet 0.251, DAROD 0.5583, RadarCrossAttention 0.94), and the values here are
+those ×100. Row 13 was the one that actually misled: it compared ours as a fraction (0.1799)
+against a published percentage (81.23) in the same row, which reads as a 450× gap rather than
+17.99 vs 81.23. The published-baselines table at the top of this file still quotes each paper
+in that paper's own convention, so rows 10 and 14 appear there as fractions.
+
+### Training cost and model size
+
+Measured 2026-09-09 from the runs above: parameter count built from each run's own
+`model_config`, checkpoint size on disk, and wall-clock span between the first and last
+timestamped line of its `train_log.log` (so it includes dataset parse and per-epoch
+validation — real elapsed time, not GPU-busy time).
+
+| row | pair | params | ckpt | epochs | wall | per-epoch |
+|---|------|-------:|-----:|-------:|-----:|----------:|
+| 1 | FFTRadNet / RADIal | 3.79 M | 44 M | 100 | 11.4 h | 6.8 m |
+| 2a | RODNet_CDC / CRUW | 34.52 M | 395 M | 6 † | 3.3 h | 32.6 m |
+| 3 | RECORD / CRUW | 0.70 M | 8 M | 5 † | 5.3 h | **63.6 m** |
+| 4b | RECORD / CARRADA RD | 0.70 M | 8 M | 72 ‡ | 6.2 h | 5.2 m |
+| 4a | RECORD / CARRADA RA | 0.70 M | 8 M | 100 | 16.7 h | 10.0 m |
+| 9 | MVRECORD / CARRADA | 1.97 M | 23 M | 45 † | 14.2 h | 18.9 m |
+| 10 | RADDet / RADDetDataset | 10.75 M | 103 M | 100 | 7.7 h | 4.6 m |
+| 11 | DAROD / CARRADA | 3.45 M | 40 M | 50 | **0.6 h** | **0.7 m** |
+| 12 | DAROD / RADDetDataset | 3.46 M | 40 M | 75 | 0.9 h | 0.7 m |
+| 13 | RAMP_CNN / UWCR | **104.22 M** | **1,193 M** | 22 †‡ | 5.1 h | 13.8 m |
+| 14 | RadarCrossAttention / CARRADA | 11.62 M | 134 M | 80 | 1.1 h | 0.8 m |
+| 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
+| 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
+
+† resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
+epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
+Rows 15/16 have no test phase at all: VoD ships no public test split, and `train()` logs
+"No files assigned to the test split".
+
+**Parameter counts double as a free implementation check.** Three match their papers closely
+enough to be evidence: FFTRadNet **3.790 M** against Table 4's 3.79 M (exact); RadarPillar
+**0.184 M** against 0.27 M with PointPillar at **4.835 M**, reproducing the paper's ~26×
+reduction claim; RadarCrossAttention **11.624 M** against 11.05 M, where the 0.52 M difference
+is exactly the affine parameters of `LayerNorm([256,32,32])` (2 × 262,144) — the published
+count evidently excludes them. A port whose parameter count is far off its paper's has a
+structural defect, and this is the cheapest way to see it.
+
+**RAMP_CNN is the outlier by an order of magnitude**: 104 M parameters, 28× FFTRadNet and
+566× RadarPillar, at 1.2 GB per checkpoint. That is why its runs dominate disk (a 74-epoch run
+is ~72 GB) and it is worth setting beside its result — the largest model here is also the one
+that generalises worst to a held-out capture date.
+
+Efficiency spans two orders of magnitude: DAROD trains a full 50-epoch schedule in **37
+minutes**, while RECORD/CRUW costs **64 minutes per epoch**. Roughly **88 GPU-hours** across
+these 13 directories, excluding the resumed segments not counted here.
 
 Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thresholds, headline
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
@@ -702,25 +756,28 @@ sampled training frames.
 
 100 epochs on the `_reference` config, official split, final-epoch weights. Test:
 
+All figures below are percentages, matching the results table (the paper publishes fractions;
+these are those ×100).
+
 | threshold | ours | published | delta |
 |-----------|------|-----------|-------|
-| AP@0.1 | **0.7776** | 0.764 | +1.8% |
-| AP@0.3 | **0.6042** | 0.563 | +7.3% |
-| AP@0.5 | **0.3037** | **0.251** | **+21.0%** |
-| AP@0.7 | **0.0694** | 0.059 | +17.6% |
+| AP@0.1 | **77.76** | 76.4 | +1.8% |
+| AP@0.3 | **60.42** | 56.3 | +7.3% |
+| AP@0.5 | **30.37** | **25.1** | **+21.0%** |
+| AP@0.7 | **6.94** | 5.9 | +17.6% |
 
 Per class:
 
 | class | @0.1 | @0.3 | @0.5 | @0.7 |
 |-------|------|------|------|------|
-| car | 0.864 | 0.721 | 0.418 | 0.101 |
-| person | 0.681 | 0.353 | 0.053 | 0.002 |
-| truck | 0.614 | 0.550 | 0.301 | 0.068 |
-| bus | 0.579 | 0.526 | 0.395 | 0.053 |
-| bicycle | 0.497 | 0.325 | 0.038 | 0.000 |
-| motorcycle | 0.095 | 0.095 | 0.048 | 0.000 |
+| car | 86.4 | 72.1 | 41.8 | 10.1 |
+| person | 68.1 | 35.3 | 5.3 | 0.2 |
+| truck | 61.4 | 55.0 | 30.1 | 6.8 |
+| bus | 57.9 | 52.6 | 39.5 | 5.3 |
+| bicycle | 49.7 | 32.5 | 3.8 | 0.0 |
+| motorcycle | 9.5 | 9.5 | 4.8 | 0.0 |
 
-Bus and motorcycle are non-zero on test (0.526 and 0.095 at @0.3) after sitting at 0.000-0.111
+Bus and motorcycle are non-zero on test (52.6 and 9.5 at @0.3) after sitting at 0.0-11.1
 throughout validation — the test split carries more instances of both than the 812-frame val
 split does. Do not read the validation per-class figures for the tail classes as evidence about
 the model.
@@ -737,12 +794,12 @@ Python 3.12 interpreter against 3.10 site-packages.
 
 **Selection was reference-faithful and cost almost nothing.** No `test_checkpoint` key, so
 `train()` tested the final-epoch weights, matching `evaluate.py:80`'s `manager.latest_checkpoint`.
-Validation plateaued rather than decaying — best 0.6156 at epoch 41 against 0.5980 at epoch 99,
-so final-weights testing gave up 0.018 relative to the best epoch:
+Validation plateaued rather than decaying — best 61.56 at epoch 41 against 59.80 at epoch 99,
+so final-weights testing gave up 1.8 points relative to the best epoch:
 
 ```
 val mAP@0.3 every 10 epochs:
-0.232  0.565  0.591  0.600  0.600  0.609  0.611  0.602  0.609  0.600
+23.2  56.5  59.1  60.0  60.0  60.9  61.1  60.2  60.9  60.0
 ```
 
 That is worth recording because it was not obvious in advance. Around epoch 13 the losses
@@ -752,7 +809,7 @@ reached AP. The loss is dominated by box-regression and focal terms over all 614
 depends only on the handful of confident detections surviving NMS. **On this pair the val loss is
 not a usable proxy for the metric**, in either direction.
 
-There is also essentially **no val-to-test drop** (val @0.3 0.5980, test 0.6042), unlike MVRECORD's
+There is also essentially **no val-to-test drop** (val @0.3 59.80, test 60.42), unlike MVRECORD's
 8.9-point fall on RD. So the result does not rest on a lucky checkpoint draw.
 
 Two caveats stay attached. The comparison is against the **paper**, not against the reference on
@@ -973,7 +1030,14 @@ instead the **unnormalized control** for a clean A/B against a fresh normalized 
 missing augmentation port is *not* a fidelity gap against the repo's default recipe and is
 deprioritized.
 
-#### Result of the A/B: normalization helps, and it is not what explains 0.9295 → 0.1586
+#### Result of the A/B on VALIDATION — superseded on 2026-09-09, see the test result below
+
+> **The verdict in this subsection does not survive the held-out test split.** It is kept
+> because the reasoning is sound on the evidence it had, and because the way it failed is the
+> point: a validation-only A/B on this split reversed direction when the held-out capture date
+> was finally scored. Read the "Test-set result" subsection that follows before quoting
+> anything here.
+
 
 Two runs on the identical 14/3/5 date-held-out split and the identical `_reference` config,
 differing **only** in whether `input_norm` is applied:
@@ -1005,6 +1069,52 @@ was measured on a 3-sequence smoke split validating on training-side data (see a
 is what this implementation scores when train and val are genuinely disjoint by capture date.
 Nothing further is attributable to a preprocessing defect, and the preprocessing audit found
 none.
+
+#### Test-set result (2026-09-09): the normalization A/B reverses, and row 13 becomes a test number
+
+Neither RAMP_CNN run ever reached its test phase — both were killed mid-schedule — so
+everything above is validation. The held-out test split was always there (555 windows, the 5
+sequences of capture date `2019_05_29`, absent from train and val), it had simply never been
+scored. Evaluating the stored checkpoints directly, each under **its own** `train_info.txt`
+(the control predates `input_norm`; scoring it under the current config would feed it inputs
+~11,000× smaller than it trained on):
+
+| checkpoint | val AP / AR | **test AP / AR** | val → test |
+|---|---|---|---|
+| normalized, epoch 28 (val-best) | 17.99 / 31.79 | **13.09 / 29.31** | −27% / −8% |
+| normalized, epoch 40 (final) | 12.92 / 21.46 | **6.07 / 15.74** | −53% / −27% |
+| **control (unnormalized), epoch 63** | 15.86 / 26.68 | **17.86 / 34.22** | **+13% / +28%** |
+
+**Two findings, in order of how much they change what is written above.**
+
+**1. The validation A/B does not replicate on held-out data; its direction reverses.** On
+validation the normalized run wins (17.99 vs 15.86). On test the control wins on both metrics
+— 17.86 vs 13.09 AP (+36%) and 34.22 vs 29.31 AR (+17%). The "+6.3% mean AP / +7.8% mean AR"
+above, and the claim that normalization is "validated" by it, are **withdrawn**. Note also the
+shapes: the control's score *rose* from val to test while the normalized run's *fell* by more
+than a quarter.
+
+State the limits honestly rather than claiming the opposite result. This is a two-checkpoint
+comparison, not a matched experiment: the runs trained for different lengths (63 vs 28
+epochs), both checkpoints are val-selected and so carry selection bias, and the test set is a
+single homogeneous capture date. The defensible claim is **"the validation-based A/B does not
+replicate on held-out data, with the direction reversed"** — not "normalization hurts".
+
+**What this does NOT undo: the normalization fix itself stands.** The reference standardizes
+every input view unconditionally (`train_dop.py:91`, `:228-234`; `test.py:17,177-189`), and
+matching it is a fidelity requirement, not a claim contingent on a score. What was wrong was
+the evidence offered for it, not the change.
+
+**2. Final-weights selection would halve this pair's number.** Epoch 28 tests at 13.09 against
+epoch 40's 6.07. Everywhere else in this campaign the final-epoch convention is harmless
+because those runs trained to convergence; this one was stopped mid-plateau, well into the
+overfitting phase described below, so its final weights are not representative. Row 13
+therefore reports epoch 28 — and says so — rather than silently applying a convention that
+does not fit.
+
+Row 13 now carries the **test** figure (13.09 / 29.31). It remains a regression baseline for
+this repo, not a reproduction: the split is ours, and 78% of the paper's data was never
+released.
 
 #### Stopped at epoch 40 of 100, deliberately
 
@@ -1223,6 +1333,53 @@ same pedestrian sit on both sides of the split, and the VRU classes, whose radar
 signatures barely generalise across scenes, lose almost everything once they cannot be
 memorised (cyclist 0.83 → 0.07). Row 14 carries both figures; the official-split one is
 what this model earns on unseen data and is the regression baseline for this repo.
+
+### Closed: FFTRadNet / RADIal — reproduced against the paper (2026-09-09)
+
+Row 1, and the least equivocal comparison in this file. `FFTRadNet_RADIal_Sep-08-2026_22:38:45`,
+100 epochs in 11h22m, final weights, official split (6,231 / 986 / 1,035 frames), test
+evaluation via the reference's `run_FullEvaluation` path — thresholds 0.1–0.9 at IoU 0.5.
+
+| metric | ours | published | delta |
+|---|---|---|---|
+| AP | **95.55** | 96.84 | −1.3% |
+| AR | **86.07** | 82.18 | **+4.7%** |
+| freespace mIoU | **77.23** | 74.0 | **+4.4%** |
+| range error | 0.122 m | 0.11 m | +11% (worse) |
+| angle error | **0.112°** | 0.17° | **−34% (better)** |
+
+**Why this row carries more weight than most.** Almost nothing had to be assumed. The data
+is the paper's own — 8,252 labelled frames over 91 sequences, matching §5 exactly. The split
+is the reference's own sequence-level 4-val/4-test list, not one we invented. The network is
+AST-identical to the pristine reference block for block, the loss and encoder identical term
+for term, and the schedule is the paper's (Adam 1e-4, ×0.9 every 10 epochs, 100 epochs). So
+unlike RadarCrossAttention there is no protocol ambiguity available to explain a gap, and
+unlike RAMP_CNN the data is not a fifth of the paper's. Compared directly against the paper,
+like RADDet.
+
+The one metric on the wrong side is range error (0.122 m vs 0.11 m), while angle error is a
+third better than published — consistent with the paper's own claim that the MIMO
+pre-encoder learns angle-of-arrival well, and not worth chasing.
+
+**Final weights landed on a normal epoch.** The config sets no `test_checkpoint` and no
+early stopping, matching the reference, so `train()` tested the weights at loop exit. Epoch
+99's val mAP (0.9743) sits near the run's ceiling (0.9784 @ epoch 70) and its mIoU (0.6575)
+is mid-band, clear of the periodic segmentation dips described below — so the convention cost
+nothing here. Had epoch 99 landed on a dip, the honest move would have been to report it and
+note the selection effect, not to substitute a better epoch.
+
+**Two behaviours worth carrying forward, neither of which affected the result:**
+
+- **Periodic segmentation excursions.** Epochs 8, 39, 52, 61, 79, 89 and 95 each show a sharp
+  val-loss spike with mIoU dropping to 0.32–0.63 while mAP is untouched. The segmentation
+  head carries a 100× loss weight, so one bad epoch there dominates the total. Every instance
+  recovered within one or two epochs.
+- **Val loss is again a poor guide to the comparison metric.** It bottomed at 100.86 (epoch
+  12) and rose to 173.92 by epoch 99 — a 72% increase — while test AP came out at 95.55. That
+  is now three pairs running: RAMP_CNN's rising val loss accompanied a genuine plateau,
+  RadarCrossAttention's plateau criterion actively selected against the VRU classes, and here
+  a 72% rise cost nothing at all. **Read val loss as a training-health signal only; the
+  comparison metric is the one to select and stop on.**
 
 ### Closed: PointPillar and RadarPillar / ViewOfDelft — the July slice gates stand (2026-09-08)
 
