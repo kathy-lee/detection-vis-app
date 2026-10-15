@@ -11,7 +11,6 @@ import json
 import math
 
 
-from shapely.geometry import Polygon
 from typing import Optional
 from loguru import logger
 
@@ -139,31 +138,35 @@ def decode(map,threshold):
         
         range_bins,angle_bins = np.where(map[0,:,:]>=threshold)
 
-        coordinates = []
+        # Vectorized form of the reference's per-cell loop (RADIal FFTRadNet
+        # dataset/encoder.py:60-72), same arithmetic term for term; an untrained model
+        # passes ~10^4 cells at 0.05 and the loop cost ~0.2 s per frame. The float64
+        # casts matter: the loop multiplies float32 SCALARS by Python floats, which
+        # NumPy promotes to float64, whereas a float32 ARRAY times a Python float stays
+        # float32 -- 1e-7 off the reference. test_fftradnet_metrics.py pins bit equality.
+        reg_r = map[1,range_bins,angle_bins].astype(np.float64)
+        reg_a = map[2,range_bins,angle_bins].astype(np.float64)
+        R = range_bins*4*geometry['resolution'][0] + reg_r * statistics['reg_std'][0] + statistics['reg_mean'][0]
+        A = (angle_bins-OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + reg_a * statistics['reg_std'][1] + statistics['reg_mean'][1]
+        C = map[0,range_bins,angle_bins].astype(np.float64)
 
-        for range_bin,angle_bin in zip(range_bins,angle_bins):
-            R = range_bin*4*geometry['resolution'][0] + map[1,range_bin,angle_bin] * statistics['reg_std'][0] + statistics['reg_mean'][0]
-            A = (angle_bin-OUTPUT_DIM[2]/2)*4*geometry['resolution'][1] + map[2,range_bin,angle_bin] * statistics['reg_std'][1] + statistics['reg_mean'][1]
-            C = map[0,range_bin,angle_bin]
-        
-            coordinates.append([R,A,C])
-       
-        return coordinates
+        return np.stack((R, A, C), axis=1).tolist() if len(R) else []
 
 
 def RA_to_cartesian_box(data):
+    """(range, angle, ...) rows -> axis-aligned 4 x 1.8 m boxes as 8 corner coordinates
+    [x1,y1, x2,y1, x2,y2, x1,y2], the reference's RA_to_cartesian_box vectorized."""
     L = 4
     W = 1.8
-    
-    boxes = []
-    for i in range(len(data)):
-        
-        x = np.sin(np.radians(data[i][1])) * data[i][0]
-        y = np.cos(np.radians(data[i][1])) * data[i][0]
 
-        boxes.append([x - W/2,y,x + W/2,y, x + W/2,y+L,x - W/2,y+L])
-              
-    return boxes
+    data = np.asarray(data, dtype=np.float64)
+    if data.size == 0:
+        return []
+    data = data.reshape(len(data), -1)          # rows may carry more than (R, A)
+    x = np.sin(np.radians(data[:, 1])) * data[:, 0]
+    y = np.cos(np.radians(data[:, 1])) * data[:, 0]
+    boxes = np.stack((x - W/2, y, x + W/2, y, x + W/2, y + L, x - W/2, y + L), axis=1)
+    return boxes.tolist()
 
 def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
 
@@ -190,31 +193,25 @@ def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
     return sorted_class_predictions, sorted_box_predictions
 
 def bbox_iou(box1, boxes):
+    """IoU of one box against many, for the axis-aligned boxes RA_to_cartesian_box emits.
 
-    # currently inspected box
-    box1 = box1.reshape((4,2))
-    rect_1 = Polygon([(box1[0, 0], box1[0, 1]), (box1[1, 0], box1[1, 1]), (box1[2, 0], box1[2, 1]),
-                      (box1[3, 0], box1[3, 1])])
-    area_1 = rect_1.area
-
-    # IoU of box1 with each of the boxes in "boxes"
-    ious = np.zeros(boxes.shape[0])
-    for box_id in range(boxes.shape[0]):
-        box2 = boxes[box_id]
-        box2 = box2.reshape((4,2))
-        rect_2 = Polygon([(box2[0, 0], box2[0, 1]), (box2[1, 0], box2[1, 1]), (box2[2, 0], box2[2, 1]),
-                          (box2[3, 0], box2[3, 1])])
-        area_2 = rect_2.area
-
-        # get intersection of both bounding boxes
-        inter_area = rect_1.intersection(rect_2).area
-
-        # compute IoU of the two bounding boxes
-        iou = inter_area / (area_1 + area_2 - inter_area)
-
-        ious[box_id] = iou
-
-    return ious
+    The reference (RADIal FFTRadNet utils/metrics.py) builds a shapely Polygon per box
+    and intersects them in a Python loop; perform_nms calls it O(n^2) per frame per
+    confidence threshold, and an untrained model has ~10^4 candidates per frame -- the
+    July attempts spent 4.7 min per threshold on 1,650 val frames and never finished an
+    epoch. Every box here is an axis-aligned rectangle by construction (corners
+    [x1,y1, x2,y1, x2,y2, x1,y2]), so the polygon intersection IS the rectangle
+    intersection; test_fftradnet_metrics.py checks this against the shapely version.
+    """
+    b1 = np.asarray(box1, dtype=np.float64).reshape(-1)
+    bs = np.asarray(boxes, dtype=np.float64).reshape(-1, 8)
+    x1a, y1a, x2a, y2a = b1[0], b1[1], b1[4], b1[5]
+    x1b, y1b, x2b, y2b = bs[:, 0], bs[:, 1], bs[:, 4], bs[:, 5]
+    area_1 = (x2a - x1a) * (y2a - y1a)
+    area_2 = (x2b - x1b) * (y2b - y1b)
+    inter = (np.clip(np.minimum(x2a, x2b) - np.maximum(x1a, x1b), 0, None)
+             * np.clip(np.minimum(y2a, y2b) - np.maximum(y1a, y1b), 0, None))
+    return inter / (area_1 + area_2 - inter)
 
 
 def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_threshold=0.05):
@@ -417,16 +414,24 @@ def custom_one_hot(labels, num_classes):
     When a negative value is encountered, it results in an all-zero vector in the one-hot encoded output. 
     This function implements the same as tf.one_hot(). It can also handle 2D input tensor.
     """
-    # Handle the negative values by increasing them by num_classes
-    labels = torch.where(labels < 0, labels + num_classes, labels)
-    
+    # Park every negative label in the ONE spare slot at index num_classes, which the
+    # slice below discards -- so negatives come back all-zero, as tf.one_hot gives.
+    #
+    # This was `labels + num_classes`, which maps -1 to num_classes - 1: the last REAL
+    # class, not the spare slot. roi_delta marks ignored ROIs (neither sampled positive
+    # nor sampled negative -- the large majority) with -1, so the Fast R-CNN classifier
+    # was trained to predict the last class on most of its input. Symptom: every
+    # prediction came back as class 6 on RADDetDataset (n_class=7) and frcnn_cls barely
+    # moved, holding mAP at 0.0 regardless of box quality.
+    labels = torch.where(labels < 0, torch.full_like(labels, num_classes), labels)
+
     # Apply one hot encoding
     one_hot = F.one_hot(labels, num_classes=num_classes + 1)  # One additional class for the negative values
-    
+
     # If we have the additional "negative" class, remove it (it will be the last class)
     if one_hot.size(-1) > num_classes:
         one_hot = one_hot[..., :-1]
-    
+
     return one_hot
     
 
@@ -598,54 +603,76 @@ def peaks_detect(map, mask, peaks_cls, heat_thresh):
     idx = torch.where(peak*peak_thresh ==True)
     return out[0][idx], idx  # intensity, index
 
-def distribute(index_t, device='cpu'):
-    index = torch.tensor(()).to(device=device)
-    for i in range(len(index_t[0])):
-        index = torch.cat((index, torch.stack((index_t[0][i],index_t[1][i],index_t[2][i],index_t[3][i]),dim=0)))
+# distribute / update_peaks / association are vectorized re-implementations of the
+# RadarCrossAttention reference's loops (crossattention_radar_detector,
+# Utils/val_utils.py:153-206). The reference builds every tensor by torch.cat inside
+# Python loops and its NMS is O(n^2) in Python: at epoch 0 an untrained model has
+# ~10^4 peaks per frame above the 0.1 threshold, which extrapolates to HOURS per val
+# batch (measured 2.1 s for 600 peaks). Semantics are unchanged -- same peak order,
+# same greedy suppression, same float32 arithmetic -- and test_rca_association.py
+# checks the outputs against verbatim copies of the reference loops.
 
-    index = torch.reshape(index,(len(index_t[0]),4))
-    return index
+def distribute(index_t, device='cpu'):
+    """The (batch, class, row, col) index tuple from torch.where as an (n, 4) float tensor."""
+    return torch.stack(index_t, dim=1).to(device=device).float()
 
 def update_peaks(pred_cen, pred_idx):
-    for cnt,cord in enumerate(pred_idx):
-        r_id = int(cord[2])
-        a_id = int(cord[3])
-        bat = int(cord[0])
-        cord[2] += int(pred_cen[bat,0,r_id,a_id])
-        cord[3] += int(pred_cen[bat,1,r_id,a_id])
-        pred_idx[cnt]= cord
+    """Shift each peak by the centre-offset the network predicts AT the peak, truncated
+    toward zero like the reference's int(). In place, as the reference does.
+
+    Clamped to the map, which the reference does not do: an offset pushing a peak past
+    row 255 would raise there, and one pushing it below 0 would silently wrap to the far
+    end of the map through negative indexing (row -2 -> 254, i.e. 0.4 m -> 50 m). Both
+    only arise for peaks within 4 bins of an edge; where the reference is defined, the
+    results agree.
+    """
+    if len(pred_idx) == 0:
+        return pred_idx
+    bat = pred_idx[:, 0].long()
+    r_id = pred_idx[:, 2].long()
+    a_id = pred_idx[:, 3].long()
+    pred_idx[:, 2] += torch.trunc(pred_cen[bat, 0, r_id, a_id]).to(pred_idx.dtype)
+    pred_idx[:, 3] += torch.trunc(pred_cen[bat, 1, r_id, a_id]).to(pred_idx.dtype)
+    pred_idx[:, 2].clamp_(0, pred_cen.shape[2] - 1)
+    pred_idx[:, 3].clamp_(0, pred_cen.shape[3] - 1)
     return pred_idx
 
 def association(intensity, index, device="cpu"):
-    idx_list = torch.argsort(intensity)
-    idx_list = torch.flip(idx_list,dims=[-1])
-    out_intent =torch.Tensor().to(device=device)
-    out_idx =torch.Tensor().to(device=device)
+    """Greedy, class-agnostic non-maximum suppression at 2 m within a frame.
 
-    while len(idx_list)!=0:
-        out_intent=torch.cat((out_intent,torch.Tensor([intensity[idx_list[0]]]).to(device=device)))
-        out_idx = torch.cat((out_idx, index[idx_list[0]]))
-        p1_row , p1_col = index[idx_list[0]][2],index[idx_list[0]][3]
-        frame_1, cls_1 = index[idx_list[0]][0],index[idx_list[0]][1]
-        x1,y1 = pol2cord(p1_row,p1_col)
-        idx_list = idx_list[1:]
+    Peaks are visited in descending intensity (the reference's argsort + flip, so tie
+    order is the same); each kept peak suppresses every not-yet-visited peak of the
+    same frame within 2 m Cartesian distance. Returns the kept (n, 4) indices and
+    their intensities, in visiting order -- identical to the reference's output.
+    """
+    idx_list = torch.flip(torch.argsort(intensity), dims=[-1])
+    if len(idx_list) == 0:
+        return torch.Tensor().to(device=device).reshape(0, 4), torch.Tensor().to(device=device)
+    idx = index[idx_list]
+    inten = intensity[idx_list]
+    frame = idx[:, 0]
+    # pol2cord for every peak at once, same float32 arithmetic as the scalar helper
+    range_array = torch.linspace(50, 0, steps=256).to(idx.device)
+    angle_array = torch.arcsin(torch.linspace(-1, 1, steps=256)).to(idx.device)
+    rng = range_array[idx[:, 2].long()]
+    ang = angle_array[idx[:, 3].long()]
+    x = rng * torch.sin(ang)
+    y = rng * torch.cos(ang)
 
-        count = 0
-        while len(idx_list)!=0 and count != len(idx_list):
-            frame_2, cls_2 = index[idx_list[count]][0],index[idx_list[count]][1]
-            if frame_2 == frame_1:
-                p2_row , p2_col = index[idx_list[count]][2],index[idx_list[count]][3]
-                x2,y2 = pol2cord(p2_row,p2_col)
-                dist = distance(x1,y1,x2,y2)
-            
-                if dist < 2:
-                   idx_list = torch.cat([idx_list[:count], idx_list[count+1:]])
-                else:
-                    count += 1
-            else: 
-                count += 1
-    out_idx = torch.reshape(out_idx,(len(out_idx)//4,4))
-    return out_idx,out_intent
+    alive = torch.ones(len(idx), dtype=torch.bool, device=idx.device)
+    keep = []
+    for i in range(len(idx)):
+        if not alive[i]:
+            continue
+        keep.append(i)
+        dist = torch.sqrt((x[i] - x) ** 2 + (y[i] - y) ** 2)
+        suppress = (frame == frame[i]) & (dist < 2) & alive
+        suppress[i] = False
+        alive &= ~suppress
+    keep = torch.tensor(keep, dtype=torch.long, device=idx.device)
+    out_idx = idx[keep].float().to(device=device)
+    out_intent = torch.Tensor([float(v) for v in inten[keep]]).to(device=device)
+    return out_idx, out_intent
 
 def distance(x1,y1,x2,y2):
     dx = x1-x2

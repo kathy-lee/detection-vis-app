@@ -1,30 +1,77 @@
 {
-    "seed":3,
-    "losses": {
-    },
-    "lr_scheduler": {
-        "type": "exp",
-        "gamma": 0.9
-    },
-    "optimizer": {
-        "lr": 1e-3
-    },
-    "num_epochs":1,
-    "dataloader": {
-        "train": {
-            "batch_size": 4,
-            "num_workers": 4
+    "default": {
+        "seed":3,
+        "losses": {
         },
-        "val": {
-            "batch_size": 4,
-            "num_workers": 4
+        "lr_scheduler": {
+            "type": "exp",
+            "gamma": 0.9
         },
-        "test": {
-            "batch_size": 1,
-            "num_workers": 1
-        }
+        "optimizer": {
+            "lr": 1e-3
+        },
+        "num_epochs":1,
+        "dataloader": {
+            "train": {
+                "batch_size": 4,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 4,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "win_size": 1,
+        "transformations": ["hflip", "vflip"],
+        "norm_type": "tvt"
     },
-    "win_size": 1,
-    "transformations": ["hflip", "vflip"],
-    "norm_type": "tvt"
+
+    "CARRADA": {
+        "num_epochs": 50,
+        "optimizer": {
+            "lr": 1e-4
+        },
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 25,
+            "gamma": 0.9
+        },
+        "schedule_notes": "Published DAROD schedule for CARRADA: 50 epochs, batch 4, Adam lr 1e-4 (paper Sec. 'Training setting'; colindecourt/darod config/config_carrada.json epochs/batch_size/lr). The scheduler there is ExponentialDecay(decay_rate=0.9, staircase=True, decay_steps=steps_per_epoch * scheduler_step) with scheduler_step=25, i.e. lr *= 0.9 every 25 epochs -- StepLR(step_size=25, gamma=0.9) here. NOT type 'exp': ExponentialLR decays every epoch, which after 50 epochs would leave lr at 0.9^50 = 0.5% of its initial value instead of 0.9^2 = 81%.",
+        "data_mean": 58.47112418237332,
+        "data_std": 3.748725977590863,
+        "data_stats_notes": "Standardization constants for the RD input, copied verbatim from the reference implementation colindecourt/darod, config/config_carrada.json (data_mean/data_std). Applied there in darod/utils/data_utils.py as (spectrum - data_mean) / data_std before the network sees it. Verified against this repo's CARRADA loader: measured mean 59.073 / std 3.747 over 11 batches of range_doppler_raw, against the reference's 58.471 / 3.749 -- our RD values were already on the reference's scale, only the standardization step was missing. These live in the TRAIN config rather than the model config because model_config is splatted into DAROD.__init__ (network.py:38), so every key there must be a constructor argument."
+    },
+
+    "RADDetDataset": {
+        "num_epochs": 75,
+        "optimizer": {
+            "lr": 1e-4
+        },
+        "lr_scheduler": {
+            "type": "exp",
+            "gamma": 1.0
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 16,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 16,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "schedule_notes": "Published DAROD schedule for RADDet: 75 epochs, batch 16, Adam lr 1e-4 (colindecourt/darod config/config_raddet.json epochs/batch_size/optimizer/lr). That config sets \"scheduler\": false, so the learning rate is CONSTANT -- its \"scheduler_step\": 40 is dead config, read only when scheduler is true. train.py has no 'no scheduler' option, so this is expressed as ExponentialLR with gamma 1.0, which is exactly a constant lr. Note this differs from CARRADA above, which does decay (StepLR every 25 epochs). The whole dataloader block must be restated because smoke_sweep.resolve_configs merges the per-dataset block with a shallow dict.update, so a partial 'dataloader' would drop the val and test entries.",
+        "data_mean": 830.4466,
+        "data_std": 93.25871,
+        "data_stats_notes": "Standardization constants for the RD input, copied verbatim from the reference implementation colindecourt/darod, config/config_raddet.json (data_mean/data_std). Applied there in darod/utils/data_utils.py as (spectrum - data_mean) / data_std. These describe the reference's SUM-OF-LOGS spectrum, sum(log10(|RAD|^2 + 1)) collapsed over the azimuth axis -- note 256 * global_mean_log (3.2438383) = 830.42, which is data_mean, confirming that reading. They therefore only apply now that RADDetDataset.__getitem__ builds RD the same way; against the previous log-of-a-sum form (measured mean 58.75) these constants would have been actively harmful. Verified after the change: measured mean 829.272 / std 94.292 over 7 batches, against the reference's 830.447 / 93.259."
+    }
 }

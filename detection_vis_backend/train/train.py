@@ -26,15 +26,21 @@ from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
 from data import crud, schemas
-from data.database import SessionLocal
+from data.database import get_session_local
 
 @contextmanager
 def get_db():
-    db = SessionLocal()
+    # data.database.SessionLocal is a module-level None that is never assigned -- the
+    # live API is get_session_local(), as jobs/tasks.py already uses. Importing the
+    # stale name made get_db() raise "'NoneType' object is not callable" on every call,
+    # and its only caller is the CARRADA branch of the "original" splitmode
+    # (CreateDataLoaders, which resolves sequences by name), so that split has never
+    # worked -- including the official 18/6/6 split the published DAROD schedule uses.
+    db = get_session_local()
     try:
         yield db
     finally:
-        db.close()  
+        db.close()
 
 @contextmanager
 def function_specific_log_to_file(file_name, level="INFO"):
@@ -126,7 +132,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             dataset_inst_list = []
             for file in datafiles:
                 dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config)
+                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='train')
                 logger.debug(f"file {file['id']} prepare for train, length: {len(dataset_inst)} data samples.")
                 dataset_inst_list.append(dataset_inst)
                 for i in range(len(dataset_inst)):
@@ -157,14 +163,27 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 train_ids = [id for id in train_ids if id in valid_ids_set]
                 val_ids = [id for id in val_ids if id in valid_ids_set]
                 test_ids = [id for id in test_ids if id in valid_ids_set]
-                datasets['train'] = Subset(dataset, train_ids)
-                datasets['val'] = Subset(dataset, val_ids)
-                datasets['test'] = Subset(dataset, test_ids)
-                logger.debug(f"After filtering samples with empty annotations: train: {len(datasets['train'])}, val: {len(datasets['val'])}, test: {len(datasets['test'])}") 
-            else:
-                datasets['train'] = train_dataset
-                datasets['val'] = val_dataset
-                datasets['test'] = test_dataset
+                logger.debug(f"After filtering samples with empty annotations: train: {len(train_ids)}, val: {len(val_ids)}, test: {len(test_ids)}")
+
+            # The indices were drawn over instances prepared as 'train'. Val and test get
+            # their own request copies prepared for their split, indexed identically (same
+            # files, same config, same lengths): augmentation is decided from the
+            # instance's split at prepare time (CARRADA's flips, RADDet's flips, the RCA
+            # noise), and one shared instance would have augmented every evaluation --
+            # the sequence and original splitmodes already build one instance per split.
+            eval_concat = {}
+            for split_type in ('val', 'test'):
+                insts = []
+                for file in datafiles:
+                    inst = dataset_factory.get_instance(file['parse'], file['id'])
+                    inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    insts.append(inst)
+                eval_concat[split_type] = ConcatDataset(insts)
+                assert len(eval_concat[split_type]) == len(dataset), \
+                    f"{split_type} instances index differently from the train ones"
+            datasets['train'] = Subset(dataset, train_ids)
+            datasets['val'] = Subset(eval_concat['val'], val_ids)
+            datasets['test'] = Subset(eval_concat['test'], test_ids)
 
             split_samples_info['train'] = [samples_info[id] for id in train_ids]
             split_samples_info['val'] = [samples_info[id] for id in val_ids]
@@ -242,17 +261,25 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 if skip_empty_label:
                     logger.debug(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}") 
         elif dataset_type == "RADDetDataset":
+            # One request copy PER SPLIT. Augmentation is train-only and is decided from
+            # instance state (splittype), so a single shared object would augment val and
+            # test too -- exactly what the ViewOfDelft branch below already avoids.
             dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-            dataset.prepare_for_train(features, train_config, model_config)
+            dataset.prepare_for_train(features, train_config, model_config, splittype='train')
             sample_ids = [os.path.splitext(os.path.basename(f))[0] for f in dataset.anno_filenames]
             with open(os.path.join(dataset.root_path, "original_split_info.json"), "r") as f:
                 dataset.original_split = json.load(f)
             split_samples_info['val'] = [sample_ids.index(i) for i in dataset.original_split['val'] if i in sample_ids]
             split_samples_info['test'] = [sample_ids.index(i) for i in dataset.original_split['test'] if i in sample_ids]
-            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
-            datasets['train'] = Subset(dataset, split_samples_info['train'])
-            datasets['val'] = Subset(dataset, split_samples_info['val'])
-            datasets['test'] = Subset(dataset, split_samples_info['test'])
+            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))
+            for split_type in ('train', 'val', 'test'):
+                if split_type == 'train':
+                    split_ds = dataset
+                else:
+                    split_ds = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+                    split_ds.prepare_for_train(features, train_config, model_config,
+                                               splittype=split_type)
+                datasets[split_type] = Subset(split_ds, split_samples_info[split_type])
         elif dataset_type == "ViewOfDelft":
             # Official split from ImageSets (5,139 train / 1,296 val). One request
             # copy PER SPLIT (slice 3.5): the train copy carries the augmentor, the
@@ -379,6 +406,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         # adam_onecycle): OneCycleLR stepped per iteration, MOMS [0.95, 0.85] -> torch
         # max_momentum/base_momentum. Other models keep the 'lr_scheduler' path unchanged.
         step_scheduler_per_iter = False
+        # Set by the 'plateau' branch: the name of the validation metric the scheduler is
+        # stepped on, AFTER validation. None for every schedule that steps on the clock.
+        plateau_monitor = None
         if train_config.get('scheduler', {}).get('type') == 'OneCycleLR':
             sched_cfg = train_config['scheduler']
             scheduler = lr_scheduler.OneCycleLR(
@@ -388,6 +418,83 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 div_factor=float(sched_cfg.get('div_factor', 10)),
                 base_momentum=0.85, max_momentum=0.95)
             step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'cyclic':
+            # RAMP-CNN reference recipe (Xiangyu-Gao/Radar-multiple-perspective-object-
+            # detection, config.py): CyclicLR(base_lr=1e-6, max_lr=1e-5,
+            # step_size_up/down=430) with IS_Steplr=False. CyclicLR is a per-BATCH
+            # schedule by construction -- step_size_up counts optimizer steps, not epochs
+            # -- so it steps per iteration like OneCycleLR above.
+            #
+            # cycle_momentum MUST be False: it defaults to True and then writes a
+            # 'momentum' key into the optimizer's param_groups, which Adam does not have
+            # (it raises at construction). The reference uses Adam, so there is no
+            # momentum to cycle.
+            #
+            # The reference's OWN StepLR branch, taken when IS_Steplr=True, decays with
+            # gamma 0.1 -- not the 0.9 that RAMP_CNN_train_config.json's stand-in used.
+            # Neither is a substitute for the cyclic schedule, which oscillates rather
+            # than decays; that stand-in is why this branch exists.
+            sched_cfg = train_config['lr_scheduler']
+            step_up = int(sched_cfg.get('step_size_up', 430))
+            scheduler = lr_scheduler.CyclicLR(
+                optimizer,
+                base_lr=float(sched_cfg['base_lr']),
+                max_lr=float(sched_cfg['max_lr']),
+                step_size_up=step_up,
+                step_size_down=int(sched_cfg.get('step_size_down', step_up)),
+                cycle_momentum=False)
+            step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'decay_to_floor':
+            # RADDet reference recipe (ZhangAoCanada/RADDet train.py:166-178). Its loop is
+            # step-based, not epoch-based, and the rule is
+            #     lr <- lr_end + decay * (lr - lr_end)      every `decay_gap` steps,
+            #                                               after `warmup_steps` steps
+            # i.e. GEOMETRIC DECAY OF (lr - lr_end), so lr approaches lr_end as a FLOOR.
+            # Neither StepLR nor ExponentialLR can express that: both scale lr itself and
+            # therefore decay to zero. Measured at epoch 100 (batch 3): reference 1.72e-05,
+            # StepLR(10, 0.9) 3.49e-05, ExponentialLR(0.9) 2.66e-09 -- four orders out.
+            # So this is a LambdaLR on the step count instead, stepped per iteration.
+            #
+            # Off-by-one matters and is deliberate: the reference increments global_steps
+            # BEFORE testing, and 60000 % 3000 == 0, so the first decay lands ON step
+            # 60000. Hence `+ 1` in the exponent.
+            #
+            # NOTE the thresholds are counted in OPTIMIZER STEPS, so they only mean what
+            # the reference meant if the batch size matches (3). At batch 4 the same 60000
+            # steps would cover 32.8 epochs instead of 24.6.
+            sched_cfg = train_config['lr_scheduler']
+            lr_end = float(sched_cfg['lr_end'])
+            decay = float(sched_cfg['decay'])
+            decay_gap = int(sched_cfg['decay_gap'])
+            warmup_steps = int(sched_cfg['warmup_steps'])
+
+            def _decay_to_floor(step):
+                # LambdaLR multiplies the BASE lr by this factor.
+                if step < warmup_steps:
+                    return 1.0
+                n = (step - warmup_steps) // decay_gap + 1
+                return (lr_end + (lr - lr_end) * (decay ** n)) / lr
+
+            scheduler = lr_scheduler.LambdaLR(optimizer, _decay_to_floor)
+            step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'plateau':
+            # RadarCrossAttention reference recipe (ravikothari510/crossattention_radar_
+            # detector train.py:157-158): ReduceLROnPlateau(patience=4, factor=0.1), stepped
+            # once per epoch on the VALIDATION metric -- there, the mean over val batches of
+            # the sum-MSE between sigmoid(pred_mask) and the Gaussian target, which the
+            # evaluator returns as 'val_mse'. A metric-driven schedule cannot step where the
+            # clock-driven ones do (before validation), so `plateau_monitor` defers it to
+            # after the evaluator has run. 'loss' monitors the evaluator's val loss.
+            #
+            # In this torch (2.1) ReduceLROnPlateau is not an LRScheduler subclass and has
+            # no get_last_lr(); the lr history below reads the optimizer instead.
+            sched_cfg = train_config['lr_scheduler']
+            scheduler = lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode=sched_cfg.get('mode', 'min'),
+                factor=float(sched_cfg.get('factor', 0.1)),
+                patience=int(sched_cfg.get('patience', 4)))
+            plateau_monitor = sched_cfg.get('monitor', 'loss')
         elif train_config['lr_scheduler']['type'] == 'step':
             gamma = float(train_config['lr_scheduler']['gamma'])
             step_size = int(train_config['lr_scheduler']['step_size'])
@@ -403,11 +510,38 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         logger.info(f'      num_epochs: {num_epochs}')
         logger.info('')
 
+        # Mixed precision, config-gated (`"amp": true`), off by default so every existing
+        # recipe is bit-for-bit unchanged. The RadarCrossAttention reference trains under
+        # torch.cuda.amp.autocast with a GradScaler (train.py:62,107-110,165); measured
+        # here at its batch 16: 1.41 GiB / 0.27 s per iteration against 2.72 GiB / 0.60 s
+        # in fp32. Loss functions built on binary_cross_entropy_with_logits stay in fp32
+        # under autocast, so the sum-reduced losses these models use do not overflow.
+        use_amp = bool(train_config.get('amp', False))
+        if use_amp and device.type != 'cuda':
+            logger.warning("amp requested but no CUDA device -- training in fp32")
+            use_amp = False
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
         # Train
         startEpoch = 0
         global_step = 0
         history = {'train_loss':[],'val_loss':[],'lr':[],'mAP':[],'mAR':[],'mIoU':[]}
         best_mAP = 0
+        # Optional config-driven early stopping, e.g.
+        # {"monitor": "mAP", "mode": "max", "patience": 20} -- monitor "loss" reads
+        # val_loss. Absent from the config means no early stopping (full schedule).
+        early_stop = train_config.get('early_stop')
+        # Optional config-driven checkpoint selection for the FINAL test evaluation,
+        # e.g. {"monitor": "mAP", "mode": "max"}. The RECORD reference tests
+        # trainer.test(..., ckpt_path='best'), i.e. the best epoch by its monitored
+        # metric, not the weights left at loop exit -- with early stopping those differ
+        # by up to `patience` epochs. Absent from the config keeps the final weights,
+        # which is what other families' references do (DAROD's eval.py restores
+        # latest_checkpoint).
+        test_checkpoint = train_config.get('test_checkpoint')
+        best_state = None
+        best_score = None
+        best_state_epoch = None
 
         if pretrained:
             logger.info('===========  Resume training  ==================:')
@@ -418,7 +552,9 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             startEpoch = dict['epoch']+1
             history = dict['history']
             global_step = dict['global_step']
-            logger.info('       ... Start at epoch:',startEpoch)
+            if 'scaler' in dict:
+                scaler.load_state_dict(dict['scaler'])
+            logger.info(f'       ... Start at epoch: {startEpoch}')
 
 
         for epoch in range(startEpoch, num_epochs):
@@ -432,6 +568,17 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             ###################
             net.train()
             running_loss = 0.0
+
+            # Gradient accumulation: `accum` micro-batches of the dataloader's batch_size
+            # compose one effective batch of accum*batch_size. Mirrors PyTorch Lightning's
+            # accumulate_grad_batches, which the reference CARRADA configs set -- including
+            # its loss scaling: PL divides the step loss by the accumulation factor before
+            # backward, so the accumulated gradient is the MEAN over the effective batch,
+            # not its sum. Needed for MVRECORD, which OOMs at the published batch 8 on a
+            # 24 GB card and must run batch 4 x accum 2 to keep the published effective
+            # batch. accum=1 (the default) reproduces the previous behaviour exactly.
+            accum = max(1, int(train_config.get('accumulate_grad', 1) or 1))
+            optimizer.zero_grad()
 
             for iter, data in enumerate(train_loader):
                 for key in data:
@@ -450,30 +597,53 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 else:
                     inputs = {feature: data[feature] for feature in features}
                 logger.debug('get input')
-                optimizer.zero_grad()
-                with torch.set_grad_enabled(True):
+                # Actual sample count of THIS batch -- the final batch is short whenever
+                # the split is not a multiple of batch_size (drop_last is unset), and the
+                # configured value would over-weight it in the epoch mean.
+                if model_type in ('RadarPillar', 'PointPillar'):
+                    n_samples = len(data['frame_ids'])
+                elif len(features) == 1:
+                    n_samples = inputs.shape[0]
+                else:
+                    n_samples = inputs[features[0]].shape[0]
+
+                # The loss is computed inside autocast as well, as the reference does; with
+                # use_amp False the context is a no-op.
+                with torch.set_grad_enabled(True), torch.autocast(device_type='cuda', enabled=use_amp):
                     outputs = net(inputs)
-                logger.debug(f'get net output')
-                # pop out feature data from data dict, keep only label info
-                for feature in features:
-                    data.pop(feature, None)   # RadarPillar batches have no feature-named key
-                loss = net.get_loss(outputs, data, train_config)
+                    logger.debug(f'get net output')
+                    # pop out feature data from data dict, keep only label info
+                    for feature in features:
+                        data.pop(feature, None)   # RadarPillar batches have no feature-named key
+                    loss = net.get_loss(outputs, data, train_config)
                 logger.info(f"Train sample {iter} loss: {loss}")
-                loss.backward()
-                if train_config.get('grad_norm_clip'):
-                    nn.utils.clip_grad_norm_(net.parameters(), float(train_config['grad_norm_clip']))
-                optimizer.step()
-                if step_scheduler_per_iter:
-                    scheduler.step()
-                running_loss += loss.item() * train_config['dataloader']['train']['batch_size']
+                scaler.scale(loss / accum).backward()
+
+                # Step on every accum-th micro-batch, and on the last batch of the epoch so
+                # a trailing partial group is not silently dropped (PL behaves the same).
+                # Clipping belongs at the step boundary, on the fully accumulated gradient.
+                if (iter + 1) % accum == 0 or (iter + 1) == len(train_loader):
+                    if train_config.get('grad_norm_clip'):
+                        # Gradients must be unscaled before their norm means anything.
+                        scaler.unscale_(optimizer)
+                        nn.utils.clip_grad_norm_(net.parameters(), float(train_config['grad_norm_clip']))
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    if step_scheduler_per_iter:
+                        scheduler.step()
+
+                running_loss += loss.item() * n_samples   # unscaled loss, actual batch
                 kbar.update(iter, values=[("loss", loss.item())])
                 global_step += 1
 
-            if not step_scheduler_per_iter:
+            if not step_scheduler_per_iter and plateau_monitor is None:
                 scheduler.step()
 
             history['train_loss'].append(running_loss / len(train_loader.dataset))
-            history['lr'].append(scheduler.get_last_lr()[0])
+            # ReduceLROnPlateau has no get_last_lr() in this torch; the optimizer is the
+            # authority either way (every scheduler writes into its param_groups).
+            history['lr'].append(optimizer.param_groups[0]['lr'])
 
             ######################
             ## validation phase ##
@@ -489,8 +659,29 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             history['mAP'].append(eval['mAP'])
             history['mAR'].append(eval['mAR'])
             history['mIoU'].append(eval['mIoU'])
-            
-            new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU']})
+
+            # Evaluators may report more than the four shared columns -- MVRECORD returns
+            # per-view mIoU, which is the form the reference and the paper report. Carry
+            # whatever else came back so it reaches history and val_eval.csv; the test path
+            # already writes every returned key (from_dict below).
+            extras = {k: v for k, v in eval.items() if k not in ('loss', 'mAP', 'mAR', 'mIoU')}
+            for k, v in extras.items():
+                # Pad when a series starts late (a run resumed from a checkpoint written
+                # before the key existed) so index == epoch stays true for every series --
+                # test_checkpoint below uses argmax(series) AS an epoch index.
+                history.setdefault(k, [None] * (len(history['mAP']) - 1)).append(v)
+
+            if plateau_monitor is not None:
+                # Deferred from the clock-driven position above: step on this epoch's
+                # validation metric. The lr recorded in history for this epoch is the one
+                # the epoch actually trained with; a reduction applies from the next.
+                metric = eval['loss'] if plateau_monitor == 'loss' else eval[plateau_monitor]
+                scheduler.step(metric)
+                if optimizer.param_groups[0]['lr'] != history['lr'][-1]:
+                    logger.info(f"ReduceLROnPlateau: {plateau_monitor} plateaued, lr "
+                                f"{history['lr'][-1]:.3g} -> {optimizer.param_groups[0]['lr']:.3g}")
+
+            new_row = pd.Series({'Epoch': epoch, 'loss': eval['loss'], 'mAP': eval['mAP'], 'mAR': eval['mAR'], 'mIoU': eval['mIoU'], **extras})
             df_val_eval = pd.concat([df_val_eval, pd.DataFrame([new_row])], ignore_index=True)
             
             kbar.add(1, values=[("val_loss", eval['loss']),("mAP", eval['mAP']),("mAR", eval['mAR']),("mIoU", eval['mIoU'])])
@@ -515,11 +706,57 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             checkpoint['epoch'] = epoch
             checkpoint['history'] = history
             checkpoint['global_step'] = global_step
+            checkpoint['scaler'] = scaler.state_dict()
             
             torch.save(checkpoint,filename)
             logger.info(f'Saved checkpoint of epoch {epoch}.')
-        
+
+            if test_checkpoint:
+                score = eval['loss'] if test_checkpoint['monitor'] == 'loss' else eval[test_checkpoint['monitor']]
+                improved = (best_score is None
+                            or (score < best_score if test_checkpoint.get('mode', 'max') == 'min' else score > best_score))
+                if improved:
+                    best_score = score
+                    best_state_epoch = epoch
+                    best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+
+            if early_stop:
+                # Derived from history rather than a running counter so a resumed run
+                # (history restored from the checkpoint) keeps the same stopping point.
+                series = history['val_loss'] if early_stop['monitor'] == 'loss' else history[early_stop['monitor']]
+                best_idx = int(np.argmin(series)) if early_stop.get('mode', 'max') == 'min' else int(np.argmax(series))
+                since_best = len(series) - 1 - best_idx
+                if since_best >= early_stop['patience']:
+                    logger.info(f"Early stopping at epoch {epoch}: no {early_stop['monitor']} improvement "
+                                f"for {since_best} epochs (best at epoch {best_idx}, "
+                                f"patience {early_stop['patience']}).")
+                    break
+
         df_val_eval.to_csv(val_eval_path, index=False)
+
+        if test_checkpoint:
+            monitor = test_checkpoint['monitor']
+            mode = test_checkpoint.get('mode', 'max')
+            series = history['val_loss'] if monitor == 'loss' else history[monitor]
+            best_idx = (int(np.argmin(series)) if mode == 'min' else int(np.argmax(series))) if series else None
+            if best_idx is not None and best_state is not None and best_idx == best_state_epoch:
+                net.load_state_dict(best_state)
+                logger.info(f'Restored best checkpoint for testing: epoch {best_idx} '
+                            f'({monitor}={series[best_idx]:.4f}).')
+            elif best_idx is not None:
+                # Resumed run: the best epoch predates this segment, so those weights
+                # exist only on disk, in the directory the resume checkpoint came from.
+                import glob
+                matches = sorted(glob.glob(os.path.join(os.path.dirname(pretrained),
+                                                        f'{model_type}_epoch{best_idx:02d}_*.pth'))) if pretrained else []
+                if matches:
+                    net.load_state_dict(torch.load(matches[0], map_location=device)['net_state_dict'])
+                    logger.info(f'Restored best checkpoint for testing from {matches[0]} '
+                                f'(epoch {best_idx}, {monitor}={series[best_idx]:.4f}).')
+                else:
+                    logger.warning(f'Best epoch by {monitor} is {best_idx}, whose checkpoint was not found '
+                                   f'(resumed run); testing the final weights instead. The reported test score '
+                                   f'is NOT the reference-faithful best-checkpoint number.')
 
         logger.info(f'=========== Evaluation on Test data ===========')
         if test_loader is None:

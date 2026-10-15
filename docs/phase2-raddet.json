@@ -1,0 +1,23 @@
+[
+  {
+    "id": "RADDet/RADDetDataset",
+    "model": "RADDet",
+    "dataset": "RADDetDataset",
+    "features": [
+      "RAD"
+    ],
+    "num_epochs": 100,
+    "seed": 3,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "RADDet_RADDetDataset_Sep-01-2026_20:49:42",
+    "epochs_recorded": 100,
+    "verdict": "suspect",
+    "notes": [
+      "loss 4.927 -> 5.074 (NOT down)",
+      "metrics non-zero: mAP=0.598"
+    ],
+    "seconds": 27852.0
+  }
+]

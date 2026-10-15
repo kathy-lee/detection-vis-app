@@ -1,0 +1,25 @@
+[
+  {
+    "id": "RadarCrossAttention/CARRADA",
+    "model": "RadarCrossAttention",
+    "dataset": "CARRADA",
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "num_epochs": 80,
+    "seed": 3,
+    "splitmode": "original",
+    "n_datafiles": 30,
+    "status": "ok",
+    "exp_name": "RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01",
+    "epochs_recorded": 80,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.072e+04 -> 9469 (down)",
+      "metrics non-zero: mAP=0.4809"
+    ],
+    "seconds": 4008.8
+  }
+]

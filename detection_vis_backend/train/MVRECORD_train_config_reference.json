@@ -1,0 +1,106 @@
+{
+    "_about": "Published MV-RECORD schedule, from the reference implementation colindecourt/record (configs/carrada/config_mvrecord_carrada.yaml). Kept SEPARATE from MVRECORD_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged from the repo default: lr 1e-3, loss type (wce_w10sdice), win_size 5, norm_type tvt, and the per-view class weights (weight_rd / weight_ra are byte-identical to the reference's weights_config/{rd,ra}_weights.json, and to the RD/RA blocks of RECORD_train_config_reference.json). What differs from the repo default is the schedule -- epochs, batch size, the lr decay period -- plus the transformation and checkpoint-selection notes below.",
+
+    "_scheduler_note": "Same issue as the RECORD family: the reference uses PyTorch Lightning's ExponentialLR(gamma=0.9) with interval 'epoch' and frequency 20 (executors/carrada_trainer.py, matching lr_step: 20 in the yaml). `frequency` means STEP THE SCHEDULER EVERY N EPOCHS. Our train() steps every epoch, so the repo default `{type: exp, gamma: 0.9}` decays 0.9 per epoch instead of per 20, reaching lr 1.47e-26 by epoch 499 against the reference's 7.98e-05. Expressed here as StepLR(step_size=20, gamma=0.9), which is bit-identical to ExponentialLR(gamma=0.9) stepped every 20 epochs and needs no trainer change.",
+
+    "_split_note": "The reference reads data_seq_ref.json and splits on the Train/Validation/Test field; this repo's hardcoded 18/6/6 lists match that file sequence-for-sequence. Same split as the RECORD single-view CARRADA runs, so the three are directly comparable.",
+
+    "_early_stop_note": "The reference early-stops: main_carrada.py:112 uses EarlyStopping(patience=20, mode='max') on `val_metrics/global_prec` for MV-RECORD (against rd_prec/ra_prec for the single-view models, main_carrada.py:97-104). Our evaluator's 'mAP' IS that quantity exactly: the reference computes global_prec = (rd['prec'] + ra['prec'])/2 and get_pixel_prec_class returns prec = np.mean(prec_by_class) (evaluate.py:971), which is term-for-term what MVRECORD_CARRADA_evaluation's mAP averages. Parked as _early_stop_disabled here for the same reason as the RECORD CARRADA blocks -- patience 20 on precision can truncate the run while mIoU is still improving, and can select an under-predicting checkpoint. The reference's rule is applied post hoc to the recorded per-epoch curve instead.",
+
+    "_test_checkpoint_note": "The reference tests with ckpt_path='best' -- the best epoch by its ModelCheckpoint monitor, which for MV-RECORD is the same `val_metrics/global_prec` (main_carrada.py:109). monitor 'mAP' / mode 'max' below is therefore reference-faithful, and is also the rule used for every other row in the ladder.",
+
+    "_transformations_note": "hflip ONLY, for the reason documented at length in RECORD_train_config_reference.json: the reference yaml says `transformations: \"hflip, vflip\"` but main_carrada.py:56 parses it with .split(',') into ['hflip', ' vflip'] -- with a leading space -- and get_transformations tests `'vflip' in transform_names`, which is False for ' vflip'. The published numbers were produced with hflip alone. 'vflip' is parked in _transformations_disabled.",
+
+    "_eval_batch_note": "val/test run at batch 8, matching the reference (main_carrada.py builds its val and test DataLoaders with train_cfg['batch_size'], not 1). Measured ~4x faster than batch 1 on our box -- 9.5 -> 37.5 samples/s -- which on the RA run's shape would have cut validation from 4m16s to ~1m05s per epoch. Two consequences, both checked: (1) mIoU/mAP/mAR are unaffected in substance -- the Evaluator accumulates one global confusion matrix, so every sample is counted once regardless of grouping; the measured drift between batch sizes is ~8e-06 mIoU, pure float non-determinism from batch-shape-dependent kernels, and each batch size is bit-reproducible. (2) The LOSS is not comparable across batch sizes, by construction and on both sides: CrossEntropyLoss(weight=..., reduction='mean') divides by the sum of class weights present in the batch, so batches whose frames differ in class composition do not decompose into per-sample losses (measured: 6 of 25 batches differ, max 0.0153). Do not compare this run's val loss against the batch-1 RD/RA runs' -- compare mIoU.",
+
+    "_metrics_note": "MV-RECORD reports TWO mIoU figures, one per view (paper Table V: 63.2 RD, 44.5 RA), and the reference logs them separately as rd_miou / ra_miou (executors/carrada_trainer.py:191,195 val and 322,326 test), building global_ aggregates for acc/prec/dice ONLY -- never for mIoU. MVRECORD_CARRADA_evaluation returns 'mIoU_rd' and 'mIoU_ra' accordingly; read those against the published pair. The 'mIoU' key it also returns is their mean, kept only for train()'s history/CSV contract, and corresponds to no published number.",
+
+    "default": {
+        "seed": 3,
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 20,
+            "gamma": 0.9
+        },
+        "optimizer": {
+            "lr": 0.001
+        },
+        "num_epochs": 500,
+        "dataloader": {
+            "train": {
+                "batch_size": 8,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 8,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 8,
+                "num_workers": 1
+            }
+        }
+    },
+
+    "CARRADA": {
+        "_src": "config_mvrecord_carrada.yaml: n_epoch 500, batch_size 8, lr 0.001, lr_step 20, loss wce_w10sdice, norm_type tvt, win_size 5",
+        "_accumulate_grad_note": "TRAIN batch is 4 with accumulate_grad 2, NOT the published batch 8 -- MV-RECORD at batch 8 OOMs on a 24 GB 3090 (20.61 GiB allocated at the failure), so the reference anchor run was forced onto 4 x 2 and ours matches it. The product is the published effective batch. It is not identical to a true batch 8: weighted CE normalises by the sum of class weights present in the batch (see _eval_batch_note), so two batches of 4 do not compose into one batch of 8; the gradient direction is close because the model is LayerNorm, which is per-sample. train() divides the step loss by accumulate_grad before backward, matching PyTorch Lightning's accumulate_grad_batches, so the accumulated gradient is the mean over the effective batch rather than its sum. VAL/TEST stay at batch 8 -- no gradients there, so no OOM, and the confusion-matrix metrics are batch-invariant to ~1e-05.",
+        "num_epochs": 500,
+        "accumulate_grad": 2,
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 20,
+            "gamma": 0.9
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 4,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 8,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 8,
+                "num_workers": 1
+            }
+        },
+        "losses": {
+            "type": "wce_w10sdice",
+            "weight_rd": [
+                0.0004236998233593304,
+                0.4749960642363426,
+                0.4175089566101426,
+                0.1070712793301555
+            ],
+            "weight_ra": [
+                0.00012380283547712211,
+                0.49374198702138145,
+                0.4158134117152977,
+                0.09032079842784382
+            ]
+        },
+        "_early_stop_disabled": {
+            "_why": "COMMENTED OUT (rename this key back to 'early_stop' to restore; values below are the reference's, unchanged). See _early_stop_note.",
+            "monitor": "mAP",
+            "mode": "max",
+            "patience": 20
+        },
+        "test_checkpoint": {
+            "monitor": "mAP",
+            "mode": "max"
+        },
+        "win_size": 5,
+        "transformations": [
+            "hflip"
+        ],
+        "_transformations_disabled": [
+            "vflip"
+        ],
+        "norm_type": "tvt",
+        "max_dets": 20,
+        "peak_thres": 0.3,
+        "ols_thres": 0.3
+    }
+}

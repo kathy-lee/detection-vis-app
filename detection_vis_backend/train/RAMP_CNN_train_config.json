@@ -8,8 +8,9 @@
         "gamma": 0.9
     },
     "optimizer": {
-        "lr": 1e-4
+        "lr": 1e-5
     },
+    "lr_notes": "lr 1e-5 from the reference implementation (Xiangyu-Gao/Radar-multiple-perspective-object-detection, config.py rodnet_configs['learning_rate']). It was 1e-4, ten times too high, and the loss diverged: validation loss 66.3 -> 20.8 -> 22.4 -> 31.0 -> 35.7 in one run and 65.7 -> 23.4 -> 26.6 -> 38.5 in another, reproducible across runs that differ only by nondeterminism. At 1e-5 the training loss falls monotonically over 6 epochs (1596 -> 20.2 -> 17.4 -> 15.8 -> 14.5 -> 13.0) with the gradient norm decaying alongside (57510 -> 324). The three loss terms themselves are faithful ports -- _neg_loss, Cont_Loss and balance_cof=4 all match the reference line for line, and the continuity term contributes ~0.006 against focal terms in the hundreds, so it was never implicated. STILL DEVIATING: the reference trains 100 epochs at batch 3 with CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up/down=430) and IS_Steplr=False; train() has no CyclicLR support, so the StepLR below is a stand-in. The reference's own StepLR branch, if ever used, decays with gamma 0.1, not 0.9.",
     "num_epochs":1,
     "dataloader": {
         "splitmode":"",
@@ -40,5 +41,12 @@
     "test_stride": 8,
     "max_dets": 20,
     "peak_thres": 0.2,
-    "ols_thres": 0.2
+    "ols_thres": 0.2,
+
+    "input_norm_notes": "Per-view input standardization, matching the reference, which does it unconditionally (train_dop.py:91 `Norm = True`, applied at :228-234; test.py:17,177-189). Constants derived from OUR UWCR train split by scripts/compute_uwcr_norm.py -- NOT copied from the reference's config.py, whose mean1/std1 were fit to its shipped train_test_data and are ~11000x smaller in scale than slices computed from the public raw ADC. Kept identical to RAMP_CNN_train_config_reference.json's block: unlike the schedule, this is a pipeline correctness fix rather than a choice of recipe, so the two configs should not diverge here. The constants are UWCR-specific; this flat config is only used for the UWCR pair.",
+    "input_norm": {
+        "ra": {"mean": -0.3252922589491787, "std": 328.46442727217163},
+        "rv": {"mean": 442.4675409589698, "std": 1843.6647365109354},
+        "va": {"mean": 715.3170940185574, "std": 1172.1408370423803}
+    }
 }

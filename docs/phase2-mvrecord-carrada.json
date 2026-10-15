@@ -1,0 +1,25 @@
+[
+  {
+    "id": "MVRECORD/CARRADA",
+    "model": "MVRECORD",
+    "dataset": "CARRADA",
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "num_epochs": 100,
+    "seed": 3,
+    "splitmode": "original",
+    "n_datafiles": 30,
+    "status": "ok",
+    "exp_name": "MVRECORD_CARRADA_Aug-30-2026_21:26:56",
+    "epochs_recorded": 45,
+    "verdict": "suspect",
+    "notes": [
+      "loss 0.321 -> 0.4571 (NOT down)",
+      "metrics non-zero: mAP=0.5543, mAR=0.8668, mIoU=0.5353"
+    ],
+    "seconds": 51008.0
+  }
+]

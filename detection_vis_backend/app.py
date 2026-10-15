@@ -19,9 +19,6 @@ from metaflow.exception import MetaflowException
 from pathlib import Path
 from loguru import logger
 
-# import sys
-# sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
-
 from data import crud, schemas
 from data.database import get_session_local
 from detection_vis_backend.datasets.dataset import DatasetFactory

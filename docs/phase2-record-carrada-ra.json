@@ -1,0 +1,23 @@
+[
+  {
+    "id": "RECORD/CARRADA/RA",
+    "model": "RECORD",
+    "dataset": "CARRADA",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 100,
+    "seed": 3,
+    "splitmode": "original",
+    "n_datafiles": 30,
+    "status": "ok",
+    "exp_name": "RECORD_CARRADA_Aug-25-2026_17:28:24",
+    "epochs_recorded": 100,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.911 -> 1.865 (down)",
+      "metrics non-zero: mAP=0.337, mAR=0.7585, mIoU=0.3314"
+    ],
+    "seconds": 60166.3
+  }
+]

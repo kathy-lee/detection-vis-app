@@ -1,5 +1,7 @@
 import rosbag
 import os
+import hashlib
+import inspect
 import struct
 import cv2
 import imageio
@@ -1794,6 +1796,43 @@ class CARRADA(Dataset):
             rd = np.rot90(rd, k=2) # To align with feature display in UI
         return rd
 
+    def get_AD_map(self, idx):
+        """Angle-Doppler map as the RadarCrossAttention reference builds it.
+
+        Line-for-line dataset_process.py:get_admap: inverse FFT over the range axis of
+        the RAD cube, power, sum over range, dB, transpose to (doppler, angle), then the
+        three centre Doppler rows zeroed -- the DC component, mirroring the `[:, 31:34]`
+        columns zeroed in the RD map. float32 (64, 256).
+        """
+        rad = self.get_RAD(idx)
+        ad = np.fft.ifftshift(rad, axes=0)
+        ad = np.fft.ifft(ad, axis=0)
+        ad = pow(np.abs(ad), 2)
+        ad = np.sum(ad, axis=0)
+        ad = 10 * np.log10(ad + 1)
+        ad = np.transpose(ad)
+        ad[31:34, :] = 0
+        return np.float32(ad)
+
+    def _ad_cache_path(self, idx):
+        stem = os.path.splitext(os.path.basename(self.RAD_filenames[idx]))[0]
+        return os.path.join(self.ad_cache_dir, self.seq_name, f"{stem}.npy")
+
+    def _get_ad_cached(self, idx):
+        """get_AD_map memoized on disk; see ad_cache_dir in prepare_for_train."""
+        path = self._ad_cache_path(idx)
+        if os.path.exists(path):
+            return np.load(path)
+        ad = self.get_AD_map(idx)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Atomic: dataloader workers race on the same frame, and a torn .npy would poison
+        # every later epoch -- same pattern as RADDetDataset._get_collapsed.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.save(fh, ad)
+        os.replace(tmp, path)
+        return ad
+
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
 
@@ -1880,13 +1919,35 @@ class CARRADA(Dataset):
         self.model_type = model_cfg['class']
         if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
             self.process_signal = True
-            self.transformations = get_transformations(transform_names=train_cfg['transformations'])
+            # Pass the split: get_transformations only appends the flips when split ==
+            # 'train' (datasets/utils.py:882-887), and its default is 'train'. Calling it
+            # without one therefore augmented val and test as well -- every evaluation
+            # scored the model on randomly flipped spectrums, with each flip firing at
+            # p=0.5 independently, so ~75% of val/test samples were mirrored. The
+            # reference (colindecourt/darod, darod/utils/data_utils.py) flips only in
+            # prepare_dataset(split="train").
+            #
+            # splittype is None only for the 'random' splitmode, where one instance backs
+            # all three splits and there is nothing to distinguish them by; 'train' keeps
+            # that path behaving exactly as before. The 'sequence' and 'original'
+            # splitmodes both build a separate instance per split (train.py:114, 236), so
+            # there the val/test copies now come out clean.
+            self.transformations = get_transformations(transform_names=train_cfg['transformations'],
+                                                       split=splittype or 'train')
             self.add_temp = True
             self.annotation_type = 'dense'
             self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
             self.norm_type = train_cfg['norm_type']
             self.n_class = 4
             self.datasamples_length = self.frame_sync - self.win_frames + 1
+            # DAROD standardizes its input with per-dataset constants (the reference's
+            # darod/utils/data_utils.py). They come from the TRAIN config, not the model
+            # config: model_cfg is splatted into the network constructor (network.py:38),
+            # so it may only hold DAROD.__init__ arguments. The RECORD family uses
+            # norm_type above instead, so these stay None for them and __getitem__ leaves
+            # the input untouched.
+            self.data_mean = train_cfg.get("data_mean")
+            self.data_std = train_cfg.get("data_std")
         elif self.model_type == 'RadarCrossAttention':
             anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
             # new_gt_anno.json has a DIFFERENT schema from the annotations_frame_oriented.json
@@ -1935,6 +1996,34 @@ class CARRADA(Dataset):
             self.gauss_type = train_cfg['gauss_type']
             self.center_offset = model_cfg['center_offset']
             self.orientation = model_cfg['orientation']
+
+            # Per-view input standardization, applied in __getitem__. The reference does it
+            # in Utils/transform.py data_transform(): one torchvision Normalize per view with
+            # a single mean/std, which broadcasts over all T frames -- so one constant pair
+            # per VIEW here too. Ours never did this until 2026-09-07 (the branch carried a
+            # literal `# TODO: normalize`). Constants come from the train config; see the
+            # `_input_norm_note` there for why the reference's own values are used verbatim.
+            self.input_norm = train_cfg.get('input_norm')
+            if not self.input_norm:
+                logger.warning("RadarCrossAttention: no 'input_norm' in train config -- inputs "
+                               "will be fed unnormalized, which the reference never does.")
+            # Train-only augmentation: the reference's noise_add adds N(0, 0.1) to each view
+            # with probability 1/2 (Utils/transform.py:96-102), after normalization. Its
+            # shipped version cannot run (`if random.choice([0,1]) and r_map != 0` on a
+            # tensor raises on every noisy draw); this is what it evidently intends. Absent
+            # from the config -> 0 -> no noise. splittype None means one instance backs all
+            # splits ('random' splitmode); treat it as train, as the RECORD branch does.
+            self.noise_std = (float(train_cfg.get('gauss_noise_std') or 0.0)
+                              if splittype in (None, 'train') else 0.0)
+            # AD maps are derived from the 16 MB RAD cube by an FFT over range -- measured
+            # 254 ms per frame against 10 ms to load the cube -- and recomputed identically
+            # every epoch. Memoized on disk under a hash of the producing code, so an edit to
+            # get_AD_map/get_RAD misses the cache instead of silently serving stale arrays
+            # (same guard as UWCR.frame_cache_dir / RADDetDataset.collapsed_cache_dir).
+            _src = "".join(inspect.getsource(fn) for fn in (CARRADA.get_AD_map, CARRADA.get_RAD))
+            self.ad_cache_dir = os.path.join(
+                os.environ.get("TMP_ROOTDIR", "/tmp"), "carrada_ad_cache",
+                hashlib.sha1(_src.encode()).hexdigest()[:10])
         return
 
     def __len__(self):
@@ -1996,12 +2085,67 @@ class CARRADA(Dataset):
                     gt_labels = []
                     # if self.annos[self.seq_name][init_frame_name]:
                     #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
+                    # DAROD works entirely in normalized [0,1] coordinates (anchors are
+                    # built with steps 1/H, 1/W; Decoder clamps to [0,1]; darod.py's
+                    # roi_delta documents gt_boxes as "normalized format between [0,1]").
+                    # CARRADA annotations are pixel coordinates on the H*W map, e.g.
+                    # [[237,55],[240,57]], so they must be normalized here -- exactly as
+                    # RADDetDataset.__getitem__ already does. Passing pixels straight
+                    # through made IoU(pred, gt) identically 0, hence mAP/mAR of 0.0.
+                    h_dim, w_dim = feature_frame['matrix'].shape[-2], feature_frame['matrix'].shape[-1]
                     if self.annos[init_frame_name]:
                         for obj_anno in self.annos[init_frame_name].values():
-                            #obj_anno['range_doppler']['dense']
-                            gt_boxes.append(obj_anno[featurestr]['box'])
+                            # Box = extent of the DENSE annotation, as the reference builds
+                            # it (colindecourt/darod, datasets/carrada_builder/carrada.py:
+                            # _build_bbox takes min/max over the 'dense' polygon).
+                            #
+                            # This was the annotation's own 'box' field, which is the
+                            # extent of the SPARSE annotation -- a handful of seed points,
+                            # not the object. On sequence 2019-09-16-13-13-01 frame 000037
+                            # the same object measures:
+                            #     'box'/'sparse' -> [85, 39, 88, 40]   (3 x 1 px)
+                            #     'dense'        -> [83, 37, 90, 42]   (7 x 5 px)
+                            # IoU between the two is 0.086, so a correctly trained detector
+                            # scores ~0 against the sparse boxes: the reference's own
+                            # weights, which reproduce its published 0.5583, score only
+                            # 0.1025 through this loader.
+                            #
+                            # It also crippled training. Anchor scales are 0.03-0.12 of a
+                            # 256-bin range axis, i.e. 7.7-30 px, so almost no anchor can
+                            # reach the RPN's 0.3 positive IoU threshold against a 3 x 1 px
+                            # target -- the RPN was learning from nearly no positives.
+                            dense = np.asarray(obj_anno[featurestr]['dense'])
+                            y1, x1 = dense[:, 0].min(), dense[:, 1].min()
+                            y2, x2 = dense[:, 0].max(), dense[:, 1].max()
+                            gt_boxes.append([y1 / h_dim, x1 / w_dim, y2 / h_dim, x2 / w_dim])
                             gt_labels.append(obj_anno[featurestr]['label'])
-                    frame = {self.features[0]: feature_frame['matrix'], 'label': gt_labels, 'boxes': gt_boxes}
+                    # Mirror onto the boxes the flips self.transform already applied to
+                    # the matrix. The boxes come from the annotations, which are never
+                    # flipped, so without this the labels are spatially desynchronised
+                    # from the input on ~75% of samples (each flip fires with p=0.5).
+                    # The reference does both together -- flip_horizontally(spectrums,
+                    # gt_boxes) in darod/utils/data_utils.py adjusts 1.0 - x.
+                    #
+                    # Go by AXIS, not by class name: for CARRADA's (win, H, W) matrix
+                    # HFlip flips axis=1 (range, the y coord) and VFlip flips axis=2
+                    # (doppler, the x coord) -- the opposite of what the names suggest.
+                    # Gate on membership too: transform() only applies a flip when the
+                    # matching class is in self.transformations.
+                    for _t in (self.transformations or []):
+                        if isinstance(_t, HFlip) and is_hflip:
+                            gt_boxes = [[1.0 - y2, x1, 1.0 - y1, x2]
+                                        for (y1, x1, y2, x2) in gt_boxes]
+                        elif isinstance(_t, VFlip) and is_vflip:
+                            gt_boxes = [[y1, 1.0 - x2, y2, 1.0 - x1]
+                                        for (y1, x1, y2, x2) in gt_boxes]
+                    # Standardize, as the reference does in darod/utils/data_utils.py:
+                    #     spectrums = (spectrums - data_mean) / data_std
+                    # CARRADA RD is log-magnitude around 58.5 +- 3.7, so unstandardized
+                    # the network sees an almost constant DC level carrying a tiny signal.
+                    matrix = feature_frame['matrix']
+                    if self.data_mean is not None and self.data_std is not None:
+                        matrix = (matrix - self.data_mean) / self.data_std
+                    frame = {self.features[0]: matrix, 'label': gt_labels, 'boxes': gt_boxes}
             elif len(self.features) > 1:
                 rd_matrices = list()
                 ra_matrices = list()
@@ -2109,17 +2253,22 @@ class CARRADA(Dataset):
                 rd_map_temp[:, 31:34]=0 # removing dc component
                 rd_map[i, ::] = np.float32(rd_map_temp)
 
-                rad_map = self.get_RAD(frame_id)
-                ad_map_temp = np.fft.ifftshift(rad_map, axes=0)
-                ad_map_temp = np.fft.ifft(ad_map_temp, axis=0)
-                ad_map_temp = pow(np.abs(ad_map_temp), 2)
-                ad_map_temp = np.sum(ad_map_temp, axis=0)
-                ad_map_temp = 10*np.log10(ad_map_temp + 1)
-                ad_map_temp = np.transpose(ad_map_temp)
-                ad_map_temp[31:34,:]=0
-                ad_map_temp = np.float32(ad_map_temp)
-                ad_map[i, ::] = ad_map_temp
-            # TODO: normalize rd_map, ad_map, rd_map
+                ad_map[i, ::] = self._get_ad_cached(frame_id)
+
+            # Standardize each view with one constant pair per view (the reference's
+            # torchvision Normalize broadcasts a single mean/std over every frame of the
+            # stack), then the train-only noise. See prepare_for_train for provenance.
+            ra_map = ra_map.astype(np.float32)
+            rd_map = rd_map.astype(np.float32)
+            ad_map = ad_map.astype(np.float32)
+            if self.input_norm:
+                for arr, key in ((ra_map, 'ra'), (rd_map, 'rd'), (ad_map, 'ad')):
+                    arr -= np.float32(self.input_norm[key]['mean'])
+                    arr /= np.float32(self.input_norm[key]['std'])
+            if self.noise_std > 0:
+                for arr in (ra_map, rd_map, ad_map):
+                    if np.random.randint(2):
+                        arr += np.random.normal(0.0, self.noise_std, arr.shape).astype(np.float32)
             raw_index = str(raw_index).zfill(6)
             # These read the new_gt_anno.json schema, which now lives in self.rca_annos rather
             # than overwriting parse()'s self.annos.
@@ -2276,6 +2425,8 @@ class RADDetDataset(Dataset):
 
         if 'transformations' in train_cfg:
             self.transformations = train_cfg['transformations']
+        # Which split this copy serves -- transform() augments the train split only.
+        self.splittype = splittype
 
         if model_cfg["class"] == "RADDet":
             self.model_type = "RADDet"
@@ -2284,43 +2435,156 @@ class RADDetDataset(Dataset):
             self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
         else:
             self.model_type = model_cfg["class"]
-        return 
-    
-    def transform(self, frame, gt_boxes, is_vflip=False, is_hflip=False):
-        func_dict = {
-            'vflip': flip_vertical,
-            'hflip': flip_horizontal
-        }
-        if self.transformations is not None:
-            for transform in self.transformations:
-                frame, gt_boxes = func_dict[transform](frame, gt_boxes)
+        # DAROD standardizes its input: the reference divides the spectrum by the
+        # per-dataset data_mean/data_std (darod/utils/data_utils.py). They live in the
+        # TRAIN config because model_cfg is splatted into the network constructor
+        # (network.py:38) and may only hold DAROD.__init__ arguments. None means "not
+        # configured" -- __getitem__ then leaves the input untouched, as before.
+        self.data_mean = train_cfg.get("data_mean")
+        self.data_std = train_cfg.get("data_std")
+        # Cache under TMP_ROOTDIR, not the dataset dir: the dataset lives on an external
+        # disk that may be mounted read-only, and this is derived data.
+        #
+        # The path carries a hash of the code that PRODUCES the collapsed maps, so editing
+        # any of them misses the cache instead of silently serving values computed by the
+        # old code. A stale numerical cache is a silent-wrong-answer failure -- the run
+        # completes, the metric is simply wrong, and nothing in the output says so. Same
+        # guard as UWCR.frame_cache_dir; this one is the reason that comment exists.
+        #
+        # complexTo2Channels is included because it is the actual transform (log10(|.|^2+1));
+        # get_RAD because it decides what is read off disk. Hash only what feeds the cached
+        # ARRAY -- not __getitem__, whose later steps (DAROD's data_mean/data_std, the flip
+        # augmentation) run downstream of the cache on every read and so cannot go stale.
+        _src = "".join(inspect.getsource(fn) for fn in
+                       (RADDetDataset._get_collapsed, RADDetDataset.get_RAD,
+                        complexTo2Channels))
+        self.collapsed_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
+        return
+
+    def transform(self, frame, gt_boxes):
+        """Random flip augmentation, matching the reference's data_preprocessing
+        (colindecourt/darod, darod/utils/data_utils.py): one uniform draw per sample,
+        < 0.25 -> horizontal, < 0.5 -> vertical, otherwise unchanged. Never both, and
+        only on the train split.
+
+        This used to apply EVERY entry of self.transformations to EVERY sample: the
+        is_vflip/is_hflip parameters were accepted and never read, and the sole caller
+        passed neither. With transformations ["hflip", "vflip"] that meant both flips
+        on every frame of train, val AND test -- a deterministic 180 degree rotation of
+        the whole dataset rather than augmentation, with no stochastic regularization at
+        all. Both 75-epoch seeds overfit accordingly (val loss 0.35 -> 0.47, val mAP
+        peaking around epoch 62 of 75).
+        The permanent mirroring also fed RadarFeatures wrong physics: it converts box
+        coordinates to range/Doppler via range_res/doppler_res, so a target at range r
+        was reported to the classifier as R - r.
+        """
+        if not self.transformations:
+            return frame, gt_boxes
+        # splittype is None only if a caller builds one instance for every split; treat
+        # that as train to preserve the previous default rather than silently drop
+        # augmentation. CreateDataLoaders builds a copy per split (train.py).
+        if self.splittype not in (None, 'train'):
+            return frame, gt_boxes
+        r = np.random.uniform(0, 1)
+        if r < 0.25 and 'hflip' in self.transformations:
+            frame, gt_boxes = flip_horizontal(frame, gt_boxes)
+        elif r < 0.5 and 'vflip' in self.transformations:
+            frame, gt_boxes = flip_vertical(frame, gt_boxes)
         return frame, gt_boxes
     
     def __len__(self):
         return self.frame_sync
 
+    def _collapsed_cache_path(self, index, feature_name):
+        stem = os.path.splitext(os.path.basename(self.RAD_filenames[index]))[0]
+        return os.path.join(self.collapsed_cache_dir, feature_name, f"{stem}.npy")
+
+    def _get_collapsed(self, index, feature_name):
+        """Sum-of-logs spectrum collapsed to 2D, memoized on disk.
+
+        DAROD consumes a 256x64 RD map (64 KB) but the frame on disk is a 256x256x64
+        complex RAD cube (33 MB), so every epoch re-read ~500x the data it uses and
+        recomputed the identical sum. That is the whole reason a RADDetDataset epoch
+        measured 2709 s against CARRADA's 28.9 s. Caching the collapsed map costs one
+        pass over the dataset (~1 epoch) and ~640 MB for ~10k frames.
+
+        Only the DAROD path benefits: the RADDet model consumes the full cube.
+        """
+        path = self._collapsed_cache_path(index, feature_name)
+        if os.path.exists(path):
+            return np.load(path)
+        RAD_log = complexTo2Channels(self.get_RAD(index))  # log10(|RAD|^2 + 1)
+        axis = 1 if feature_name == "RD" else -1  # collapse azimuth / doppler
+        arr = np.sum(RAD_log, axis=axis).astype(np.float32)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write atomically: dataloader workers can race on the same frame, and a torn
+        # .npy would poison every later epoch. Pass a file object so np.save does not
+        # append its own .npy to the temp name.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.save(fh, arr)
+        os.replace(tmp, path)
+        return arr
+
     def __getitem__(self, index):
-        RAD_complex = self.get_RAD(index)
-        # Gloabl Normalization
-        RAD_data = complexTo2Channels(RAD_complex)
-        RAD_data = (RAD_data - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
-        
         with open(self.anno_filenames[index], "rb") as f:
             gt_instances = pickle.load(f)
 
         if self.model_type == "RADDet":
+            RAD_complex = self.get_RAD(index)
+            # Gloabl Normalization
+            RAD_log = complexTo2Channels(RAD_complex)
+            RAD_data = (RAD_log - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
             # decode ground truth boxes to YOLO format
             gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
             feature_data = RAD_data
             feature_data = np.transpose(feature_data, (2, 0, 1))
             feature_name = "RAD"
         elif self.model_type == "DAROD":
+            # Reference (colindecourt/darod, datasets/raddet_builder/raddet.py) builds the
+            # spectrum as a SUM OF LOGS over the collapsed axis:
+            #     complexTo2channels(RAD) = log10(|RAD|^2 + 1)  then  getSumDim(axis)
+            # get_RD/get_RA instead return 10*log10(sum(|RAD|^2)) -- a log OF a sum, which
+            # is dominated by the single strongest bin and is a different representation
+            # of the scene, not a rescaling of the same one. Measured mean 58.8 against
+            # the reference's 830.4 (config_raddet.json data_mean; note 256 *
+            # global_mean_log = 830.4 exactly, confirming the sum-of-logs reading).
+            # get_RD/get_RA are left alone because the visualization path uses them.
+            #
+            # The collapsed map is cached on disk pre-standardization, so changing
+            # data_mean/data_std does not invalidate it -- see _get_collapsed.
             if self.features == ["RD"]:
-                feature_data = self.get_RD(index)
-                feature_name = "RD"
+                feature_name = "RD"                      # collapse azimuth -> (range, doppler)
             elif self.features == ["RA"]:
-                feature_data = self.get_RA(index)
-                feature_name = "RA"
+                feature_name = "RA"                      # collapse doppler -> (range, azimuth)
+            feature_data = self._get_collapsed(index, feature_name)
+
+            # The reference normalizes the RAD cube ELEMENTWISE BEFORE collapsing
+            # (datasets/raddet_builder/raddet.py:91 -> :99):
+            #     RAD = (log10(|RAD|^2 + 1) - global_mean_log) / global_variance_log
+            #     RD  = sum over the azimuth axis
+            # which, since the cache holds the raw sum S, is (S - n*mean) / variance for
+            # n the number of collapsed bins (256 azimuth for RD, 64 doppler for RA).
+            # Only then does data_utils.py standardize by data_mean/data_std.
+            #
+            # We used to skip straight to the standardization, giving 0.010723*S - 8.9049
+            # against the reference's 0.0015684*S - 10.2072: 6.8x their dynamic range and
+            # a different offset. I had dismissed that as harmless on the grounds that the
+            # first conv is linear and GroupNorm follows it, so a positive affine transform
+            # washes out -- wrong, because the conv bias and the per-channel constants do
+            # not scale with the signal, so GroupNorm does not restore equivalence.
+            # Measured: the reference's own trained weights score mAP 0.0031 through this
+            # loader with the old scaling, against 0.4414 from its own eval.py.
+            n_collapsed = 256 if feature_name == "RD" else 64   # RADDet RAD is (256, 256, 64)
+            feature_data = ((feature_data - n_collapsed * self.data_stats["global_mean_log"])
+                            / self.data_stats["global_variance_log"])
+
+            # Standardize, as the reference does in darod/utils/data_utils.py:
+            #     spectrums = (spectrums - data_mean) / data_std
+            if self.data_mean is not None and self.data_std is not None:
+                feature_data = (feature_data - self.data_mean) / self.data_std
 
             x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
             boxes = gt_instances["boxes"]
@@ -2688,6 +2952,44 @@ class UWCR(Dataset):
             rd = np.abs(rd[:, 0, :])
         return rd
 
+    def _frame_slices_cache_path(self, frameid):
+        stem = os.path.splitext(os.path.basename(self.radar_filenames[frameid]))[0]
+        return os.path.join(self.frame_cache_dir, self.seq_name, f"{stem}.npz")
+
+    def get_frame_slices(self, frameid):
+        """The six 2D slices __getitem__ consumes, memoized on disk.
+
+        get_RA and get_RV_VA_slice both call get_RD, which loads a .mat and runs the range
+        FFT, and then each runs its own angle/Doppler FFTs in Python loops. All of it is
+        recomputed identically every epoch: ~17 s per training step through the DataLoader
+        against ~3 s when the tensors are already in memory, which is why one epoch of 56
+        batches takes ~10 min. The slices actually consumed are two chirps of RA plus two
+        channels each of RV and VA -- ~512 KB per frame against the 4.2 MB complex cube.
+
+        Cached BEFORE windowing and augmentation, so window/stride config changes do not
+        invalidate it. Only the RAMP_CNN path uses this; the visualization path still calls
+        get_RA/get_RV_VA_slice directly.
+
+        :return: (ra_chirp0, ra_chirp128, rv0, rv1, va0, va1)
+        """
+        path = self._frame_slices_cache_path(frameid)
+        if os.path.exists(path):
+            z = np.load(path)
+            return (z["ra0"], z["ra128"], z["rv0"], z["rv1"], z["va0"], z["va1"])
+        ra = self.get_RA(frameid)
+        rv, va = self.get_RV_VA_slice(frameid)
+        out = dict(ra0=np.float32(ra[:, :, 0, :]), ra128=np.float32(ra[:, :, 128, :]),
+                   rv0=np.float32(rv[:, :, 0]), rv1=np.float32(rv[:, :, 1]),
+                   va0=np.float32(va[:, :, 0]), va1=np.float32(va[:, :, 1]))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Atomic: dataloader workers race on the same frame, and a torn .npz would poison
+        # every later epoch -- same reasoning as RADDetDataset._get_collapsed.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.savez(fh, **out)
+        os.replace(tmp, path)
+        return (out["ra0"], out["ra128"], out["rv0"], out["rv1"], out["va0"], out["va1"])
+
     def get_RV_VA_slice(self, idx=None, for_visualize=False):
         data = self.get_RD(idx)
         # RV slice
@@ -2833,12 +3135,50 @@ class UWCR(Dataset):
             self.step = train_cfg['test_step']
             self.stride = train_cfg['test_stride']
 
+        # Cache dir for get_frame_slices. Under TMP_ROOTDIR, not the dataset dir: the
+        # dataset disk may be read-only and this is derived data.
+        #
+        # The path carries a hash of the code that PRODUCES the slices, so editing any of
+        # get_RD/get_RA/get_RV_VA_slice misses the cache instead of silently serving
+        # values computed by the old code. A stale numerical cache is a silent-wrong-answer
+        # failure, which is the hardest kind to notice. RADDetDataset.collapsed_cache_dir
+        # is guarded the same way.
+        _src = "".join(inspect.getsource(fn) for fn in
+                       (UWCR.get_RD, UWCR.get_RA, UWCR.get_RV_VA_slice))
+        self.frame_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "uwcr_frame_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
+
+        # Per-view input standardization, applied in __getitem__.
+        #
+        # The reference does this unconditionally: train_dop.py:91 sets `Norm = True` as a
+        # plain local in main() -- no flag, no config override -- and applies it to all
+        # three views at :228-234; test.py does the same at :17 and :177-189, which is what
+        # prints the "finished ra normalization" lines in the reference README's own sample
+        # output (:98-99). We did not, until 2026-09-05.
+        #
+        # Constants live in the train config and are DERIVED FROM OUR TRAIN SPLIT by
+        # scripts/compute_uwcr_norm.py, never copied from the reference's config.py --
+        # those were fit to its shipped train_test_data, which is a different vintage
+        # ~11000x smaller in scale (see that script's docstring for why train_test_data
+        # cannot be used as ground truth here).
+        #
+        # NOT folded into get_frame_slices: that would put the constants inside the source
+        # hashed for frame_cache_dir above, so every constant change would invalidate 7.5 GB
+        # of cache for an elementwise affine map. Normalizing at consumption also mirrors
+        # the reference, which normalizes in the train loop after loading.
+        self.input_norm = train_cfg.get('input_norm')
+        if not self.input_norm:
+            # Loud, because silently training unnormalized is exactly the bug this fixes.
+            logger.warning("UWCR: no 'input_norm' in train config -- inputs will be fed "
+                           "unnormalized, which the RAMP-CNN reference never does.")
+
         n_frame = self.frame_sync
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
         self.noise_channel = False
-        return 
+        return
 
     def __len__(self):
         return self.datasamples_length
@@ -2857,24 +3197,54 @@ class UWCR(Dataset):
         for idx, frameid in enumerate(range(data_id, data_id + self.win_size * self.step, self.step)):
             # load ra slice
             # format of radar_npy_win_ra [chirp, range, angle, real/imag]
-            ra = self.get_RA(idx)
-            radar_npy_win_ra[idx * 2, :, :, :] = ra[:, :, 0, :]
-            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra[:, :, 128, :]
+            # frameid, NOT idx. idx is the position WITHIN the window (0..win_size-1), so
+            # every sample in the dataset loaded the same first win_size frames while the
+            # labels below correctly used frameid = data_id + idx*step. Verified: samples
+            # 0, 1 and 5 returned byte-identical RA/RD/AD while their confmap_gt differed.
+            # The model was therefore asked to predict 110 different label maps from one
+            # constant input; the best fit is the average label map, a broad smear with no
+            # local maxima, which is why the loss fell while detect_peaks found nothing and
+            # mAP stayed at 0. It also explains why a single batch overfits fine -- one
+            # batch has one label, so a constant input maps to it consistently.
+            # The reference indexes both by frame (Xiangyu-Gao/Radar-multiple-perspective-
+            # object-detection, dataLoader/CRDatasets.py:97-110: np.load(path % (chirp_id,
+            # frameid))).
+            # Same six slices as before, served from the on-disk cache -- see
+            # get_frame_slices for why the memoization sits here rather than inside
+            # get_RA (its full return is 33 MB/frame; the two chirps used are 0.26 MB).
+            ra0, ra128, rv0, rv1, va0, va1 = self.get_frame_slices(frameid)
+            radar_npy_win_ra[idx * 2, :, :, :] = ra0
+            radar_npy_win_ra[idx * 2 + 1, :, :, :] = ra128
             # load rv slice
             # format of radar_npy_win_rv [chirp, range, velocity, real]
-            rv, va = self.get_RV_VA_slice(idx)
-            radar_npy_win_rv[idx * 2, :, :, 0] = rv[:, :, 0]
-            radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv[:, :, 1]
+            radar_npy_win_rv[idx * 2, :, :, 0] = rv0
+            radar_npy_win_rv[idx * 2 + 1, :, :, 0] = rv1
             # load va slice
             # format of radar_npy_win_rv [chirp, angle, velocity, real]
-            radar_npy_win_va[idx * 2, :, :, 0] = va[:, :, 0]
-            radar_npy_win_va[idx * 2 + 1, :, :, 0] = va[:, :, 1]
+            radar_npy_win_va[idx * 2, :, :, 0] = va0
+            radar_npy_win_va[idx * 2 + 1, :, :, 0] = va1
             # label file: [uid, class, px, py, wid, len]
             obj_in_frame = []
             try:
                 labels = pd.read_csv(self.label_filenames[frameid], header=None).values.tolist()
                 n_obj = len(labels)
                 for obj in labels:
+                    # SKIP unmapped class ids rather than raising. The reference does
+                    # exactly this (convert_annotations.py:50-53:
+                    #   if int(line[1]) in release_dataset_label_map: ... else: continue)
+                    # and its release_dataset_label_map has the same six keys as
+                    # self.label_map -- 0/2/3/5/7/80. The public UWCR labels also contain
+                    # class id 1, which is in NEITHER map: 100 rows in 2019_05_09_mlms003
+                    # and 6 in 2019_05_09_bm1s007, 106 in the 22 sequences. Indexing
+                    # label_map directly raised KeyError on those, and the enclosing
+                    # `except` catches only pd.errors.EmptyDataError, so the exception
+                    # propagated and killed the dataloader -- i.e. two of the 22 sequences
+                    # could not be loaded at all. Never seen before because every run so
+                    # far used a 3-sequence smoke split that excluded both.
+                    # (Unmapped NAMES are already safe: get_class_id returns -1000, the
+                    # reference's 'noise' id, for 'motorbike' and 'bus'.)
+                    if int(obj[1]) not in self.label_map:
+                        continue
                     category = self.label_map[int(obj[1])]
                     # class_id = self.class_ids[category]
                     x = obj[2]
@@ -2886,9 +3256,35 @@ class UWCR(Dataset):
                     if angle > self.radar_cfg['ra_max'] or angle < self.radar_cfg['ra_min']:
                         continue
                     rng_idx, _ = find_nearest(self.rng_grid, distance)
-                    agl_idx, _ = find_nearest(self.agl_grid, angle)
+                    # radians: self.agl_grid comes from confmap2ra(..., radordeg='rad')
+                    # (our default; the reference's default is 'deg'), so it spans
+                    # [-1.5708, 1.5708] while `angle` above is in DEGREES. Feeding degrees
+                    # to find_nearest clamped every object to an endpoint: +40 deg -> bin
+                    # 127, -30 deg -> bin 0, and only targets within +-1.57 DEGREES of
+                    # boresight landed anywhere in between. Measured on the train split:
+                    # 384 of 640 gt peaks at angle 127, 238 at angle 0, 18 elsewhere.
+                    # detect_peaks only scans columns 2..125 (it needs a full 3x5
+                    # neighbourhood), so those labels were unscoreable and RAMP_CNN's
+                    # mAP/mAR were pinned at 0 while the model trained happily on them.
+                    # The sibling RA-label path already does this correctly via
+                    # ra2idx(distance, math.radians(angle), ...).
+                    agl_idx, _ = find_nearest(self.agl_grid, math.radians(angle))
                     obj_in_frame.append([rng_idx, agl_idx, category])
-                confmap_gt_in_frame = generate_confmap(n_obj, obj_in_frame, self.radar_cfg)
+                # len(obj_in_frame), NOT n_obj. n_obj counts every ROW of the label file,
+                # but three paths above skip a row without appending to obj_in_frame: the
+                # unmapped-class-id guard, the rr_min/rr_max range filter and the
+                # ra_min/ra_max angle filter. Whenever any object fell outside the radar's
+                # limits, n_obj exceeded len(obj_in_frame) and generate_confmap's
+                # `for objid in range(n_obj): ... obj_info[objid]` ran off the end with
+                # IndexError, killing the dataloader worker. The reference has no such
+                # parameter at all -- its generate_confmap(obj_info, ...) iterates the list
+                # directly (utils/confidence_map.py:30, `for rng_idx, agl_idx, class_id in
+                # obj_info`) -- so deriving the count from the list is what it does too.
+                # Latent until now: every previous run used a 3-sequence smoke split whose
+                # objects all fell inside the range/angle limits. The CRUW call site
+                # (utils.py:594) keeps passing its own n_obj, which comes from the
+                # metadata's n_objects against parallel dict lists and is authoritative.
+                confmap_gt_in_frame = generate_confmap(len(obj_in_frame), obj_in_frame, self.radar_cfg)
                 confmap_gt_in_frame = normalize_confmap(confmap_gt_in_frame)
                 confmap_gt_in_frame = add_noise_channel(confmap_gt_in_frame, self.radar_cfg)
                 assert confmap_gt_in_frame.shape == (self.n_class + 1, self.radar_cfg['ramap_rsize'], self.radar_cfg['ramap_asize'])
@@ -2899,6 +3295,17 @@ class UWCR(Dataset):
             confmap_gt[idx, :, :, :] = confmap_gt_in_frame
             obj_info.append(obj_in_frame)
             
+        # Standardize each view. One constant pair per VIEW, pooled over that view's
+        # channels -- the reference's `data[ib, :] = (data[ib, :] - mean1) / std1` hits the
+        # whole RA tensor including both the real and the imaginary channel, so RA is not
+        # standardized per channel here either. See prepare_for_train for provenance.
+        if self.input_norm:
+            for arr, key in ((radar_npy_win_ra, 'ra'),
+                             (radar_npy_win_rv, 'rv'),
+                             (radar_npy_win_va, 'va')):
+                arr -= np.float32(self.input_norm[key]['mean'])
+                arr /= np.float32(self.input_norm[key]['std'])
+
         radar_npy_win_ra = np.transpose(radar_npy_win_ra, (3, 0, 1, 2))
         radar_npy_win_rv = np.transpose(radar_npy_win_rv, (3, 0, 1, 2))
         radar_npy_win_va = np.transpose(radar_npy_win_va, (3, 0, 1, 2))

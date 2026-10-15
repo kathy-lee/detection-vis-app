@@ -6,10 +6,6 @@ from torchvision.transforms.transforms import Sequence
 from abc import abstractmethod
 from loguru import logger
 
-
-# import sys
-# sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
-
 from detection_vis_backend.networks.fftradnet import FPN_BackBone, RangeAngle_Decoder, Detection_Header, BasicBlock, FocalLoss
 from detection_vis_backend.networks.rodnet import RadarVanilla, RadarStackedHourglass_HG, RadarStackedHourglass_HGwI, DeformConvPack3D, MNet, SmoothCELoss
 from detection_vis_backend.networks.record import RecordEncoder, RecordDecoder, RecordEncoderNoLstm, SoftDiceLoss
@@ -755,7 +751,10 @@ class DAROD(nn.Module):
         self.dilation_rate = dilation_rate
         self.range_res = range_res
         self.doppler_res = doppler_res
-        self.anchors = self.anchors_generation()
+        # self.anchors stays the TRAIN set: it also feeds calculate_rpn_actual_outputs in
+        # get_loss, which the reference always runs against train-time anchors.
+        self.anchors = self.anchors_generation(train=True)
+        self.anchors_eval = self.anchors_generation(train=False)
         self.n_class = n_class
 
         if self.use_bn:
@@ -793,7 +792,8 @@ class DAROD(nn.Module):
 
         # Fast RCNN
         self.roi_bbox = RoIBBox(self.anchors, self.fastrcnn_cfg["pre_nms_topn_train"], self.fastrcnn_cfg["pre_nms_topn_test"], 
-                                self.fastrcnn_cfg["post_nms_topn_train"], self.fastrcnn_cfg["post_nms_topn_test"], self.rpn_cfg["rpn_nms_iou"], self.rpn_cfg["variances"])
+                                self.fastrcnn_cfg["post_nms_topn_train"], self.fastrcnn_cfg["post_nms_topn_test"], self.rpn_cfg["rpn_nms_iou"], self.rpn_cfg["variances"],
+                                anchors_eval=self.anchors_eval)
         self.radar_features = RadarFeatures(self.input_size, self.range_res, self.doppler_res )
         self.roi_pooled = RoIPooling(self.fastrcnn_cfg["pooling_size"])
 
@@ -834,7 +834,11 @@ class DAROD(nn.Module):
         roi_pooled_out = self.roi_pooled(x, roi_bboxes_out)
         logger.debug(f"roi_pooled module outputs roi_pooled_out: {roi_pooled_out.shape}")
 
-        output = roi_pooled_out.view(roi_pooled_out.size(0), roi_pooled_out.size(1), -1) # need to adjust
+        # reshape, not view: RoIPooling returns (B, n, pool_h, pool_w, C) -- channels last,
+        # as the reference's crop_and_resize does -- which is a permuted (non-contiguous)
+        # tensor. Flattening in that order also reproduces the reference's feature
+        # ordering into frcnn_fc1.
+        output = roi_pooled_out.reshape(roi_pooled_out.size(0), roi_pooled_out.size(1), -1)
         features = self.radar_features(roi_bboxes_out, roi_bboxes_scores)
         output = torch.cat([output, features], dim=-1)
 
@@ -864,7 +868,7 @@ class DAROD(nn.Module):
         return {"rpn_cls_pred": rpn_cls_pred, "rpn_delta_pred": rpn_delta_pred, "roi_bboxes_out": roi_bboxes_out,
                 "frcnn_cls_pred": frcnn_cls_pred, "frcnn_reg_pred": frcnn_reg_pred, "decoder_output": decoder_output}
 
-    def anchors_generation(self,):
+    def anchors_generation(self, train=True):
         """
         Generating anchors boxes with different shapes centered on
         each pixel.
@@ -902,14 +906,34 @@ class DAROD(nn.Module):
 
         # Each center point will have `boxes_per_pixel` number of anchor boxes, so
         # generate a grid of all anchor box centers with `boxes_per_pixel` repeats
-        out_grid = torch.repeat_interleave(torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1), boxes_per_pixel, dim=0)
+        #
+        # Centre order is [y, x, y, x], matching the [y1, x1, y2, x2] box convention used
+        # everywhere else (gt boxes, get_deltas_from_bboxes, generate_iou_map). It was
+        # [x, y, x, y], which paired the w-axis centre with the y column: with
+        # torch.meshgrid's 'ij' indexing that places the anchor for flat index (h, w, a)
+        # on feature-map cell (w, h) -- the grid transposed. A square 32x32 feature map
+        # hides it in the values (center_h and center_w are the same array), so the
+        # anchor SET looked right while every anchor pointed at the wrong cell, and the
+        # RPN's deltas were applied to anchors elsewhere in the map.
+        # Verified: with this order the anchors match the reference implementation's
+        # bbox_utils.anchors_generation bit-for-bit (max|err| = 0 over all 5120).
+        out_grid = torch.repeat_interleave(torch.stack([shift_y, shift_x, shift_y, shift_x], dim=1), boxes_per_pixel, dim=0)
         output = out_grid + anchor_manipulation
-        # if train:
-        mask = ((output <= 0.0) | (output >= 1.0)).any(dim=-1, keepdim=True)
-        mask_expanded = mask.expand_as(output)
-        output[mask_expanded] = 0.0
-        # else:
-        #     output = torch.clamp(output, min=0.0, max=1.0)
+        # Train and inference use DIFFERENT anchor sets, and the else-branch below was
+        # commented out, so every mode got the training one. The reference
+        # (colindecourt/darod, darod/utils/bbox_utils.py:44-49) zeroes any anchor that
+        # touches the border during training, but CLIPS to [0, 1] at inference -- and
+        # builds the two sets from separate calls (train.py:51 train=True, eval.py:44
+        # train=False). Zeroed anchors are degenerate: the RPN's deltas are applied to a
+        # box at the origin with zero width and height, so every border anchor produced a
+        # junk proposal at test time. Measured on one test frame: 662 proposals survived
+        # NMS against the reference's 603, and the sets did not agree.
+        if train:
+            mask = ((output <= 0.0) | (output >= 1.0)).any(dim=-1, keepdim=True)
+            mask_expanded = mask.expand_as(output)
+            output[mask_expanded] = 0.0
+        else:
+            output = torch.clamp(output, min=0.0, max=1.0)
         return output
 
     def init_lossfunc(self, config, device):

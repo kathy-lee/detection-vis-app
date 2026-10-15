@@ -1,0 +1,101 @@
+{
+    "_about": "Published RAMP-CNN schedule, from the reference implementation Xiangyu-Gao/Radar-multiple-perspective-object-detection (config.py). Kept SEPARATE from RAMP_CNN_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over from the repo default: lr 1e-5, win_size 16, train/test stride 8, peak_thres 0.2, ols_thres 0.2, max_dets 20, and the three loss terms (_neg_loss, Cont_Loss, balance_cof=4), which the Phase 1 audit found to be faithful ports line for line.",
+
+    "_not_a_reproduction": "A RUN FROM THIS CONFIG IS A REGRESSION BASELINE, NOT A REPRODUCTION, and its number must never be written against the published 81.23/84.25. The reason is the data, not the config: the author confirms in issue #16 that all 22 sequences in the public Automotive/ folder are TRAINING data for the published model, and that the only test-side sequence is 2019_05_28_pm2s012 (which is not in Automotive/ at all). The paper also trained and tested on 92,296 frames against the release's 19,754. So any test set drawn from the public data consists of frames the published model trained on. What this config does measure honestly is THIS REPO's RAMP_CNN on data it has genuinely not seen. See the RAMP_CNN section of docs/training-validation-baselines.md.",
+
+    "_split_note": "The split is NOT set here -- smoke_sweep's build_split supplies it for `--split original` (14 train / 3 val / 5 test, held out BY CAPTURE DATE with 2019_05_29 as test). Held out by date rather than by sequence because sequences from one session share weather, sensor placement and often the same physical objects, so a per-sequence split leaks. It is stratified on measured class counts; the name prefixes encode object composition (p=pedestrian, b=bike, c=car/cyclist, m/s=moving/static), not scene, so Table III's parking-lot / curbside / on-road breakdown cannot be reconstructed. 2019_05_28_pm2s012 is deliberately excluded: it exists only as pre-converted RA/RV/VA slices and would enter through a different data path than the 22 raw sequences.",
+
+    "_schedule_choice_note": "This config carries the REPO's schedule (config.py), not the PAPER's, and that is a deliberate choice. The paper (§VI-C) uses a two-phase recipe: cyclic 5e-6 to 5e-5 at batch 5 for 10 epochs, then StepLR from 5e-6 decaying 0.2 every 5 epochs at batch 4 for 24 more -- 34 epochs total, at 5x the repo's learning rates, with the batch size changing between phases. train() has no two-phase support and would need a mid-run batch change. Since the published number is unreachable regardless (see _not_a_reproduction), schedule fidelity buys nothing here, and the repo's single-phase cyclic schedule is already supported. Recorded so nobody later mistakes this for the paper's recipe.",
+
+    "_scheduler_note": "The reference runs CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up=430, step_size_down=430) with IS_Steplr=False. CyclicLR is a per-BATCH schedule by construction -- step_size_up counts optimizer steps, not epochs -- so train()'s `cyclic` type steps it per iteration, alongside OneCycleLR. Note cycle_momentum is forced False: it defaults True and then requires a 'momentum' key in the optimizer's param_groups, which Adam does not have (torch raises ValueError at construction). Verified: lr rises 1e-6 -> 1e-5 over steps 0-430, falls back by 860, peaks again at 1290. Until 2026-09-02 this pair had no cyclic support and RAMP_CNN_train_config.json used StepLR(10, 0.9) as a stand-in, which decays monotonically instead of oscillating; the reference's own StepLR branch, unused here, decays with gamma 0.1 rather than 0.9.",
+
+    "_split_gap_resolved": "RESOLVED as unrecoverable, 2026-09-02. `dataloader.split_sequence` below stays EMPTY -- build_split overwrites it. Original note kept for the record: Phase 0 recorded published scores and eval protocols but not data splits, and the paper's train/test division was not in either released repo. It turned out there was nothing to find: the paper's split is over data that was never released. (Note resolve_configs only strips `_`-prefixed keys at the TOP level, so notes cannot live inside the dataloader block.) Phase 0 recorded published scores and eval protocols but not data splits, and the RAMP-CNN paper's train/test division of the 22 UWCR sequences is not in this repo. The Phase 1 result (mAP 0.9295) used a 3-sequence smoke split with a SINGLE validation sequence -- mAR reached 1.0000 at several epochs, so it was probably an easy one -- and is not comparable to the published 81.23/84.25, which is the full dataset. Recovering the split needs the reference repo, which is not checked out locally. Leaving `split_sequence` empty here rather than inventing one.",
+
+    "_metrics_note": "AP/AR with a SIZE-ADAPTIVE DISTANCE threshold and CFAR peak extraction at 0.2 -- not IoU. Published per scene: ParkingLot 97.38/98.37, Curbside 79.25/84.21, On-road 57.07/64.85, overall 81.23/84.25 (Table III). Nighttime data is test-only and is NOT scored numerically in the paper, so any overall figure that includes it is not comparable. RAMP_CNN_evaluation returns mAP and mAR; its mIoU is structurally absent, not collapsed.",
+
+    "_metric_is_a_threshold_note": "detect_peaks requires a strict local maximum in a 3x5 window, so mAP stays at EXACTLY 0 until the predicted confmap sharpens past that bar, then rises steeply: 0.0000 through epoch 7, 0.1833 at 8, ~0.15 at 10-11, 0.5761 at 12, 0.9103 at 13, 0.9295 at 19. Every attempt before Phase 1 ran 6 epochs, entirely inside the flat region. A zero from a short run means 'not yet', never 'broken' -- do not stop this pair early on a zero.",
+
+    "_batch_size_note": "batch 3, the reference's, not the repo default's 4. Unlike RADDet this is not tied to a step-counted schedule threshold, but step_size_up=430 IS counted in optimizer steps, so the batch size determines how many epochs one half-cycle spans.",
+
+    "default": {
+        "seed": 3,
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.00001
+        },
+        "lr_scheduler": {
+            "type": "cyclic",
+            "base_lr": 0.000001,
+            "max_lr": 0.00001,
+            "step_size_up": 430,
+            "step_size_down": 430
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        }
+    },
+
+    "UWCR": {
+        "_src": "config.py: n_epoch 100, batch_size 3, learning_rate 1e-5, CyclicLR(base_lr=1e-6, max_lr=1e-5, step_size_up=430, step_size_down=430), IS_Steplr=False, win_size 16, train_stride 8, test_stride 8",
+
+        "_input_norm_note": "The reference standardizes every input view before the forward pass, unconditionally: train_dop.py:91 sets `Norm = True` as a plain local in main() -- no flag, no config override -- and applies it to all three views at :228-234; test.py does the same (:17, :177-189), and the 'finished ra normalization' lines in the reference README's sample output (:98-99) are that code running. Our UWCR __getitem__ did not do this until 2026-09-05; its only normalize_* call was normalize_confmap, which acts on the LABEL, not the input. The constants below are DERIVED FROM OUR TRAIN SPLIT by scripts/compute_uwcr_norm.py, not copied from the reference's config.py. Copying would have been wrong: the reference's mean1/std1 were fit to its shipped train_test_data (RA std ~0.008, RV ~0.035, VA ~0.024), and slices computed from the public raw ADC are ~11000x larger. That gap is not our bug -- the reference's OWN unmodified slice3d.py, run on its OWN slice_sample_data, does not reproduce its OWN train_test_data either (RA r 0.14-0.44, RV 0.37-0.50, VA 0.95-0.97), so train_test_data is a different data vintage and its statistics do not transfer. Sanity check that ours are the same quantity: the mean/std RATIOS match the reference's closely (RV 0.240 vs 0.228, VA 0.610 vs 0.719, RA ~0 in both, as real/imag of a complex FFT must be). Fit on the 14 TRAIN sequences only -- never val or test. The reference keys two constant sets off capture month (`date_detail < 9`); every UWCR sequence we hold is month 04 or 05, so one set covers all of them and the month branch has nothing to select between.",
+        "input_norm": {
+            "ra": {"mean": -0.3252922589491787, "std": 328.46442727217163},
+            "rv": {"mean": 442.4675409589698, "std": 1843.6647365109354},
+            "va": {"mean": 715.3170940185574, "std": 1172.1408370423803}
+        },
+
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.00001
+        },
+        "lr_scheduler": {
+            "type": "cyclic",
+            "base_lr": 0.000001,
+            "max_lr": 0.00001,
+            "step_size_up": 430,
+            "step_size_down": 430
+        },
+        "dataloader": {
+            "splitmode": "",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+        "losses": {},
+        "win_size": 16,
+        "train_step": 1,
+        "train_stride": 8,
+        "test_step": 1,
+        "test_stride": 8,
+        "max_dets": 20,
+        "peak_thres": 0.2,
+        "ols_thres": 0.2
+    }
+}

@@ -22,13 +22,25 @@ from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
 
 
 
-def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device='cpu'):
+def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=True, device='cpu'):
+    """Per-epoch validation, a port of the reference's run_evaluation
+    (RADIal FFTRadNet utils/evaluation.py:6-64).
+
+    ONE confidence threshold (0.2) through the Metrics class, not the 0.1..0.9 sweep of
+    GetFullMetrics -- that sweep is run_FullEvaluation, which the reference invokes once
+    from 3-Evaluation.py on the TEST split to produce the paper's Table 2. Running it
+    every epoch costs 9x and reports a quantity the reference never reports per-epoch;
+    it is also what made this pair's validation unfinishable before the metric helpers
+    were vectorized. Dispatch lives in FFTRadNet_evaluation below.
+
+    check_perf defaults True: the reference passes check_perf=(epoch>=0), i.e. always.
+    """
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
     metrics = Metrics()
     metrics.reset()
-    
+
     for i, data in enumerate(loader):
         for key in data:
             if isinstance(data[key], torch.Tensor):
@@ -55,10 +67,24 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=False, device
         kbar.update(i)
         
     mAP,mAR, mIoU = metrics.GetMetrics()
-    return {'loss':running_loss, 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
+    # The reference returns the raw running sum; normalized here so val_loss is
+    # comparable across splits and runs, as every other pair in this repo reports it.
+    return {'loss':running_loss / len(loader.dataset), 'mAP':mAP, 'mAR':mAR, 'mIoU':mIoU}
 
 
 def FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
+    """Split the reference's two evaluations the way the reference does.
+
+    val  -> run_evaluation      : single threshold 0.2, cheap, every epoch.
+    test -> run_FullEvaluation  : GetFullMetrics sweeping 0.1..0.9 plus the freespace
+                                  mIoU over [0, 50] m -- the paper's Table 2 / Table 3.
+    """
+    if eval_type == "val":
+        return FFTRadNet_val_evaluation(net, loader, train_config, check_perf=True, device=device)
+    return FFTRadNet_full_evaluation(net, loader, train_config, features, output_path, eval_type, device)
+
+
+def FFTRadNet_full_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
     net.eval()
     running_loss = 0.0
     kbar = pkbar.Kbar(target=len(loader), width=20, always_stateful=False)
@@ -127,7 +153,10 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     RangeError = []
     AngleError = []
 
-    for threshold in np.arange(0.2,0.96,0.1):
+    # The reference sweeps 0.1..0.9 (utils/metrics.py:120); this loop started at 0.2 from
+    # 2023-08 to 2026-09, which drops the lowest-precision point from the mean and so
+    # overstated mAP relative to the published protocol.
+    for threshold in np.arange(0.1,0.96,0.1):
         logger.info(f"\nEvaluation with threshold = {threshold}")
         iou_threshold.append(threshold)
 
@@ -204,15 +233,21 @@ def GetFullMetrics(predictions,object_labels,range_min=5,range_max=100,IOU_thres
     perfs['precision']=precision
     perfs['recall']=recall
 
-    F1_score = (np.mean(precision)*np.mean(recall))/((np.mean(precision) + np.mean(recall))/2)
+    mAP_ = float(np.mean(precision))
+    mAR_ = float(np.mean(recall))
+    # A model that detects nothing at any threshold gives 0/0 here. The reference returns
+    # nan; report 0 instead, because a nan is indistinguishable from a broken metric --
+    # the same confusion the RadarCrossAttention evaluator's absent-class nan caused.
+    F1_score = (mAP_ * mAR_) / ((mAP_ + mAR_) / 2) if (mAP_ + mAR_) > 0 else 0.0
     logger.info('------- Detection Scores ------------')
-    logger.info(f"  mAP: {np.mean(perfs['precision'])}")
-    logger.info(f"  mAR: {np.mean(perfs['recall'])}")
+    logger.info(f"  mAP: {mAP_}")
+    logger.info(f"  mAR: {mAR_}")
     logger.info(f"  F1 score: {F1_score}")
 
     logger.info('------- Regression Errors------------')
-    logger.info(f"  Range Error: {np.mean(RangeError)} m")
-    logger.info(f"  Angle Error: {np.mean(AngleError)} degree")
+    # Empty when no threshold produced a true positive; np.mean([]) is nan with a warning.
+    logger.info(f"  Range Error: {np.mean(RangeError) if RangeError else float('nan')} m")
+    logger.info(f"  Angle Error: {np.mean(AngleError) if AngleError else float('nan')} degree")
 
     mAP = np.mean(perfs['precision'])
     mAR = np.mean(perfs['recall'])
@@ -493,10 +528,19 @@ def evaluate_img(gts_dict, dts_dict, imgId, catId, olss_dict, olsThrs, recThrs, 
     }
 
 
-def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs):
+def evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs, frame_ids=None):
 
     gt_dets = read_gt_txt(gt_path, n_frame, n_class, classes)
     sub_dets = read_rodnet_res(res_path, n_frame, n_class, classes, rng_grid, agl_grid)
+    if frame_ids is not None:
+        # Score only these frames, on both sides of the match. Callers whose
+        # loader does not cover every frame (RECORD's val loader strides by
+        # train_stride but the model predicts one frame per window) pass the
+        # covered set here; without the filter, every uncovered frame's GT
+        # counts as misses.
+        gt_dets = {key: (objs if key[0] in frame_ids else []) for key, objs in gt_dets.items()}
+        if sub_dets:
+            sub_dets = {key: (objs if key[0] in frame_ids else []) for key, objs in sub_dets.items()}
     if sub_dets:
         olss_all = {(imgId, catId): compute_ols_dts_gts(gt_dets, sub_dets, imgId, catId) \
                     for imgId in range(n_frame)
@@ -696,6 +740,11 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
     total_count = 0
     load_tic = time.time()
     sequences = []
+    # The val loader windows at train_stride, the test loader at test_stride
+    # (prepare_for_train mirrors the reference CRDataset's split logic), and the
+    # pop count below must match the loader's advance -- with a mismatch, part of
+    # the frames are never written and score as misses.
+    stride = train_config['test_stride'] if eval_type == 'test' else train_config['train_stride']
     for iter, data in enumerate(dataloader):
         load_time = time.time() - load_tic
 
@@ -718,13 +767,36 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # get_loss reduces over the ACTUAL batch, so weight by that, not by the
+            # configured batch_size: the final batch is short whenever the split size
+            # is not a multiple of it, and would otherwise be over-weighted.
+            running_loss += loss.item() * inputs.shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
         
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
+            # Flush the previous sequence's tail before starting the next one. The
+            # reference builds one dataset per sequence and resets its stack in
+            # between; our single loader spans all sequences, so without this the
+            # last win_size - stride frames of each sequence are never written and
+            # the next sequence's first windows average against the stale tail.
+            if sequences:
+                offset = prev_start_frame + stride
+                while init_genConfmap is not None:
+                    total_count += 1
+                    res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
+                    write_dets_results_single_frame(res_final, offset, save_path, classes)
+                    init_genConfmap = init_genConfmap.next
+                    offset += 1
+                init_genConfmap = ConfmapStack(confmap_shape)
             sequences.append(seq_name)
             save_path = os.path.join(save_dir, seq_name + '_rod_res.txt')
+            # write_dets_results_single_frame appends, and val runs every epoch into the
+            # same exp dir -- without this, epoch N is scored against the union of all
+            # detections from epochs <= N (duplicates count as false positives, so mAP
+            # decays monotonically while mAR climbs).
+            if os.path.exists(save_path):
+                os.remove(save_path)
         # Currently only support batch_size set to 1 for val evaluation
         start_frame_id = data['start_frame'].item()
         end_frame_id = data['end_frame'].item()
@@ -738,15 +810,16 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
         
         process_tic = time.time()
         
-        for i in range(train_config['train_stride']): # test_stride
+        for i in range(stride):
             total_count += 1
             res_final = post_process_single_frame(init_genConfmap.confmap, train_config, n_class, rng_grid, agl_grid)
             cur_frame_id = start_frame_id + i
             write_dets_results_single_frame(res_final, cur_frame_id, save_path, classes)
             init_genConfmap = init_genConfmap.next
-        
+        prev_start_frame = start_frame_id
+
         if iter == len(dataloader) - 1:
-            offset = train_config['train_stride'] # test_stride
+            offset = stride
             cur_frame_id = start_frame_id + offset
             while init_genConfmap is not None:
                 total_count += 1
@@ -821,11 +894,22 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     batch_size = train_config['dataloader'][eval_type]['batch_size']
     sequences = []
+    # The model predicts one frame per window, so frame coverage equals the
+    # loader's stride: complete at test_stride 1, but only every train_stride-th
+    # frame on the val loader. Track what was actually written so the val score
+    # is computed over exactly those frames (an unbiased uniform sample) instead
+    # of counting the uncovered frames' GT as misses. The NoLstm variants take a
+    # fixed-size window, so predicting the skipped frames is not an option.
+    frames_written = {}
     for iter, data in enumerate(dataloader):
         seq_name = data['seq_name'][0]
         if seq_name not in sequences:
             sequences.append(seq_name)
+            frames_written[seq_name] = set()
             save_path = os.path.join(save_dir, seq_name + '_record_res.txt')
+            # Same append-across-epochs trap as RODNet_evaluation above.
+            if os.path.exists(save_path):
+                os.remove(save_path)
 
         for key in data:
             logger.debug(f"data contains key: {key}")
@@ -844,17 +928,19 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
                     confmap_pred = net(tmp_ra_maps)
                 res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
                 write_dets_results_single_frame(res_final, tmp_frame_id, save_path, classes)
-        
+                frames_written[seq_name].add(tmp_frame_id)
+
         with torch.set_grad_enabled(False):
             confmap_pred = net(inputs)
         logger.debug('get network output')
-        
+
         res_final = post_process_single_frame(confmap_pred[0].cpu(), train_config, n_class, rng_grid, agl_grid)
         write_dets_results_single_frame(res_final, frame_id, save_path, classes)
+        frames_written[seq_name].add(frame_id)
 
         if eval_type == "val":
             loss = net.get_loss(confmap_pred, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if eval_type == "val":
@@ -873,7 +959,10 @@ def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, ev
 
         olsThrs = np.around(np.linspace(0.5, 0.9, int(np.round((0.9 - 0.5) / 0.05) + 1), endpoint=True), decimals=2)
         recThrs = np.around(np.linspace(0.0, 1.0, int(np.round((1.0 - 0.0) / 0.01) + 1), endpoint=True), decimals=2)
-        evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs)
+        # Val-only frame filter; the test path (stride 1, full coverage) keeps
+        # the reference-faithful scoring over all frames.
+        frame_filter = frames_written[seq_name] if eval_type == 'val' else None
+        evalImgs = evaluate_rodnet_seq(res_path, gt_path, n_frame, n_class, classes, rng_grid, agl_grid, olsThrs, recThrs, frame_ids=frame_filter)
 
         if evalImgs:
             eval = accumulate(evalImgs, n_frame, olsThrs, recThrs, n_class, classes)
@@ -1005,10 +1094,10 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
         inputs = data[features[0]]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
         
         metrics.add_batch(torch.argmax(data['gt_mask'], axis=1).cpu(), torch.argmax(outputs, axis=1).cpu())
@@ -1045,7 +1134,8 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data[features[0]].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         rd_metrics.add_batch(torch.argmax(data['rd_mask'], axis=1).cpu(), torch.argmax(outputs['rd'], axis=1).cpu())
@@ -1067,7 +1157,16 @@ def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_
             sum(metrics_dict['range_angle']['prec_by_class']) / len(metrics_dict['range_angle']['prec_by_class']) / 2 
     mAR = sum(metrics_dict['range_doppler']['recall_by_class']) / len(metrics_dict['range_doppler']['recall_by_class']) / 2 + \
             sum(metrics_dict['range_angle']['recall_by_class']) / len(metrics_dict['range_angle']['recall_by_class']) / 2
-    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (metrics_dict['range_doppler']['miou'] + metrics_dict['range_doppler']['miou'])/2}
+    # The reference keeps the two views apart: carrada_trainer.py logs 'rd_miou' and
+    # 'ra_miou' separately (lines 191/195 val, 322/326 test) and builds global_ aggregates
+    # for acc/prec/dice ONLY -- never for mIoU. The paper does the same, reporting 63.2 RD
+    # against 44.5 RA. An average of those two matches nothing published, so both views are
+    # carried here; 'mIoU' remains for train()'s history/CSV contract.
+    # (Until 2026-08-26 this line read range_doppler twice, so 'mIoU' was the RD score alone.)
+    rd_miou = metrics_dict['range_doppler']['miou']
+    ra_miou = metrics_dict['range_angle']['miou']
+    result = {'mAP': mAP, 'mAR': mAR, 'mIoU': (rd_miou + ra_miou)/2,
+              'mIoU_rd': rd_miou, 'mIoU_ra': ra_miou}
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
     return  result
@@ -1195,12 +1294,24 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
     running_loss = 0.0
     batch_size = train_config['dataloader'][eval_type]['batch_size']
 
+    # The reference splits this the same way: its MODEL block carries a single
+    # mAP_iou3d_threshold (0.3) used during training/validation, while its EVALUATE block
+    # carries a LIST [0.1, 0.3, 0.5, 0.7] for the final test -- which is what the paper
+    # reports (Table I/II: AP@0.1 0.764, @0.3 0.563, @0.5 0.251, @0.7 0.059). So the
+    # scalar stays the primary and drives 'mAP' (the checkpoint-selection contract with
+    # train()); the optional list adds the other thresholds as extra keys, which
+    # train() carries into val_eval.csv and test_eval.csv unchanged.
+    primary_thr = train_config["mAP_iou3d_threshold"]
+    thresholds = [primary_thr]
+    for thr in (train_config.get("mAP_iou3d_threshold_list") or []):
+        if thr not in thresholds:
+            thresholds.append(thr)
+    class_names = getattr(net, 'class_names', None) or \
+        ["person", "bicycle", "car", "motorcycle", "bus", "truck"][:n_class]
+    ap_by_thr = {thr: [[] for _ in range(n_class)] for thr in thresholds}
+    total_by_thr = {thr: 0.0 for thr in thresholds}
     mean_ap_test = 0.0
-    ap_all_class_test = []
-    ap_all_class = []
-    for class_id in range(n_class):
-        ap_all_class.append([])
-    
+
     for iter, data in enumerate(dataloader):
         for key in data:
             if isinstance(data[key], torch.Tensor):
@@ -1209,10 +1320,10 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
         inputs = data["RAD"]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-            
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         pred = outputs['pred'].detach().cpu().numpy()
@@ -1224,24 +1335,35 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
                                 conf_threshold=train_config["confidence_threshold"])
             nms_pred = nms(predicitons, train_config["nms_iou3d_threshold"], \
                             net.input_size, sigma=0.3, method="nms")
-            mean_ap, ap_all_class = mAP(nms_pred, raw_boxes_frame, \
-                                    net.input_size, ap_all_class, \
-                                    tp_iou_threshold=train_config["mAP_iou3d_threshold"])
-            mean_ap_test += mean_ap
+            # The IoU threshold only affects TP/FP MATCHING, never the predictions, so all
+            # thresholds share this one forward pass + NMS. Same structure as the
+            # reference's evaluate.py:118-146, which keeps one accumulator per threshold
+            # and calls mAP() once per threshold with the same nms_pred.
+            for thr in thresholds:
+                mean_ap, ap_by_thr[thr] = mAP(nms_pred, raw_boxes_frame, \
+                                        net.input_size, ap_by_thr[thr], \
+                                        tp_iou_threshold=thr)
+                total_by_thr[thr] += mean_ap
+            mean_ap_test = total_by_thr[primary_thr]
 
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
             kbar.update(iter)
 
-    for ap_class_i in ap_all_class:
-        if len(ap_class_i) == 0:
-            class_ap = 0.
-        else:
-            class_ap = np.mean(ap_class_i)
-        ap_all_class_test.append(class_ap)
-    mean_ap_test /= batch_size * len(dataloader)
-    result = {'mAP': mean_ap_test, 'mAR': 0.0, 'mIoU': 0.0}
+    # mean_ap_test accumulates once per FRAME (the batch_id loop above), so normalise by
+    # the frame count. `batch_size * len(dataloader)` overestimates it whenever the split
+    # is not a multiple of batch_size, which would drag mAP down.
+    n_frames = len(dataloader.dataset)
+    result = {'mAP': total_by_thr[primary_thr] / n_frames, 'mAR': 0.0, 'mIoU': 0.0}
+    for thr in thresholds:
+        # Per-class AP was computed here before and then thrown away; the paper reports it
+        # (Table I) and every other closed row in the campaign is argued per class.
+        per_class = [float(np.mean(c)) if len(c) else 0.0 for c in ap_by_thr[thr]]
+        if thr != primary_thr:
+            result[f'mAP@{thr}'] = total_by_thr[thr] / n_frames
+        for name, ap in zip(class_names, per_class):
+            result[f'AP@{thr}_{name}'] = ap
     if eval_type == 'val':
         result.update({'loss': running_loss / len(dataloader.dataset)})
     return  result
@@ -1494,10 +1616,10 @@ def DAROD_evaluation(net, dataloader, train_config, features, output_dir, eval_t
         inputs = data['RD']
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            running_loss += loss.item() * inputs.shape[0]   # actual batch, not configured
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if outputs["decoder_output"] is not None:
@@ -1544,7 +1666,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     classes = ["pedestrian", "cyclist", "car"] 
-    with open('/home/kangle/Downloads/wd_disk_radar_data/UWCR/Automotive/radar_config.json', 'r') as file:
+    with open('/home/kangle/dataset/UWCR/Automotive/radar_config.json', 'r') as file:
         radar_cfg = json.load(file)
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')
@@ -1578,7 +1700,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                     if classid == -1000: 
                         continue
                     gt_obj = {'id': id_gt, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                                    'classid': classid, 'score': 1.0}
+                                    'class_id': classid, 'score': 1.0}
                     gt_objs[iter, classid].append(gt_obj)
                     id_gt += 1
             # TODO: Handle the case of empty annotation
@@ -1601,10 +1723,11 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
         tic = time.time()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-        
+
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data['RD'].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         confmap_pred = outputs['confmap_pred'][-1].cpu().detach().numpy()  
@@ -1630,11 +1753,23 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                 class_id, ridx, aidx, conf = obj
                 if class_id == -1:
                     continue
+                # res_final is a float array, so these unpack as numpy floats and
+                # rng_grid[ridx] raises IndexError. The line only runs once a detection
+                # survives post-processing, so it stayed latent for as long as the model
+                # detected nothing -- the run "succeeded" with mAP 0 and crashed the
+                # moment the model started working (epoch 3 of a 20-epoch run).
+                class_id, ridx, aidx = int(class_id), int(ridx), int(aidx)
                 rng = rng_grid[ridx]
                 agl = agl_grid[aidx]
                 res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                            'classid': class_id, 'score': conf}
-                res_objs[iter, classid].append(res_obj)
+                            'class_id': class_id, 'score': conf}
+                # class_id, not classid: `classid` is a leaked loop variable from the
+                # ground-truth loop above (the class of the last GT object seen), so every
+                # detection was filed under the wrong class bucket -- and under a stale one
+                # on frames with no GT at all. accumulate() then scored each class against
+                # another class's detections, which pins mAP/mAR at 0 however well the
+                # model does. The dict value on the line above already had it right.
+                res_objs[iter, class_id].append(res_obj)
                 id_res += 1
             init_genConfmap = init_genConfmap.next
 
@@ -1649,11 +1784,12 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
                     class_id, ridx, aidx, conf = obj
                     if class_id == -1:
                         continue
+                    class_id, ridx, aidx = int(class_id), int(ridx), int(aidx)  # see above
                     rng = rng_grid[ridx]
                     agl = agl_grid[aidx]
                     res_obj = {'id': id_res, 'frameid': iter, 'range': rng, 'angle': agl, 'ridx': ridx, 'aidx': aidx,
-                                'classid': class_id, 'score': conf}
-                    res_objs[iter, classid].append(res_obj)
+                                'class_id': class_id, 'score': conf}
+                    res_objs[iter, class_id].append(res_obj)   # see the note above
                     id_res += 1
                 init_genConfmap = init_genConfmap.next
                 # offset += 1
@@ -1686,17 +1822,80 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
     return result
 
 
-def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device, thresh=2):
+RCA_CLASS_NAMES = ('ped', 'cyc', 'car')   # bi_var_gauss channel order: cls 1/2/3 -> 0/1/2
+
+
+def _rca_class_ap(cls, tag):
+    """Per-class AP from the accumulated confidence/TP lists, as the reference computes
+    it (Utils/val_utils.py:131-145): rank by confidence, trapezoid over the P/R curve.
+
+    Returns (aps, mAP): one AP per class (nan where the split has no ground truth for
+    it) and the mean over the classes that do occur.
+    """
+    aps = []
+    for idx in range(len(cls)):
+        categ = cls[f"{idx}"]
+        GT = categ['grd_no']
+        if GT == 0:
+            # No ground truth for this class in this split: recall is undefined, so
+            # TP/GT gave 0/0 -> nan -> np.trapz -> nan, and the nan then propagated into
+            # the 3-class mean, reporting mAP as nan for a model that was detecting
+            # perfectly well. Seen in the Phase 1 smoke sweep, whose 3-file sequence split
+            # of CARRADA contains no pedestrian or cyclist frames: classes 0 and 1 had
+            # GT 0 while class 2 scored AP 0.418 at recall 0.93.
+            # Exclude the class instead, which is also what COCO-style mAP does with
+            # absent categories.
+            categ['AP'] = float('nan')
+            aps.append(float('nan'))
+            logger.info(f"{tag} {RCA_CLASS_NAMES[idx]} | no ground truth in this split, excluded from mAP")
+            continue
+        index = np.argsort(-np.asarray(categ['Conf']))
+        P, R, TP = [], [], 0
+        for cnt, i in enumerate(index):
+            TP += categ['TP'][i]
+            P = np.append(P, TP / (cnt + 1))
+            R = np.append(R, TP / GT)
+        categ['P'] = P
+        categ['R'] = R
+        # No predictions at all for a class that does occur is AP 0, not a crash.
+        categ['AP'] = float(np.trapz(P, R)) if len(P) else 0.0
+        n_pred = len(categ['TP'])
+        n_tp = float(np.sum(categ['TP']))
+        logger.info(f"{tag} {RCA_CLASS_NAMES[idx]} | AP {categ['AP']:.4f}  "
+                    f"P {n_tp / n_pred if n_pred else float('nan'):.3f}  R {n_tp / GT:.3f}  "
+                    f"GT {GT}  preds {n_pred}")
+        aps.append(categ['AP'])
+    # Average over the classes that actually occur, not a hardcoded 3 -- see the GT == 0
+    # branch above. A single absent class used to make the whole metric nan.
+    present = [aps[i] for i in range(len(cls)) if cls[f"{i}"]['grd_no'] > 0]
+    mAP = float(np.mean(present)) if present else 0.0
+    if len(present) < len(cls):
+        logger.warning(f"{tag}: mAP averaged over {len(present)} of {len(cls)} classes; the rest "
+                       f"have no ground truth in this split and cannot be scored.")
+    return aps, mAP
+
+
+def RadarCrossAttention_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device,
+                                   thresholds=(2, 1)):
+    """AP at distance thresholds, per class, as the reference's evaluation() scores it.
+
+    Scored at BOTH 2 m and 1 m in one pass (the paper's Table I reports both; the
+    reference scores one threshold per invocation). 'mAP' is the 2 m headline; the 1 m
+    mean and the six per-class APs come back as extras. For 'val' it also returns
+    'val_mse', the reference's checkpoint-selection and ReduceLROnPlateau metric
+    (Utils/val_utils.py:44-46): the sum-MSE between sigmoid(pred_mask) and the Gaussian
+    target per batch, averaged over batches -- batch-size dependent by construction, so
+    the val batch size should match the reference's 16 for the numbers to be comparable.
+    """
     net.eval()
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
     running_loss = 0.0
+    running_mse = 0.0
+    n_batches = 0
     batch_size = train_config['dataloader'][eval_type]['batch_size']
 
-    cls = dict()
     temp_dict = {'grd_no':0,'Conf':[],'O_P':[],'O_T':[],'TP':[],'P':[],'R':[],'AP':[],'asc':{'gt_r':[],'gt_a':[],'pd_r':[],'pd_a':[]}}
-    cls['0'] = deepcopy(temp_dict)
-    cls['1'] = deepcopy(temp_dict)
-    cls['2'] = deepcopy(temp_dict)
+    cls_by_thresh = {t: {str(i): deepcopy(temp_dict) for i in range(3)} for t in thresholds}
 
     prev_size = 0
 
@@ -1711,7 +1910,8 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
 
         if eval_type == "val":
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # inputs is a dict here; any view carries the sample axis.
+            running_loss += loss.item() * data['RD'].shape[0]
             logger.info(f"Val sample {iter} loss: {loss}")
 
         if data['RA'].shape[0] != prev_size:
@@ -1722,59 +1922,73 @@ def RadarCrossAttention_evaluation(net, dataloader, train_config, features, outp
         prev_size = data['RA'].shape[0]
 
         pred_map = torch.sigmoid(outputs["pred_mask"])
-        pred_c = 8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
+        # Centre-offset and heading are optional heads: the network returns the int 0 for
+        # a disabled one (as the reference does) and the dataset then carries no
+        # gt_orent_map. metrics_center/validation test torch.is_tensor for these, where
+        # the reference's `if pred_c != 0` raises on any real tensor.
+        pred_c = (8 * (torch.sigmoid(outputs["pred_center"]) - 0.5)
+                  if torch.is_tensor(outputs["pred_center"]) else 0)
+        tr_o = data.get("gt_orent_map", 0)
+        pred_o = outputs["pred_orent"]
 
-        # pred_c shape: torch.Size([16, 2, 256, 256])
-        cls = metrics_center(grd_map=data["gt_mask"], pred_map=pred_map,
-                                pred_c=pred_c, mask=mask, peaks_cls=peak_cls,
-                                tr_o=data["gt_orent_map"], pred_o=outputs["pred_orent"], cls=cls,
-                                thresh=thresh, device=device)
+        running_mse += torch.nn.functional.mse_loss(pred_map, data["gt_mask"], reduction='sum').item()
+        n_batches += 1
+
+        # Peak detection, centre-offset and NMS do not depend on the threshold, so they
+        # run once; validation() rebinds rather than mutates its index tensors, so the
+        # same associated peaks can be scored at each threshold independently.
+        grd_idx, pred_idx, pred_intent = _detect_and_associate(
+            data["gt_mask"], pred_map, pred_c, mask, peak_cls, device)
+        for t in thresholds:
+            cls_by_thresh[t] = validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o,
+                                          cls_by_thresh[t], dist_thresh=t, device=device)
         if eval_type == "val":
             kbar.update(iter, values=[("loss", loss.item())])
         else:
             kbar.update(iter)
     logger.info("Val data loop finished.")
 
-    for idx in range(len(cls)):
-        categ = cls[f"{idx}"]
-        P =[]
-        R=[]
-        TP = 0
-        GT = categ['grd_no']
-        index = np.argsort(-categ['Conf'])
-        for cnt, i in enumerate(index):
-            TP += categ['TP'][i]
-            P = np.append(P,TP/(cnt+1))
-            R = np.append(R, TP/GT)
-        categ['P']= P
-        categ['R'] = R
-        categ['AP'] = np.trapz(P,R)
-        prec = np.sum(categ['TP'])
-        rec =  len(categ['TP'])
-        logger.info(f"{idx} | AP: {categ['AP']}, P: {prec / rec}, R: {prec / GT}, GT: {GT}, Heading Accuracy: {cls[f'{idx}']['O_T']}, {cls[f'{idx}']['O_P']}")
-        cls[f"{idx}"] = categ
+    aps, maps = {}, {}
+    for t in thresholds:
+        aps[t], maps[t] = _rca_class_ap(cls_by_thresh[t], f"AP@{t}m")
     
-    mAP = (cls['0']['AP'] + cls['1']['AP'] + cls['2']['AP']) / 3
-    result = {'mAP': mAP, 'mAR': 0, 'mIoU': 0}
+    # 'mAP' is the first threshold (2 m, the paper's headline); everything else rides
+    # along as extras, which train() carries into history and val_eval.csv.
+    headline = thresholds[0]
+    result = {'mAP': maps[headline], 'mAR': 0, 'mIoU': 0}
+    for t in thresholds:
+        if t != headline:
+            result[f'mAP_{t}m'] = maps[t]
+        for name, ap in zip(RCA_CLASS_NAMES, aps[t]):
+            result[f'AP{t}m_{name}'] = ap
     if eval_type == 'val':
-        result.update({'loss': running_loss / len(dataloader.dataset)})
+        result.update({'loss': running_loss / len(dataloader.dataset),
+                       'val_mse': running_mse / max(n_batches, 1)})
     return result
 
 
-def metrics_center(grd_map, pred_map, pred_c, mask, 
-                  peaks_cls, tr_o, pred_o, cls,
-                  thresh, device):
+def _detect_and_associate(grd_map, pred_map, pred_c, mask, peaks_cls, device):
+    """The threshold-independent half of the reference's metrics_center: peaks of the
+    target (0.8) and of the prediction (0.1), centre-offset shift, 2 m NMS."""
     grd_intent, grd_idx = peaks_detect(grd_map, mask, peaks_cls, heat_thresh=0.8)
     grd_idx = distribute(grd_idx, device)
     pred_intent, pred_idx = peaks_detect(pred_map, mask, peaks_cls, heat_thresh=0.1)
-    pred_idx= distribute(pred_idx,device)
-
-    #if pred_c!=0:
-    if torch.all(pred_c)!=0: 
+    pred_idx = distribute(pred_idx, device)
+    # The reference tests `if pred_c != 0`, which raises on a real tensor; the intent is
+    # "is the centre-offset head on" (the network returns the int 0 when it is not).
+    if torch.is_tensor(pred_c):
         pred_idx = update_peaks(pred_c, pred_idx)
-    pred_idx, pred_intent= association(pred_intent, pred_idx, device)
-    cls= validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)   
-    return cls  
+    pred_idx, pred_intent = association(pred_intent, pred_idx, device)
+    return grd_idx, pred_idx, pred_intent
+
+
+def metrics_center(grd_map, pred_map, pred_c, mask,
+                  peaks_cls, tr_o, pred_o, cls,
+                  thresh, device):
+    """The reference's metrics_center, unchanged in behaviour; the evaluator itself calls
+    the two halves separately so one association serves both thresholds."""
+    grd_idx, pred_idx, pred_intent = _detect_and_associate(grd_map, pred_map, pred_c, mask, peaks_cls, device)
+    return validation(grd_idx, pred_idx, pred_intent, tr_o, pred_o, cls, dist_thresh=thresh, device=device)
 
 
 def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, device='cpu'):
@@ -1809,7 +2023,9 @@ def validation(grd_idx, pred_idx, pred_int, tr_o, pr_o, cls, dist_thresh=2, devi
                 cls[f"{p_cls}"]['TP'] = np.append(cls[f"{p_cls}"]['TP'], 1)
                 
                 p_fr = int(p_fr)
-                if torch.all(pr_o) != 0:
+                # Heading is scored only when the head is on AND the split carries the
+                # heading target; both are the int 0 otherwise (see metrics_center).
+                if torch.is_tensor(pr_o) and torch.is_tensor(tr_o):
                         
                     tro_id = torch.nonzero(tr_o[p_fr, 1, ::], as_tuple=True)
                     if len(tro_id[0])>0 :
@@ -1881,7 +2097,9 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
             outputs = net(data)
         if eval_type == 'val':
             loss = net.get_loss(outputs, data, train_config)
-            running_loss += loss.item() * batch_size
+            # Point-cloud batch: 'pillars'/'coords' are concatenated across samples, so
+            # their leading axis is not the sample count -- frame_ids is one per sample.
+            running_loss += loss.item() * len(data['frame_ids'])
 
         results = postprocess(outputs, net.net.anchors, model_cfg, train_config)
         for b, res in enumerate(results):

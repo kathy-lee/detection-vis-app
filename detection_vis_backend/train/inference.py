@@ -113,6 +113,54 @@ def summarize_pred_objs(pred_objs):
     return summary
 
 
+def relocate_datafile(file_info, file_id):
+    """Refresh a train_info.txt datafile record's filesystem locations from the DB.
+
+    train_info.txt is a SNAPSHOT written when the model was trained, so the absolute
+    paths in it are frozen. When the dataset directory moved, every model trained
+    before the move kept pointing at the old location and /predict died on a bare
+    ENOENT with nothing naming the cause -- 22 datafile references across 16 models
+    (July 2026, `/home/kangle/Downloads/wd_disk_radar_data/...`).
+
+    The files table is the live source of truth and already held the new paths, so
+    resolve by id and take `path`/`config` from there. Only those two: `name` and
+    `parse` describe WHAT was trained on, and the snapshot stays authoritative for
+    that -- a renamed or re-parsed row must not silently change what a stored model
+    is evaluated against.
+
+    Falls back to the snapshot, unchanged, if the row is gone or the DB is
+    unreachable, so inference still works against a deleted registration.
+    """
+    try:
+        from data import crud
+        from data.database import get_session_local
+        db = get_session_local()
+        try:
+            row = crud.get_datafile(db, file_id)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Could not reach the files table to re-resolve datafile {file_id} "
+                       f"({e}); using the paths frozen in train_info.txt")
+        return file_info
+
+    if row is None:
+        logger.warning(f"Datafile {file_id} is no longer registered; using the paths "
+                       f"frozen in train_info.txt")
+        return file_info
+
+    fresh = dict(file_info)
+    for key in ("path", "config"):
+        live = getattr(row, key, None)
+        if live is not None and live != fresh.get(key):
+            # Loud: an id whose path changed is normally a moved dataset, but it would
+            # look identical if the id had been reused for different data.
+            logger.warning(f"Datafile {file_id} {key} moved since training: "
+                           f"{fresh.get(key)!r} -> {live!r}; using the registered value")
+            fresh[key] = live
+    return fresh
+
+
 def infer(model, checkpoint_id, sample_id, file_id, split_type):
     model_rootdir = os.getenv('MODEL_ROOTDIR')
     parameter_path = os.path.join(model_rootdir, model, "train_info.txt")
@@ -127,6 +175,9 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     # Get input data and groundtruth label info
     dataset_factory = DatasetFactory()
     file_info = next((d for d in parameters["datafiles"] if d.get("id") == file_id), None)
+    if file_info is None:
+        raise ValueError(f"Model {model} was not trained on datafile {file_id}")
+    file_info = relocate_datafile(file_info, file_id)
     logger.info(file_info)
     dataset_type = file_info["parse"]
     # dataset_inst = dataset_factory.get_instance(dataset_type, file_id)

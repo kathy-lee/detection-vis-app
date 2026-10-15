@@ -1,0 +1,81 @@
+{
+    "_about": "Published RADDet schedule, from the reference implementation ZhangAoCanada/RADDet (config.json at HEAD 75f4603). Kept SEPARATE from RADDet_train_config.json so the repo default is untouched; select with `--config-variant _reference`. ALREADY MATCHING and carried over unchanged from the repo default: optimizer Adam at lr 1e-4, focal_loss_iou_threshold 0.3, confidence_threshold 0.5, nms_iou3d_threshold 0.1, and (in RADDet_model_config.json) input_size [256,256,64], n_class 6, yolohead_xyz_scales [1,1,1] and the six anchor boxes. What differs from the repo default is the SCHEDULE: the default carries num_epochs 1 (a smoke placeholder) and a per-epoch StepLR that corresponds to nothing in the reference.",
+
+    "_audit": "Written after the 2026-09-01 pre-Phase-2 audit, which found and fixed two defects in the training path (boxDecoder grid transpose; categoryLoss reduction). See the RADDet section of docs/training-validation-baselines.md. Do not run this pair with a checkout that predates those fixes -- a small-subset overfit reached mAP@0.1 0.909 in 400 steps with them and 0.051 without, so results from before the fixes are meaningless rather than merely low.",
+
+    "_scheduler_note": "The reference has NO epoch loop. train.py:158 is one flat stream, `train_generator.repeat().batch(bs).take(total_train_batches)`, and the lr rule (train.py:166-178) is defined on the global step: constant `learningrate_init` while step < warmup_steps (the `startup_steps` phase below it uses the SAME 1e-4, so it is a no-op), then every `learningrate_decay_gap` steps `lr <- lr_end + decay*(lr - lr_end)`. That is geometric decay of (lr - lr_end), so lr approaches 1e-5 as a FLOOR. Neither StepLR nor ExponentialLR can express it -- both scale lr itself and decay to zero. Measured at epoch 100 (batch 3): reference 1.72e-05, StepLR(10,0.9) 3.49e-05, ExponentialLR(0.9) 2.66e-09. Hence the `decay_to_floor` type added to train(), a LambdaLR on the step count stepped per iteration; it was verified bit-identical to the reference's own loop at every step from 1 to 243800, including the first decay landing ON step 60000 (the reference increments global_steps before testing, and 60000 % 3000 == 0).",
+
+    "_batch_size_note": "batch_size 3, the reference's, NOT the repo default's 4. This is not cosmetic: every threshold in the scheduler is counted in OPTIMIZER STEPS, so warmup_steps 60000 means 24.6 epochs at batch 3 and 32.8 epochs at batch 4. Matching the batch size is what makes the step thresholds mean what the reference meant. val/test also run at 3, matching main train.py/evaluate.py, which build every generator with the same config_train['batch_size']; for RADDet this is metric-neutral anyway, since mAP is accumulated per frame.",
+
+    "_truncation_note": "FORCED DEVIATION, the one thing here that cannot be made faithful. total_train_batches = epochs * len(train) // batch = 1000 * 7314 // 3 = 2,438,000 steps, with NO early stopping and no best-checkpoint tracking -- train.py just saves every 10000 steps until the process is killed. The authors' actual stopping point is recorded nowhere in the repo, the README or the config. 100 epochs = 243,800 steps is 10% of nominal, but does exercise the schedule's shape: warmup ends at epoch 24.6, leaving 61 decay events. Chosen to match the 100 epochs used for the RECORD family. Because the reference does not early-stop, a longer run is probably a better one, so treat this number as a FLOOR rather than an unbiased match to the paper.",
+
+    "_selection_note": "No `test_checkpoint` and no `early_stop` keys, deliberately -- train() then tests the FINAL-epoch weights. That is reference-faithful: evaluate.py:80 restores `manager.latest_checkpoint`, not a best-val checkpoint, and CheckpointManager(max_to_keep=3) deletes everything older, so the reference cannot select retrospectively even in principle. Same convention as the DAROD rows (11/12).",
+
+    "_split_note": "The split comes from original_split_info.json (7314 train / 812 val / 2032 test), applied in train.py's RADDetDataset branch. It matches the reference's rule: test is a separate directory (2032), and splitTrain takes the last int(0.1*8126) = 812 of the train directory as validation. Note the reference reads that directory with a bare glob.glob (batch_data_generator.py:58), which is UNSORTED, so which 812 frames are validation depended on directory iteration order on the authors' machine; the json freezes one realisation. Also note `trainset_portion` 0.8 in the reference config is dead -- splitTrain hardcodes 0.1.",
+
+    "_metrics_note": "Two keys, mirroring the reference's own split. `mAP_iou3d_threshold` 0.3 is the scalar its MODEL block uses during training and validation, so it drives the val curve and the 'mAP' key train() selects on. `mAP_iou3d_threshold_list` is its EVALUATE block's [0.1, 0.3, 0.5, 0.7], which is what the paper reports (AP@0.1 0.764, @0.3 0.563, @0.5 0.251, @0.7 0.059). RADDet_evaluation computes all of them from ONE forward pass -- the IoU threshold only affects TP/FP matching, never the predictions, so the thresholds share the inference and NMS and only the matching repeats, exactly as evaluate.py:118-146 does. The extra thresholds arrive as 'mAP@0.1' etc. plus per-class 'AP@<thr>_<class>' keys, which train() carries into val_eval.csv and test_eval.csv unchanged. Classes with no instances in a split score 0.0, the reference's convention.",
+
+    "default": {
+        "seed": 3,
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.0001
+        },
+        "lr_scheduler": {
+            "type": "decay_to_floor",
+            "lr_end": 0.00001,
+            "decay": 0.96,
+            "decay_gap": 3000,
+            "warmup_steps": 60000
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 2
+            },
+            "test": {
+                "batch_size": 3,
+                "num_workers": 2
+            }
+        }
+    },
+
+    "RADDetDataset": {
+        "_src": "config.json: epochs 1000, batch_size 3, learningrate_init 1e-4, learningrate_end 1e-5, learningrate_decay 0.96, learningrate_decay_gap 3000, warmup_steps 60000, startup_steps 1000, learningrate_startup 1e-4, focal_loss_iou_threshold 0.3, confidence_threshold 0.5, nms_iou3d_threshold 0.1, mAP_iou3d_threshold 0.3",
+        "num_epochs": 100,
+        "optimizer": {
+            "lr": 0.0001
+        },
+        "lr_scheduler": {
+            "type": "decay_to_floor",
+            "lr_end": 0.00001,
+            "decay": 0.96,
+            "decay_gap": 3000,
+            "warmup_steps": 60000
+        },
+        "dataloader": {
+            "train": {
+                "batch_size": 3,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 3,
+                "num_workers": 2
+            },
+            "test": {
+                "batch_size": 3,
+                "num_workers": 2
+            }
+        },
+        "losses": {},
+        "focal_loss_iou_threshold": 0.3,
+        "confidence_threshold": 0.5,
+        "nms_iou3d_threshold": 0.1,
+        "mAP_iou3d_threshold": 0.3,
+        "mAP_iou3d_threshold_list": [0.1, 0.3, 0.5, 0.7]
+    }
+}

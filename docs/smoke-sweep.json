@@ -1,0 +1,468 @@
+[
+  {
+    "id": "RODNet_CDC/CRUW",
+    "model": "RODNet_CDC",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_CDC_CRUW_Aug-03-2026_10:41:24",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.03746 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.03419, mAR=0.03431"
+    ],
+    "seconds": 196.9
+  },
+  {
+    "id": "RODNet_CDCv2/CRUW",
+    "model": "RODNet_CDCv2",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_CDCv2_CRUW_Aug-03-2026_10:44:40",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.02546 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.1463, mAR=0.8045"
+    ],
+    "seconds": 213.7
+  },
+  {
+    "id": "RODNet_HG/CRUW",
+    "model": "RODNet_HG",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_HG_CRUW_Aug-03-2026_10:48:14",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.276 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.0679, mAR=0.08299"
+    ],
+    "seconds": 295.6
+  },
+  {
+    "id": "RODNet_HGv2/CRUW",
+    "model": "RODNet_HGv2",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_HGv2_CRUW_Aug-03-2026_10:53:10",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.03012 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.3151, mAR=0.331"
+    ],
+    "seconds": 311.6
+  },
+  {
+    "id": "RODNet_HGwI/CRUW",
+    "model": "RODNet_HGwI",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_HGwI_CRUW_Aug-03-2026_10:58:21",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.1058 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.2974, mAR=0.3093"
+    ],
+    "seconds": 974.8
+  },
+  {
+    "id": "RODNet_HGwIv2/CRUW",
+    "model": "RODNet_HGwIv2",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RODNet_HGwIv2_CRUW_Aug-03-2026_11:14:36",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.01142 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.5598, mAR=0.6024"
+    ],
+    "seconds": 1015.3
+  },
+  {
+    "id": "RECORD/CRUW",
+    "model": "RECORD",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORD_CRUW_Aug-03-2026_11:31:31",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.06235 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.1823, mAR=0.2449"
+    ],
+    "seconds": 212.4
+  },
+  {
+    "id": "RECORDNoLstm/CRUW",
+    "model": "RECORDNoLstm",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstm_CRUW_Aug-03-2026_11:35:04",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.09515 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.111, mAR=0.1557"
+    ],
+    "seconds": 178.1
+  },
+  {
+    "id": "RECORDNoLstmMulti/CRUW",
+    "model": "RECORDNoLstmMulti",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstmMulti_CRUW_Aug-03-2026_11:38:02",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.06854 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.05491, mAR=0.08064"
+    ],
+    "seconds": 174.5
+  },
+  {
+    "id": "RECORD/CARRADA/RA",
+    "model": "RECORD",
+    "dataset": "CARRADA",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORD_CARRADA_Aug-03-2026_11:41:05",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.82 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.2793, mAR=0.4456, mIoU=0.2767"
+    ],
+    "seconds": 177.9
+  },
+  {
+    "id": "RECORD/CARRADA/RD",
+    "model": "RECORD",
+    "dataset": "CARRADA",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORD_CARRADA_Aug-03-2026_11:43:54",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.803 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.3534, mAR=0.4908, mIoU=0.3507"
+    ],
+    "seconds": 90.5
+  },
+  {
+    "id": "RECORDNoLstm/CARRADA/RA",
+    "model": "RECORDNoLstm",
+    "dataset": "CARRADA",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstm_CARRADA_Aug-03-2026_11:45:25",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.835 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.2739, mAR=0.3886, mIoU=0.2707"
+    ],
+    "seconds": 40.4
+  },
+  {
+    "id": "RECORDNoLstm/CARRADA/RD",
+    "model": "RECORDNoLstm",
+    "dataset": "CARRADA",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstm_CARRADA_Aug-03-2026_11:46:05",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.815 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.3096, mAR=0.4926, mIoU=0.3065"
+    ],
+    "seconds": 20.6
+  },
+  {
+    "id": "RECORDNoLstmMulti/CARRADA/RA",
+    "model": "RECORDNoLstmMulti",
+    "dataset": "CARRADA",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstmMulti_CARRADA_Aug-03-2026_11:46:26",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.84 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.2961, mAR=0.3691, mIoU=0.2877"
+    ],
+    "seconds": 40.5
+  },
+  {
+    "id": "RECORDNoLstmMulti/CARRADA/RD",
+    "model": "RECORDNoLstmMulti",
+    "dataset": "CARRADA",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RECORDNoLstmMulti_CARRADA_Aug-03-2026_11:47:06",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.814 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.314, mAR=0.4898, mIoU=0.311"
+    ],
+    "seconds": 21.0
+  },
+  {
+    "id": "MVRECORD/CARRADA",
+    "model": "MVRECORD",
+    "dataset": "CARRADA",
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "MVRECORD_CARRADA_Aug-03-2026_11:47:27",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 0.143 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.3088, mAR=0.4769, mIoU=0.3415"
+    ],
+    "seconds": 339.5
+  },
+  {
+    "id": "RADDet/RADDetDataset",
+    "model": "RADDet",
+    "dataset": "RADDetDataset",
+    "features": [
+      "RAD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "RADDet_RADDetDataset_Aug-03-2026_11:53:14",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1355 (single epoch, no trend)",
+      "metrics non-zero: mAP=0.01458"
+    ],
+    "seconds": 2678.7
+  },
+  {
+    "id": "DAROD/CARRADA",
+    "model": "DAROD",
+    "dataset": "CARRADA",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "DAROD_CARRADA_Aug-03-2026_12:37:45",
+    "epochs_recorded": 1,
+    "verdict": "degenerate",
+    "notes": [
+      "loss 2.079 (single epoch, no trend)",
+      "pinned at exactly 0 across all epochs: mAP, mAR"
+    ],
+    "seconds": 28.9
+  },
+  {
+    "id": "DAROD/RADDetDataset",
+    "model": "DAROD",
+    "dataset": "RADDetDataset",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "DAROD_RADDetDataset_Aug-03-2026_12:38:14",
+    "epochs_recorded": 1,
+    "verdict": "degenerate",
+    "notes": [
+      "loss 1.767 (single epoch, no trend)",
+      "pinned at exactly 0 across all epochs: mAP, mAR"
+    ],
+    "seconds": 2709.2
+  },
+  {
+    "id": "RAMP_CNN/UWCR",
+    "model": "RAMP_CNN",
+    "dataset": "UWCR",
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RAMP_CNN_UWCR_Aug-03-2026_13:23:26",
+    "epochs_recorded": 1,
+    "verdict": "degenerate",
+    "notes": [
+      "loss 66.86 (single epoch, no trend)",
+      "pinned at exactly 0 across all epochs: mAP, mAR"
+    ],
+    "seconds": 688.7
+  },
+  {
+    "id": "RadarCrossAttention/CARRADA",
+    "model": "RadarCrossAttention",
+    "dataset": "CARRADA",
+    "features": [
+      "RD",
+      "RA",
+      "AD"
+    ],
+    "num_epochs": 1,
+    "splitmode": "sequence",
+    "n_datafiles": 3,
+    "status": "ok",
+    "exp_name": "RadarCrossAttention_CARRADA_Aug-03-2026_13:34:52",
+    "epochs_recorded": 1,
+    "verdict": "degenerate",
+    "notes": [
+      "loss 880 (single epoch, no trend)",
+      "evaluator produced none of its metrics (mAP)"
+    ],
+    "seconds": 334.9
+  },
+  {
+    "id": "PointPillar/ViewOfDelft",
+    "model": "PointPillar",
+    "dataset": "ViewOfDelft",
+    "features": [
+      "radarPC"
+    ],
+    "num_epochs": 1,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "PointPillar_ViewOfDelft_Aug-03-2026_13:40:28",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.284 (single epoch, no trend)",
+      "metrics non-zero: mAP=21.66"
+    ],
+    "seconds": 343.7
+  },
+  {
+    "id": "RadarPillar/ViewOfDelft",
+    "model": "RadarPillar",
+    "dataset": "ViewOfDelft",
+    "features": [
+      "radarPC"
+    ],
+    "num_epochs": 1,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "RadarPillar_ViewOfDelft_Aug-03-2026_13:46:11",
+    "epochs_recorded": 1,
+    "verdict": "ok",
+    "notes": [
+      "loss 1.373 (single epoch, no trend)",
+      "metrics non-zero: mAP=6.19"
+    ],
+    "seconds": 213.4
+  }
+]

@@ -580,3 +580,65 @@ def test_model_features_datasets_match_wired_eval_pairs():
             f"{model}: model_features.json says {sorted(features[model]['datasets'])}, "
             f"eval_func_dict registers {sorted(wired.get(model, set()))}"
         )
+
+
+# --- relocate_datafile: train_info.txt paths are a snapshot, the files table is live ---
+
+SNAPSHOT = {"id": 110, "name": "ViewOfDelft", "parse": "ViewOfDelft",
+            "path": "/gone/wd_disk_radar_data/ViewOfDelft", "config": "/gone/cfg.json"}
+
+
+class _Row:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _patch_db(monkeypatch, row=None, raises=None):
+    """Stand in for data.crud/data.database, which relocate_datafile imports lazily."""
+    import data.crud as crud
+    import data.database as database
+
+    def get_session_local():
+        if raises is not None:
+            raise raises
+        return MagicMock()
+
+    monkeypatch.setattr(database, "get_session_local", get_session_local)
+    monkeypatch.setattr(crud, "get_datafile", lambda db, file_id: row)
+
+
+def test_relocate_datafile_takes_live_path_and_keeps_identity(monkeypatch):
+    """A moved dataset must be picked up from the files table.
+
+    /predict used to die on a bare ENOENT for every model trained before the dataset
+    directory moved, because infer() read the frozen path out of train_info.txt and
+    never consulted the row it had the id for. Only locations are refreshed: name and
+    parse say WHAT was trained on, and a renamed row must not silently change that.
+    """
+    from detection_vis_backend.train.inference import relocate_datafile
+    _patch_db(monkeypatch, row=_Row(id=110, name="renamed", parse="Something",
+                                    path="/home/kangle/dataset/ViewOfDelft",
+                                    config="/home/kangle/dataset/cfg.json"))
+
+    out = relocate_datafile(SNAPSHOT, 110)
+
+    assert out["path"] == "/home/kangle/dataset/ViewOfDelft"
+    assert out["config"] == "/home/kangle/dataset/cfg.json"
+    assert out["name"] == "ViewOfDelft" and out["parse"] == "ViewOfDelft"
+    assert SNAPSHOT["path"] == "/gone/wd_disk_radar_data/ViewOfDelft", "input was mutated"
+
+
+def test_relocate_datafile_falls_back_when_row_is_gone(monkeypatch):
+    """A deleted registration must not make a stored model un-inferable."""
+    from detection_vis_backend.train.inference import relocate_datafile
+    _patch_db(monkeypatch, row=None)
+
+    assert relocate_datafile(SNAPSHOT, 110) == SNAPSHOT
+
+
+def test_relocate_datafile_falls_back_when_db_is_unreachable(monkeypatch):
+    """No DATABASE_URL (scripts, offline use) must degrade to the old behaviour."""
+    from detection_vis_backend.train.inference import relocate_datafile
+    _patch_db(monkeypatch, raises=ValueError("No DATABASE_URL environment variable found."))
+
+    assert relocate_datafile(SNAPSHOT, 110) == SNAPSHOT
