@@ -1468,6 +1468,30 @@ evaluator, same protocol on both sides:
 Still open for the full ladder: `RECORDNoLstmMulti` and `RECORDNoLstmSingle` must
 land below RECORD and in the published order (65.5 > 59.5).
 
+### What the smoke sweep is, and what its numbers are not
+
+`scripts/smoke_sweep.py` runs every wired (model, dataset) pair end-to-end — build the
+dataloaders, train, evaluate, write a verdict — on a deliberately tiny slice: `--split smoke`
+takes about three files and the config's default epochs. **Its purpose is to prove the
+plumbing, not to produce a score.** A pair that cannot complete one epoch cannot be compared
+to anything, so this runs first and cheaply; the full measurements come later on official
+splits with each paper's published schedule (`--split original --config-variant _reference`).
+
+**A number from the smoke sweep is not comparable to anything in the results table above**,
+and two entries below show why: RadarCrossAttention's 0.4367 is car-only, because a 3-file
+slice of CARRADA contains no pedestrian or cyclist frames at all; RAMP_CNN's 0.9295 came from
+validating on training-side data. Both look like scores and neither is one.
+
+The same script produces the real measurements too — only the flags differ — so a report file
+says which kind it is through its `splitmode` field, not its name. Results live in
+`docs/smoke-sweep.json` (every pair, one sweep) and `docs/phase2-*.json` (one file per
+measured run).
+
+Historical note on the labels: this campaign ran in stages — **0** collect published
+baselines before any training, **1** the smoke sweep, **2** the measured runs, **3** verdicts
+— and section headings below still carry those numbers. Phases 2 and 3 were merged in
+practice, which is why the results table is headed "Phase 2/3".
+
 ### Phase 1 closure
 
 Phase 1 (plumbing, not score) ended with four runs verdicted `degenerate`. All four are

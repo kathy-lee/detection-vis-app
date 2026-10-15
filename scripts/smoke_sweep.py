@@ -393,7 +393,12 @@ def execute(run, by_parse, args):
 
     rid = run_id(run)
     model, dataset, features = run["model"], run["dataset"], run["features"]
-    result = {"id": rid, "model": model, "dataset": dataset, "features": features}
+    # config_variant decides WHICH RECIPE ran: "" is the repo's own config, "_reference" the
+    # published schedule. A report that omits it cannot say whether its number is comparable
+    # to a paper -- every measured run in this campaign used _reference, and nothing in the
+    # report said so.
+    result = {"id": rid, "model": model, "dataset": dataset, "features": features,
+              "config_variant": args.config_variant or "(repo default)"}
 
     files = by_parse.get(dataset, [])
     if not files:
@@ -434,52 +439,6 @@ def execute(run, by_parse, args):
     return result
 
 
-def write_report(results, path, args):
-    lines = [
-        "# Phase 1 - smoke sweep",
-        "",
-        f"`--split {args.split}`"
-        + (f", `--epochs {args.epochs}`" if args.epochs is not None else ", config-default epochs")
-        + (f", `--seed {args.seed}`" if args.seed is not None else "")
-        + (", **build-only** (dataloaders built, no training)" if args.build_only else ""),
-        "",
-        "Purpose is the plumbing, not the score.",
-        "",
-    ]
-    skipped = [run_id(r) for r in RUNS if r not in [x for x in RUNS if run_id(x) in {q['id'] for q in results}]]
-    if args.only or args.exclude:
-        lines += [f"**Not covered by this sweep** ({len(skipped)}): "
-                  + ", ".join(f"`{s}`" for s in skipped) + ".", ""]
-    lines += [
-        "| Run | Split | Files | Epochs | Status | Verdict | Time (s) | Notes |",
-        "|---|---|---|---|---|---|---|---|",
-    ]
-    for r in results:
-        note = "; ".join(r.get("notes", [])) or r.get("error", "")
-        if r.get("status") == "built":
-            note = f"train={r.get('n_train')} val={r.get('n_val')} test={r.get('n_test')}"
-        lines.append(
-            f"| `{r['id']}` | {r.get('splitmode', '-')} | {r.get('n_datafiles', '-')} "
-            f"| {r.get('num_epochs', '-')} | {r['status']} | {r.get('verdict', '-')} "
-            f"| {r.get('seconds', '-')} | {note.replace('|', '/')} |"
-        )
-    counts = {}
-    for r in results:
-        key = r.get("verdict") if r["status"] not in ("error",) else "error"
-        counts[key] = counts.get(key, 0) + 1
-    lines += ["", "## Totals", ""]
-    lines += [f"- **{k}**: {v}" for k, v in sorted(counts.items())]
-
-    failing = [r for r in results if r["status"] == "error"]
-    if failing:
-        lines += ["", "## Failures", ""]
-        for r in failing:
-            lines += [f"### `{r['id']}`", "", "```", r.get("traceback", r.get("error", "")).strip(), "```", ""]
-
-    with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -507,7 +466,14 @@ def main():
                         "published schedule (default: the repo's own config)")
     p.add_argument("--build-only", action="store_true",
                    help="build dataloaders and stop -- validates split resolution cheaply")
-    p.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "phase1-smoke-sweep.md"))
+    # JSON is the only report format. The Markdown twin that used to be written alongside
+    # it was a strictly smaller view of the same dict -- every table column read from the
+    # same result object -- plus a hardcoded "Phase 1" title that was wrong on every run
+    # launched with --split original. Prose about what a sweep is belongs in
+    # docs/training-validation-baselines.md, which is hand-written and not regenerated.
+    p.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "smoke-sweep.json"),
+                   help="JSON report path (default docs/smoke-sweep.json); "
+                        "use a per-run name for measured runs, e.g. docs/phase2-<pair>.json")
     p.add_argument("--list", action="store_true", help="print the run matrix and exit")
     p.add_argument("--recompute", action="store_true",
                    help="re-score an existing results .json from each run's saved "
@@ -515,7 +481,7 @@ def main():
     args = p.parse_args()
 
     if args.recompute:
-        json_path = os.path.splitext(args.out)[0] + ".json"
+        json_path = args.out
         with open(json_path) as f:
             results = json.load(f)
         for r in results:
@@ -527,10 +493,9 @@ def main():
                      **check_health(rows, r["model"], r["dataset"]))
             if before != r["verdict"]:
                 print(f"{r['id']:<30} {before} -> {r['verdict']}")
-        write_report(results, args.out, args)
         with open(json_path, "w") as f:
             json.dump(results, f, indent=2)
-        print(f"\nRescored {len(results)} runs -> {args.out}")
+        print(f"\nRescored {len(results)} runs -> {json_path}")
         return 0
 
     runs = [r for r in RUNS if not args.only or args.only.lower() in run_id(r).lower()]
@@ -552,7 +517,7 @@ def main():
         args.epochs = 1
 
     by_parse = fetch_datafiles()
-    results, json_path = [], os.path.splitext(args.out)[0] + ".json"
+    results, json_path = [], args.out
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
     for i, run in enumerate(runs, 1):
@@ -564,11 +529,10 @@ def main():
         if res["status"] == "error":
             print(res.get("traceback", ""), file=sys.stderr, flush=True)
         # Rewrite after every run: a crash or Ctrl-C mid-sweep still leaves a usable report.
-        write_report(results, args.out, args)
         with open(json_path, "w") as f:
             json.dump(results, f, indent=2)
 
-    print(f"\nReport: {args.out}\nRaw:    {json_path}")
+    print(f"\nReport: {json_path}")
     return 0 if all(r["status"] != "error" for r in results) else 1
 
 
