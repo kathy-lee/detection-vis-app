@@ -1,0 +1,23 @@
+[
+  {
+    "id": "RECORD/CRUW",
+    "model": "RECORD",
+    "dataset": "CRUW",
+    "features": [
+      "RA"
+    ],
+    "num_epochs": 24,
+    "seed": 3,
+    "splitmode": "sequence",
+    "n_datafiles": 40,
+    "status": "ok",
+    "exp_name": "RECORD_CRUW_Aug-23-2026_06:58:13",
+    "epochs_recorded": 5,
+    "verdict": "suspect",
+    "notes": [
+      "loss 0.03233 -> 0.03382 (NOT down)",
+      "metrics non-zero: mAP=0.5557, mAR=0.6678"
+    ],
+    "seconds": 19092.4
+  }
+]

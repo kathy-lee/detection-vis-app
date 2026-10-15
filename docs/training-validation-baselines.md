@@ -431,7 +431,7 @@ kind of fresh-shuffle discontinuity as the anchor (resumed at 53). `train()` res
 weights, optimizer, scheduler, `global_step` and `history`; the interrupted epoch's
 remaining batches are discarded and that epoch is redone from its start.
 
-One artifact to ignore in `docs/phase2-mvrecord-carrada.{md,json}`: the run is labelled
+One artifact to ignore in `docs/phase2-mvrecord-carrada.json`: the run is labelled
 `verdict: suspect` with note `loss 0.321 -> 0.4571 (NOT down)`. That is `smoke_sweep`'s
 first-vs-last val-loss heuristic applied to the resumed segment only, and this model's val
 loss oscillates in 0.25-0.46 with no trend while mIoU climbs -- the reference does exactly

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "FFTRadNet/RADIal",
+    "model": "FFTRadNet",
+    "dataset": "RADIal",
+    "features": [
+      "RD"
+    ],
+    "num_epochs": 100,
+    "seed": 3,
+    "splitmode": "original",
+    "n_datafiles": 1,
+    "status": "ok",
+    "exp_name": "FFTRadNet_RADIal_Sep-08-2026_22:38:45",
+    "epochs_recorded": 100,
+    "verdict": "ok",
+    "notes": [
+      "loss 262.6 -> 173.9 (down)",
+      "metrics non-zero: mAP=0.9743, mAR=0.9193, mIoU=0.6575"
+    ],
+    "seconds": 40958.5
+  }
+]
