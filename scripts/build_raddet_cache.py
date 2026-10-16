@@ -31,17 +31,16 @@ _feature = None
 
 
 def _init(feature):
-    """One dataset instance per worker process."""
+    """One dataset instance per worker process. RADDetDataset is a parser: the cache dir
+    and _get_collapsed need no model or train config."""
     global _ds, _feature
-    from smoke_sweep import resolve_configs, fetch_datafiles, build_split
+    from smoke_sweep import fetch_datafiles, build_split
     from detection_vis_backend.datasets.dataset import DatasetFactory
 
     _feature = feature
-    model_cfg, train_cfg = resolve_configs("DAROD", "RADDetDataset", [feature])
     datafiles, _ = build_split("RADDetDataset", fetch_datafiles()["RADDetDataset"], "original")
     f = datafiles[0]
     _ds = DatasetFactory().get_instance(f["parse"], f["id"])
-    _ds.prepare_for_train([feature], train_cfg, model_cfg)
 
 
 def _one(index):
@@ -59,16 +58,14 @@ def main():
     args = p.parse_args()
 
     # Parse once in the parent so the workers hit a warm registration.
-    from smoke_sweep import resolve_configs, fetch_datafiles, build_split
+    from smoke_sweep import fetch_datafiles, build_split
     from detection_vis_backend.jobs.tasks import _parse_datafiles
     from detection_vis_backend.datasets.dataset import DatasetFactory
 
-    model_cfg, train_cfg = resolve_configs("DAROD", "RADDetDataset", [args.feature])
     datafiles, _ = build_split("RADDetDataset", fetch_datafiles()["RADDetDataset"], "original")
     _parse_datafiles(datafiles)
     f = datafiles[0]
     ds = DatasetFactory().get_instance(f["parse"], f["id"])
-    ds.prepare_for_train([args.feature], train_cfg, model_cfg)
     n = len(ds)
     cache_dir = os.path.join(ds.collapsed_cache_dir, args.feature)
     print(f"{n} frames -> {cache_dir}  ({args.workers} workers)", flush=True)
