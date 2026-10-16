@@ -65,3 +65,35 @@ def test_rmt_keys_match_the_authors_backbone():
     ref = {k[len("backbone."):] for k in sd if k.startswith("backbone.")}
     ours = set(T.RMT(**RMT_KW).state_dict())
     assert ours == ref, f"missing {sorted(ref - ours)[:5]} unexpected {sorted(ours - ref)[:5]}"
+
+
+BODY_KW = dict(input_size=[256, 256, 256], n_class=6)
+
+
+def test_body_output_shapes_and_anchor_count():
+    body = T.TransRADBody(**BODY_KW).eval()
+    with torch.no_grad():
+        dbox, cls, heads, anchors, strides = body(torch.randn(1, 256, 256, 256))
+    assert body.no == 6 + 4 * 16 + 1 + 2
+    assert [tuple(h.shape) for h in heads] == [(1, 73, 32, 32), (1, 73, 16, 16), (1, 73, 8, 8)]
+    assert tuple(dbox.shape) == (1, 4, 1344) and tuple(cls.shape) == (1, 6, 1344)
+    assert tuple(anchors.shape) == (2, 1344) and tuple(strides.shape) == (1, 1344)
+    assert body.stride.tolist() == [8.0, 16.0, 32.0]
+
+
+def test_body_strides_equal_a_dummy_forward():
+    """The reference computes stride = input/feature-size with a dummy forward at
+    construction; the port fixes it from the architecture and this pins the equality."""
+    body = T.TransRADBody(**BODY_KW).eval()
+    with torch.no_grad():
+        feats = body.backbone(torch.zeros(1, 256, 256, 256))
+    assert [256 / f.shape[-2] for f in feats] == body.stride.tolist()
+
+
+@needs_ref
+def test_body_state_dict_matches_the_authors_checkpoint_exactly():
+    sd = torch.load(T.REF_CHECKPOINT, map_location="cpu")
+    body = T.TransRADBody(**BODY_KW)
+    assert set(body.state_dict()) == set(sd)
+    assert {k: tuple(v.shape) for k, v in body.state_dict().items()} == {k: tuple(v.shape) for k, v in sd.items()}
+    body.load_state_dict(sd, strict=True)

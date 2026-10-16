@@ -619,3 +619,225 @@ class RMT(nn.Module):
                 if isinstance(m, nn.BatchNorm2d):
                     m.eval()
         return self
+
+
+# ---------------------------------------------------------------------------------------
+# YOLOv8 neck blocks: REF/nets/backbone.py lines 197-248 (bubbliiiing/yolov8-pytorch).
+# ---------------------------------------------------------------------------------------
+def autopad(k, p=None, d=1):
+    # kernel, padding, dilation
+    if d > 1:
+        # actual kernel-size
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
+    if p is None:
+        # auto-pad
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
+    return p
+
+class SiLU(nn.Module):
+    @staticmethod
+    def forward(x):
+        return x * torch.sigmoid(x)
+
+class Conv(nn.Module):
+    default_act = SiLU()
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        super().__init__()
+        self.conv   = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn     = nn.BatchNorm2d(c2, eps=0.001, momentum=0.03, affine=True, track_running_stats=True)
+        self.act    = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        return self.act(self.conv(x))
+
+class Bottleneck(nn.Module):
+    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, k[0], 1)
+        self.cv2 = Conv(c_, c2, k[1], 1, g=g)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+class C2f(nn.Module):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c      = int(c2 * e)
+        self.cv1    = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2    = Conv((2 + n) * self.c, c2, 1)
+        self.m      = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+# ---------------------------------------------------------------------------------------
+# Anchors and box decoding: REF/utils/utils_bbox.py lines 16-28, 57-67. The torch<1.10
+# meshgrid fallback is dropped (torch 2.1 here).
+# ---------------------------------------------------------------------------------------
+def make_anchors(feats, strides, grid_cell_offset=0.5):
+    """Generate anchors from features."""
+    anchor_points, stride_tensor = [], []
+    assert feats is not None
+    dtype, device = feats[0].dtype, feats[0].device
+    for i, stride in enumerate(strides):
+        _, _, h, w  = feats[i].shape
+        sx          = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
+        sy          = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+        sy, sx      = torch.meshgrid(sy, sx, indexing='ij')
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
+    return torch.cat(anchor_points), torch.cat(stride_tensor)
+
+def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
+    """Transform distance(ltrb) to box(xywh or xyxy)."""
+
+    lt, rb  = torch.split(distance, distance.shape[dim]//2, dim)
+    x1y1    = anchor_points - lt
+    x2y2    = anchor_points + rb
+    if xywh:
+        c_xy    = (x1y1 + x2y2) / 2
+        wh      = x2y2 - x1y1
+        return torch.cat((c_xy, wh), dim)  # xywh bbox
+    return torch.cat((x1y1, x2y2), dim)  # xyxy bbox
+
+
+# ---------------------------------------------------------------------------------------
+# Weight init: REF/nets/yolo_training.py lines 704-722 (print removed).
+# ---------------------------------------------------------------------------------------
+def weights_init(net, init_type='normal', init_gain = 0.02):
+    def init_func(m):
+        classname = m.__class__.__name__
+        if hasattr(m, 'weight') and classname.find('Conv') != -1:
+            if init_type == 'normal':
+                torch.nn.init.normal_(m.weight.data, 0.0, init_gain)
+            elif init_type == 'xavier':
+                torch.nn.init.xavier_normal_(m.weight.data, gain=init_gain)
+            elif init_type == 'kaiming':
+                torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+            elif init_type == 'orthogonal':
+                torch.nn.init.orthogonal_(m.weight.data, gain=init_gain)
+            else:
+                raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+        elif classname.find('BatchNorm2d') != -1:
+            torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
+            torch.nn.init.constant_(m.bias.data, 0.0)
+    net.apply(init_func)
+
+
+# ---------------------------------------------------------------------------------------
+# DFL and the body: REF/nets/yolo.py lines 35-52 (DFL) and 57-185 (YoloBody).
+# ---------------------------------------------------------------------------------------
+class DFL(nn.Module):
+
+    # Distribution Focal Loss (DFL) proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
+    def __init__(self, c1=16, box_attri=4):
+        super().__init__()
+        self.conv   = nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
+        x           = torch.arange(c1, dtype=torch.float)
+        self.conv.weight.data[:] = nn.Parameter(x.view(1, c1, 1, 1))
+        self.c1     = c1  #c1 = self.reg_max
+        self.box_attri = box_attri
+
+    def forward(self, x):
+
+        b, c, a = x.shape
+
+        # bs, 4, self.reg_max, 8400 => bs, self.reg_max, 4, 8400 => b, 4, 8400
+        return self.conv(x.view(b, self.box_attri, self.c1, a).transpose(2, 1).softmax(1)).view(b, self.box_attri, a)
+
+
+class TransRADBody(nn.Module):
+    """REF/nets/yolo.py YoloBody (lines 57-185): RMT backbone, two top-down C2f fusions,
+    four decoupled heads per level (box distribution, class, objectness, Doppler end
+    points). Attribute names are the reference's so model_data/best_epoch_weights.pth
+    loads with strict=True."""
+
+    def __init__(self, input_size, n_class, phi="n", embed_dims=(32, 64, 128, 256),
+                 depths=(2, 2, 8, 2), num_heads=(4, 4, 8, 16), drop_path_rate=0.1, reg_max=16):
+        super().__init__()
+        depth_dict = {'n': 0.33, 's': 0.33, 'm': 0.67, 'l': 1.00, 'x': 1.00}
+        width_dict = {'n': 0.25, 's': 0.50, 'm': 0.75, 'l': 1.00, 'x': 1.25}
+        deep_width_dict = {'n': 1.00, 's': 1.00, 'm': 0.75, 'l': 0.50, 'x': 0.50}
+        dep_mul, wid_mul, deep_mul = depth_dict[phi], width_dict[phi], deep_width_dict[phi]
+
+        input_channels = input_size[0]          # Doppler bins after the adapter's resize (256)
+        base_channels = int(wid_mul * 64)       # 16 for 'n'
+        base_depth = max(round(dep_mul * 3), 1)  # 1 for 'n'
+
+        self.backbone = RMT(in_chans=input_channels, out_indices=(0, 1, 2, 3),
+                            embed_dims=list(embed_dims), depths=list(depths), num_heads=list(num_heads),
+                            init_values=[2, 2, 2, 2], heads_ranges=[4, 4, 6, 6], mlp_ratios=[3, 3, 3, 3],
+                            drop_path_rate=drop_path_rate, norm_layer=nn.LayerNorm,
+                            patch_norm=True, use_checkpoint=False,
+                            chunkwise_recurrents=[True, True, False, False], projection=1024,
+                            layerscales=[False, False, False, False], layer_init_values=1e-6, norm_eval=True)
+
+        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv3_for_upsample1 = C2f(int(base_channels * 16 * deep_mul) + base_channels * 8, base_channels * 8, base_depth, shortcut=False)
+        self.conv3_for_upsample2 = C2f(base_channels * 8 + base_channels * 4, base_channels * 4, base_depth, shortcut=False)
+        # The bottom-up path is built but never used in forward (reference lines 84-91,
+        # 134-156); kept so the checkpoint's down_sample*/conv3_for_downsample* keys load.
+        self.down_sample1 = Conv(base_channels * 4, base_channels * 4, 3, 2)
+        self.conv3_for_downsample1 = C2f(base_channels * 8 + base_channels * 4, base_channels * 8, base_depth, shortcut=False)
+        self.down_sample2 = Conv(base_channels * 8, base_channels * 8, 3, 2)
+        self.conv3_for_downsample2 = C2f(int(base_channels * 16 * deep_mul) + base_channels * 8, int(base_channels * 16 * deep_mul), base_depth, shortcut=False)
+
+        ch = [base_channels * 4, base_channels * 8, int(base_channels * 16 * deep_mul)]
+        self.shape = None
+        self.nl = len(ch)
+        # Deviation: the reference runs a dummy forward here to measure the strides
+        # (line 97). The stem is stride 4 and each of the three merges stride 2, and the
+        # body reads the last three stages, so the strides are 8, 16, 32 by construction.
+        self.stride = torch.tensor([8., 16., 32.])
+        self.obj_ness = 1
+        self.reg_max = reg_max
+        self.box_attri = 4
+        self.no = n_class + self.reg_max * self.box_attri + self.obj_ness + 2
+        self.num_classes = n_class
+        self.input_shape = list(input_size)
+
+        c2, c3 = max((16, ch[0] // self.box_attri, self.reg_max * self.box_attri)), max(ch[0], n_class)
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, self.box_attri * self.reg_max, 1)) for x in ch)
+        self.cv3 = nn.ModuleList(
+            nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, n_class, 1), nn.Sigmoid()) for x in ch)
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.obj_ness, 1), nn.Sigmoid()) for x in ch)
+        self.cv5 = nn.ModuleList(
+            nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, 2, 1), nn.Sigmoid()) for x in ch)
+        # Train.py runs with pretrained=False, so the whole body -- backbone convs
+        # included, after RMT's own init -- gets the normal(0, 0.02) init (lines 120-121).
+        weights_init(self)
+        self.dfl = DFL(self.reg_max, self.box_attri) if self.reg_max > 1 else nn.Identity()
+
+    def forward(self, x):
+        feat1, feat2, feat3 = self.backbone(x)
+        P5 = feat3
+        P5_upsample = self.upsample(feat3)
+        P4 = torch.cat([P5_upsample, feat2], 1)
+        P4 = self.conv3_for_upsample1(P4)
+        P4_upsample = self.upsample(P4)
+        P3 = torch.cat([P4_upsample, feat1], 1)
+        P3 = self.conv3_for_upsample2(P3)
+
+        shape = P3.shape
+        x = [P3, P4, P5]
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), self.cv4[i](x[i]), self.cv5[i](x[i])), 1)
+
+        if self.shape != shape:
+            self.anchors, self.strides = (a.transpose(0, 1) for a in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+
+        box, cls, obj, points = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2).split(
+            (self.reg_max * self.box_attri, self.num_classes, self.obj_ness, 2), 1)
+        dbox = self.dfl(box)
+        return dbox, cls, x, self.anchors.to(dbox.device), self.strides.to(dbox.device)
