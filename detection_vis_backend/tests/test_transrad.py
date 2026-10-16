@@ -133,3 +133,59 @@ def test_torch_iou3d_matches_the_numpy_version_used_by_evaluation():
     got = T.torch_iou3d(a.expand(2, 6), b, size)
     want = iou3d_np(a.numpy().repeat(2, 0), b.numpy(), [256, 256, 64])
     np.testing.assert_allclose(got.numpy(), want, rtol=1e-5)
+
+
+def _rows(*boxes):
+    """[x,y,z,w,h,d, obj, scores over 6 classes]"""
+    return np.array(boxes, dtype=np.float32)
+
+
+def test_nms_drops_lower_scoring_overlap_of_another_class_and_keeps_distant_box():
+    car = [100, 120, 30, 10, 12, 6, 0.9, 0, 0, 0.9, 0, 0, 0]
+    truck_same_spot = [101, 121, 30, 10, 12, 6, 0.8, 0, 0, 0, 0, 0, 0.8]
+    person_far = [20, 20, 10, 4, 4, 4, 0.7, 0.7, 0, 0, 0, 0, 0]
+    out = T.nms_class_then_location(_rows(car, truck_same_spot, person_far), [256, 256, 64],
+                                    confidence=0.3, nms_iou=0.1, la_iou=0.1)
+    assert sorted(out[:, 7].tolist()) == [0.0, 2.0]        # truck removed, car and person kept
+    assert out[out[:, 7] == 2][0, 6] == pytest.approx(0.9)  # score column is the class score
+
+
+def test_nms_on_nothing_above_threshold_returns_empty_8_columns():
+    weak = [100, 120, 30, 10, 12, 6, 0.1, 0, 0, 0.9, 0, 0, 0]
+    out = T.nms_class_then_location(_rows(weak), [256, 256, 64], 0.3, 0.1, 0.1)
+    assert out.shape == (0, 8)
+
+
+def test_decode_recovers_a_box_planted_in_the_head_maps():
+    """Plant one anchor's distribution and points so that decoding yields a known box."""
+    body = T.TransRADBody(**BODY_KW).eval()
+    with torch.no_grad():
+        dbox, cls, heads, anchors, strides = body(torch.randn(1, 256, 256, 256))
+    # pick anchor 0 of P3: cell (0,0), stride 8, anchor point (0.5, 0.5) in grid units
+    reg_max, no = body.reg_max, body.no
+    P3 = torch.zeros_like(heads[0])
+    dist = torch.full((4, reg_max), -20.)             # one-hot-ish softmax
+    for k, target in enumerate([2, 3, 2, 3]):         # l, t, r, b in grid units
+        dist[k, target] = 20.
+    P3[0, :4 * reg_max, 0, 0] = dist.flatten()
+    P3[0, 4 * reg_max + 2, 0, 0] = 1.0                # class 2 score (the head's sigmoid already applied)
+    P3[0, 4 * reg_max + 6, 0, 0] = 1.0                # objectness
+    P3[0, 4 * reg_max + 7, 0, 0] = 10 / 64            # z1 (fraction of eval doppler size)
+    P3[0, 4 * reg_max + 8, 0, 0] = 20 / 64            # z2
+    heads = [P3, torch.zeros_like(heads[1]), torch.zeros_like(heads[2])]
+    dbox = body.dfl(torch.cat([h.view(1, no, -1) for h in heads], 2)[:, :4 * reg_max])
+    rows = T.decode_predictions((dbox, None, heads, anchors, strides), 6, [256, 256, 64])
+    r = rows[0, 0]
+    # x = (0.5 - 2 + 0.5 + 2)/2 * 8 = 4, w = (2+2)*8 = 32; y: (0.5-3 + 0.5+3)/2*8 = 4, h = 48
+    np.testing.assert_allclose(r[:6], [4.0, 4.0, 15.0, 32.0, 48.0, 10.0], atol=1e-4)
+    assert r[6] == pytest.approx(1.0) and r[7 + 2] == pytest.approx(1.0)
+
+
+def test_decode_accepts_the_network_dict_output():
+    body = T.TransRADBody(**BODY_KW).eval()
+    with torch.no_grad():
+        dbox, cls, heads, anchors, strides = body(torch.randn(1, 256, 256, 256))
+    as_tuple = T.decode_predictions((dbox, cls, heads, anchors, strides), 6, [256, 256, 64])
+    as_dict = T.decode_predictions({"dbox": dbox, "cls": cls, "heads": heads, "anchors": anchors, "strides": strides}, 6, [256, 256, 64])
+    assert as_tuple.shape == (1, 1344, 13)
+    np.testing.assert_array_equal(as_tuple, as_dict)

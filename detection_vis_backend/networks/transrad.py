@@ -1428,3 +1428,87 @@ class TransRADLoss:
 
     def __call__(self, preds, batch):
         return self.compute_loss(preds, batch)
+
+
+# ---------------------------------------------------------------------------------------
+# Decoding: REF/utils/utils_bbox.py DecodeBox.decode_box_Lei (lines 92-120).
+# ---------------------------------------------------------------------------------------
+def decode_predictions(outputs, n_class, eval_input_size):
+    """Head maps -> (B, A, 7 + n_class) rows [x, y, z, w, h, d, objectness, class scores...]
+    in original cube units: x, y, w, h in range/azimuth bins of the resized input (256),
+    z and d in Doppler bins of eval_input_size[2] (64), as the reference evaluates.
+    Accepts the body's 5-tuple or the TransRAD network's dict."""
+    if isinstance(outputs, dict):
+        outputs = (outputs["dbox"], outputs["cls"], outputs["heads"], outputs["anchors"], outputs["strides"])
+    dbox, _, feats, anchors, strides = outputs
+    reg_max, box_attri = 16, 4
+    no = n_class + reg_max * box_attri + 1 + 2
+    pred_distri, pred_scores, pred_objness, pred_points = torch.cat(
+        [xi.view(feats[0].shape[0], no, -1) for xi in feats], 2).split(
+        (reg_max * box_attri, n_class, 1, 2), 1)
+    dbox = dist2bbox(dbox, anchors.unsqueeze(0), xywh=True, dim=1) * strides
+    pred_points = pred_points * eval_input_size[-1]
+    z1 = pred_points[:, 0, :]
+    z2 = pred_points[:, 1, :]
+    d = z2 - z1
+    z = (z2 + z1) / 2.
+    xyzwhd = torch.stack((dbox[:, 0, :], dbox[:, 1, :], z, dbox[:, 2, :], dbox[:, 3, :], d), dim=1)
+    y = torch.cat((xyzwhd, pred_objness, pred_scores), 1).permute(0, 2, 1)
+    return y.detach().cpu().numpy()
+
+
+# ---------------------------------------------------------------------------------------
+# Two-stage NMS: REF/utils/helper.py NMS_3D_Lei (631-728, method 'nms') and
+# NMS_3D_Lei_overlap (821-856), applied as in REF/yolo.py detect_image lines 97-98.
+# ---------------------------------------------------------------------------------------
+def _nms_per_class(bboxes, input_size, iou_threshold, confidence):
+    """NMS_3D_Lei with method='nms': objectness threshold, class = argmax of class scores,
+    score column replaced by that class score, greedy per-class 3D NMS."""
+    conf_mask = (bboxes[..., 6] >= confidence)
+    bboxes = bboxes[conf_mask]
+    cls_scores = bboxes[:, 7:]
+    prediction_class = np.argmax(cls_scores, axis=-1)
+    cls_scores = cls_scores[np.arange(cls_scores.shape[0]), prediction_class]
+    bboxes = np.concatenate([bboxes[:, :7], np.expand_dims(prediction_class, axis=-1)], axis=-1)
+    bboxes[..., 6] = cls_scores
+    if len(bboxes) == 0:
+        return np.zeros([0, 8])
+    best_bboxes = []
+    for cls in list(np.unique(bboxes[:, 7])):
+        cls_bboxes = bboxes[bboxes[:, 7] == cls]
+        while len(cls_bboxes) > 0:
+            max_ind = np.argmax(cls_bboxes[:, 6])
+            best_bbox = cls_bboxes[max_ind]
+            best_bboxes.append(best_bbox)
+            cls_bboxes = np.concatenate([cls_bboxes[:max_ind], cls_bboxes[max_ind + 1:]])
+            iou = iou3d_np(best_bbox[np.newaxis, :6], cls_bboxes[:, :6], input_size)
+            weight = np.ones((len(iou),), dtype=np.float32)
+            weight[iou > iou_threshold] = 0.0
+            cls_bboxes[:, 6] = cls_bboxes[:, 6] * weight
+            cls_bboxes = cls_bboxes[cls_bboxes[:, 6] > 0.]
+    return np.array(best_bboxes) if len(best_bboxes) else np.zeros([0, 8])
+
+
+def _location_aware_nms(bbox, input_size, iou_threshold):
+    """NMS_3D_Lei_overlap: across classes, a lower-score box of a DIFFERENT class that
+    overlaps a kept box at IoU >= threshold is dropped (the paper's LA-NMS, Algorithm 1)."""
+    if len(bbox) == 0:
+        return bbox
+    bbox = bbox[np.argsort(-bbox[:, 6])]
+    keep = []
+    while len(bbox) > 0:
+        current_box = bbox[0]
+        keep.append(current_box)
+        bbox = bbox[1:]
+        iou = iou3d_np(current_box[np.newaxis, :6], bbox[:, :6], input_size)
+        keep_indices = [i for i, box in enumerate(bbox) if iou[i] < iou_threshold or box[7] == current_box[7]]
+        bbox = bbox[keep_indices]
+    return np.array(keep)
+
+
+def nms_class_then_location(rows, eval_input_size, confidence, nms_iou, la_iou):
+    """Class NMS, then Location-Aware NMS. rows: (A, 7 + n_class) from decode_predictions;
+    returns (M, 8) rows [x, y, z, w, h, d, score, class]."""
+    best = _nms_per_class(rows, eval_input_size, nms_iou, confidence)
+    best = _location_aware_nms(best, eval_input_size, la_iou)
+    return best if len(best) else np.zeros([0, 8])
