@@ -189,3 +189,75 @@ def test_decode_accepts_the_network_dict_output():
     as_dict = T.decode_predictions({"dbox": dbox, "cls": cls, "heads": heads, "anchors": anchors, "strides": strides}, 6, [256, 256, 64])
     assert as_tuple.shape == (1, 1344, 13)
     np.testing.assert_array_equal(as_tuple, as_dict)
+
+
+# ---------------------------------------------------------------------------------------
+# Adapter and collate, against the fake parser shared with the other RADDet adapters.
+# ---------------------------------------------------------------------------------------
+from detection_vis_backend.tests.test_sample_adapters import FakeRADDet, ONE_CAR, EMPTY, WRAP, DATA_STATS  # noqa: E402
+from detection_vis_backend.datasets.adapters import make_sample_adapter  # noqa: E402
+
+TRANSRAD_MODEL_CFG = {"class": "TransRAD", "input_size": [256, 256, 256], "n_class": 6}
+
+
+def test_transrad_sample_layout():
+    a = make_sample_adapter("TransRAD", FakeRADDet([ONE_CAR]), ["RAD"], TRANSRAD_MODEL_CFG, {}, "val")
+    s = a[0]
+    assert set(s) == {"RAD", "label", "boxes", "image_path"}
+    assert s["RAD"].shape == (256, 256, 256) and s["RAD"].dtype == np.float32
+    assert s["label"].shape == (1, 7) and s["label"].dtype == np.float32
+    assert s["boxes"].shape == (1, 7) and s["boxes"].dtype == np.float64
+    np.testing.assert_allclose(s["label"][0], [2, 100 / 256, 120 / 256, 30 / 64, 10 / 256, 12 / 256, 6 / 64])
+    np.testing.assert_allclose(s["boxes"][0], [100, 120, 30, 10, 12, 6, 2])
+
+
+def test_transrad_resize_is_the_reference_nearest_zoom():
+    from scipy.ndimage import zoom
+    from detection_vis_backend.datasets.utils import complexTo2Channels
+    p = FakeRADDet([ONE_CAR])
+    s = make_sample_adapter("TransRAD", p, ["RAD"], TRANSRAD_MODEL_CFG, {}, "val")[0]
+    cube = (complexTo2Channels(p.get_RAD(0)) - DATA_STATS["global_mean_log"]) / DATA_STATS["global_variance_log"]
+    want = np.transpose(zoom(cube.astype(np.float32), (1, 1, 4), order=0), (2, 0, 1))
+    np.testing.assert_array_equal(s["RAD"], want)
+    # nearest neighbour: every output Doppler slice is one of the 64 input slices
+    inp = np.transpose(cube.astype(np.float32), (2, 0, 1))
+    assert all(any(np.array_equal(s["RAD"][k], inp[j]) for j in range(64)) for k in (0, 1, 128, 255))
+
+
+def test_transrad_edge_box_is_clamped_not_split():
+    a = make_sample_adapter("TransRAD", FakeRADDet([WRAP]), ["RAD"], TRANSRAD_MODEL_CFG, {}, "val")
+    s = a[0]
+    assert s["label"].shape == (1, 7)
+    x, w = s["boxes"][0, 2], s["boxes"][0, 5]           # azimuth centre/width after clamp
+    assert x - w / 2 >= 0 and x + w / 2 <= 256
+    # WRAP box: x1 = 2 - 5 < 0 -> x1 += 256 -> keeps [0, 7] (the larger part), per clamp_box
+    np.testing.assert_allclose([x - w / 2, x + w / 2], [0, 7])
+
+
+def test_clamp_box_edges_rule_matches_reference_cases():
+    # [x1, y1, z1, x2, y2, z2] after centre/size conversion; y wraps at 256, z at 64
+    boxes = np.array([[10, -3, 5, 20, 4, 9],     # y1 < 0: y1 -> 253, (256-253)=3 < (4-0)=4 -> [0, 4]
+                      [10, 250, 5, 20, 258, 9],  # y2 >= 256: y2 -> 2, (256-250)=6 >= 2 -> [250, 256]
+                      [10, 100, 62, 20, 110, 66]], dtype=float)  # z2 >= 64: z2 -> 2, (64-62)=2 >= 2 -> [62, 64]
+    xyzwhd = T.xyzxyz2xyzwhd(boxes)
+    out = T.xyzxyz2xyzwhd(T.xyzwhd2xyzxyz(xyzwhd))   # round trip sanity
+    np.testing.assert_allclose(out, xyzwhd)
+    from detection_vis_backend.datasets.adapters.raddet import clamp_box_edges
+    got = T.xyzwhd2xyzxyz(clamp_box_edges(xyzwhd, 256, 64))
+    np.testing.assert_allclose(got[:, [1, 4]], [[0, 4], [250, 256], [100, 110]])
+    np.testing.assert_allclose(got[:, [2, 5]], [[5, 9], [5, 9], [62, 64]])
+
+
+def test_transrad_empty_frame():
+    s = make_sample_adapter("TransRAD", FakeRADDet([EMPTY]), ["RAD"], TRANSRAD_MODEL_CFG, {}, "val")[0]
+    assert s["label"].shape == (0, 7) and s["boxes"].shape == (0, 7)
+
+
+def test_transrad_collate_concatenates_labels_with_batch_index_and_pads_boxes():
+    from detection_vis_backend.train.utils import TransRAD_collate
+    a = make_sample_adapter("TransRAD", FakeRADDet([ONE_CAR, EMPTY, ONE_CAR]), ["RAD"], TRANSRAD_MODEL_CFG, {}, "val")
+    b = TransRAD_collate([a[0], a[1], a[2]])
+    assert tuple(b["RAD"].shape) == (3, 256, 256, 256)
+    assert tuple(b["label"].shape) == (2, 8) and b["label"][:, 0].tolist() == [0.0, 2.0]
+    assert tuple(b["boxes"].shape) == (3, 1, 7) and b["boxes"][1].abs().sum() == 0
+    assert b["image_path"] == ["/img/0.jpg", "/img/1.jpg", "/img/2.jpg"]

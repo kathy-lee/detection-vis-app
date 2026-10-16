@@ -5,11 +5,13 @@ get_RAD, _get_collapsed (and its content-addressed cache), get_image, annotation
 data_stats; everything model-shaped is here.
 """
 import numpy as np
+from scipy.ndimage import zoom
 
 from detection_vis_backend.datasets.adapters import SampleAdapter, register
 from detection_vis_backend.datasets.utils import (
     complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal,
 )
+from detection_vis_backend.networks.transrad import xyzwhd2xyzxyz, xyzxyz2xyzwhd
 
 
 def random_flip(frame, gt_boxes, transformations):
@@ -222,3 +224,82 @@ class DARODOnRADDet(SampleAdapter):
         feature_data = np.expand_dims(feature_data, axis=0)
         return {feature_name: feature_data, 'label': gt_labels, 'boxes': gt_boxes,
                 'image_path': self.parser.get_image(index)}
+
+
+def clamp_box_edges(xyzwhd, y_shape, z_shape):
+    """TransRAD reference radar_dataset_generator.py clamp_box (lines 43-93): a box that
+    crosses the azimuth (y) or Doppler (z) edge is clamped to whichever side holds the
+    larger part. DAROD splits such boxes in two instead; TransRAD keeps one."""
+    arr = xyzwhd2xyzxyz(np.asarray(xyzwhd, dtype=float))
+    for i in range(arr.shape[0]):
+        x1, y1, z1, x2, y2, z2 = arr[i]
+        if y1 < 0:
+            y1 += y_shape
+            if (y_shape - y1) >= (y2 - 0):
+                y1, y2 = y1, y_shape
+            else:
+                y1, y2 = 0, y2
+        elif y2 >= y_shape:
+            y2 -= y_shape
+            if (y_shape - y1) >= (y2 - 0):
+                y1, y2 = y1, y_shape
+            else:
+                y1, y2 = 0, y2
+        if z1 < 0:
+            z1 += z_shape
+            if (z_shape - z1) >= (z2 - 0):
+                z1, z2 = z1, z_shape
+            else:
+                z1, z2 = 0, z2
+        elif z2 >= z_shape:
+            z2 -= z_shape
+            if (z_shape - z1) >= (z2 - 0):
+                z1, z2 = z1, z_shape
+            else:
+                z1, z2 = 0, z2
+        arr[i] = [x1, y1, z1, x2, y2, z2]
+    return xyzxyz2xyzwhd(arr)
+
+
+@register
+class TransRADOnRADDet(SampleAdapter):
+    """Log-magnitude cube, Doppler resized 64 -> 256 by nearest neighbour, Doppler as the
+    channel axis; per-frame normalised boxes [cls, x, y, z, w, h, d]. Mirrors the TransRAD
+    reference RadarDataset (utils/radar_dataset_generator.py) with mode 'RA',
+    target_shape [256, 256, 256], interpolation 'nearest'. No augmentation on any split."""
+    MODELS, DATASET = ("TransRAD",), "RADDetDataset"
+    TARGET_SHAPE = (256, 256, 256)
+
+    def __init__(self, parser, features, model_cfg, train_cfg, splittype=None):
+        super().__init__(parser, features, model_cfg, train_cfg, splittype)
+        if features != ["RAD"]:
+            raise ValueError(f"TransRAD on RADDetDataset builds ['RAD'], not {features}")
+        self.data_stats = parser.data_stats
+        self.input_shape = [256, 256, 64]            # the cube on disk (range, azimuth, doppler)
+
+    def __getitem__(self, index):
+        gt = self.parser.annotation(index)
+        cube = complexTo2Channels(self.parser.get_RAD(index))
+        cube = (cube - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
+
+        n = len(gt["classes"])
+        boxes = np.zeros((n, 7))
+        for i in range(n):
+            boxes[i, :6] = gt["boxes"][i]
+            boxes[i, 6] = self.data_stats["all_classes"].index(gt["classes"][i])
+        if n:
+            boxes[:, :6] = clamp_box_edges(boxes[:, :6], self.input_shape[1], self.input_shape[2])
+
+        label = np.zeros((n, 7), dtype=np.float32)
+        if n:
+            label[:, 0] = boxes[:, 6]
+            label[:, 1:] = boxes[:, :6]
+            label[:, [1, 4]] /= self.input_shape[0]
+            label[:, [2, 5]] /= self.input_shape[1]
+            label[:, [3, 6]] /= self.input_shape[2]
+
+        scale = tuple(t / s for t, s in zip(self.TARGET_SHAPE, cube.shape))
+        cube = zoom(np.asarray(cube, dtype=np.float32), scale, order=0)
+        cube = np.transpose(cube, (2, 0, 1))
+        return {"RAD": cube, "label": label, "boxes": boxes,
+                "image_path": self.parser.get_image(index)}

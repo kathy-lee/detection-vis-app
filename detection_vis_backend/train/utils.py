@@ -64,6 +64,27 @@ def DAROD_collate(batch):
     return {'RD': radar, 'label': padded_labels, 'boxes': padded_bboxes}
 
 
+def TransRAD_collate(batch):
+    """RAD cubes stacked; per-frame labels concatenated with a leading batch-index column
+    (the layout the TransRAD loss indexes, reference radar_dataset_collate); raw boxes
+    zero-padded per frame for the evaluator."""
+    radar = torch.stack([torch.from_numpy(item['RAD']) for item in batch], 0)
+    labels = []
+    for i, item in enumerate(batch):
+        lab = np.zeros((len(item['label']), 8), dtype=np.float32)
+        lab[:, 0] = i
+        lab[:, 1:] = item['label']
+        labels.append(lab)
+    labels = torch.from_numpy(np.concatenate(labels, 0)) if labels else torch.zeros(0, 8)
+    max_boxes = max(len(item['boxes']) for item in batch)
+    boxes = torch.zeros(len(batch), max_boxes, 7, dtype=torch.float64)
+    for i, item in enumerate(batch):
+        if len(item['boxes']):
+            boxes[i, :len(item['boxes'])] = torch.from_numpy(np.asarray(item['boxes']))
+    return {'RAD': radar, 'label': labels, 'boxes': boxes,
+            'image_path': [item['image_path'] for item in batch]}
+
+
 def default_collate(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
 
