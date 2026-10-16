@@ -2316,6 +2316,38 @@ class RADDetDataset(Dataset):
             "angular_resolution" : 0.006135923,
             "velocity_resolution" : 0.41968030701528203
 		}
+        # Corpus facts, not run config: constants of the RADDet release and the
+        # content-addressed cache of collapsed maps. Both used to be set in
+        # prepare_for_train; the sample adapters (datasets/adapters/raddet.py) read
+        # data_stats at construction, before any prepare call.
+        self.data_stats = {
+            "all_classes" : ["person", "bicycle", "car", "motorcycle", "bus", "truck" ],
+            "global_mean_log" : 3.2438383,
+            "global_max_log" : 10.0805629,
+            "global_min_log" : 0.0,
+            "global_variance_log" : 6.8367246,
+            "max_boxes_per_frame" : 30,
+            "trainset_portion" : 0.8
+        }
+        # Cache under TMP_ROOTDIR, not the dataset dir: the dataset lives on an external
+        # disk that may be mounted read-only, and this is derived data.
+        #
+        # The path carries a hash of the code that PRODUCES the collapsed maps, so editing
+        # any of them misses the cache instead of silently serving values computed by the
+        # old code. A stale numerical cache is a silent-wrong-answer failure -- the run
+        # completes, the metric is simply wrong, and nothing in the output says so. Same
+        # guard as UWCR.frame_cache_dir; this one is the reason that comment exists.
+        #
+        # complexTo2Channels is included because it is the actual transform (log10(|.|^2+1));
+        # get_RAD because it decides what is read off disk. Hash only what feeds the cached
+        # ARRAY -- not the adapter, whose later stages (DAROD's data_mean/data_std, the flip
+        # augmentation) run downstream of the cache on every read and so cannot go stale.
+        _src = "".join(inspect.getsource(fn) for fn in
+                       (RADDetDataset._get_collapsed, RADDetDataset.get_RAD,
+                        complexTo2Channels))
+        self.collapsed_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
 
     def parse(self, file_id, file_path, file_name, config):
         require_shared_instance(self)
@@ -2326,7 +2358,7 @@ class RADDetDataset(Dataset):
         def get_sorted_filenames(directory):
             # Get a sorted list of all file names in the given directory
             return sorted([os.path.join(directory, filename) for filename in os.listdir(directory)])
-        
+
         self.image_filenames = get_sorted_filenames(os.path.join(self.root_path, 'stereo_image'))
         self.frame_sync = len(self.image_filenames)
         
@@ -2386,8 +2418,7 @@ class RADDetDataset(Dataset):
     
     def get_label(self, feature_name, idx=None):
         gt = []
-        with open(self.anno_filenames[idx], "rb") as f:
-            objs = pickle.load(f)
+        objs = self.annotation(idx)
         for i in range(len(objs["classes"])):
             bbox3d = objs["boxes"][i]
             cls = objs["classes"][i]
@@ -2402,20 +2433,18 @@ class RADDetDataset(Dataset):
                 y1, y2, x1, x2 = int(y_c-h/2), int(y_c+h/2), int(x_c-w/2), int(x_c+w/2)
                 gt.append([x1, y1, x2, y2, cls])
                 logger.debug(f"RA label: [{x1}, {y1}, {x2}, {y2}, {cls}]")
-            #cart_box = np.array([cart_box])   
+            #cart_box = np.array([cart_box])
         return gt
-    
+
+    def annotation(self, idx):
+        """Raw ground truth of frame idx as the dataset ships it:
+        {"classes": [str], "boxes": [array(6)], "cart_boxes": [...]}. Part of the Parser
+        interface (datasets/adapters); every adapter and get_label read labels through it."""
+        with open(self.anno_filenames[idx], "rb") as f:
+            return pickle.load(f)
+
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
         require_request_scope(self)
-        self.data_stats = {
-            "all_classes" : ["person", "bicycle", "car", "motorcycle", "bus", "truck" ],
-            "global_mean_log" : 3.2438383,
-            "global_max_log" : 10.0805629,
-            "global_min_log" : 0.0,
-            "global_variance_log" : 6.8367246,
-            "max_boxes_per_frame" : 30,
-            "trainset_portion" : 0.8
-        }
         #assert model_cfg["n_class"] == len(self.data_stats["all_classes"])
         if 'input_size' in model_cfg:
             self.input_shape = model_cfg["input_size"]
@@ -2442,25 +2471,6 @@ class RADDetDataset(Dataset):
         # configured" -- __getitem__ then leaves the input untouched, as before.
         self.data_mean = train_cfg.get("data_mean")
         self.data_std = train_cfg.get("data_std")
-        # Cache under TMP_ROOTDIR, not the dataset dir: the dataset lives on an external
-        # disk that may be mounted read-only, and this is derived data.
-        #
-        # The path carries a hash of the code that PRODUCES the collapsed maps, so editing
-        # any of them misses the cache instead of silently serving values computed by the
-        # old code. A stale numerical cache is a silent-wrong-answer failure -- the run
-        # completes, the metric is simply wrong, and nothing in the output says so. Same
-        # guard as UWCR.frame_cache_dir; this one is the reason that comment exists.
-        #
-        # complexTo2Channels is included because it is the actual transform (log10(|.|^2+1));
-        # get_RAD because it decides what is read off disk. Hash only what feeds the cached
-        # ARRAY -- not __getitem__, whose later steps (DAROD's data_mean/data_std, the flip
-        # augmentation) run downstream of the cache on every read and so cannot go stale.
-        _src = "".join(inspect.getsource(fn) for fn in
-                       (RADDetDataset._get_collapsed, RADDetDataset.get_RAD,
-                        complexTo2Channels))
-        self.collapsed_cache_dir = os.path.join(
-            os.environ.get("TMP_ROOTDIR", "/tmp"), "raddet_collapsed_cache",
-            hashlib.sha1(_src.encode()).hexdigest()[:10])
         return
 
     def transform(self, frame, gt_boxes):
@@ -2529,8 +2539,7 @@ class RADDetDataset(Dataset):
         return arr
 
     def __getitem__(self, index):
-        with open(self.anno_filenames[index], "rb") as f:
-            gt_instances = pickle.load(f)
+        gt_instances = self.annotation(index)
 
         if self.model_type == "RADDet":
             RAD_complex = self.get_RAD(index)

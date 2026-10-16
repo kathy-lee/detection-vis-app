@@ -188,3 +188,14 @@ def test_random_flip_is_a_noop_without_transformations():
     boxes = np.array([[0.1, 0.2, 0.3, 0.4]])
     f, b = random_flip(frame, boxes, None)
     assert f is frame and b is boxes
+
+
+def test_raddet_parser_has_stats_and_cache_dir_before_prepare(monkeypatch, tmp_path):
+    """The adapter reads parser.data_stats at construction, and the cache dir must not
+    depend on run config -- both belong to __init__, not prepare_for_train."""
+    monkeypatch.setenv("TMP_ROOTDIR", str(tmp_path))
+    from detection_vis_backend.datasets.dataset import RADDetDataset
+    ds = RADDetDataset()
+    assert ds.data_stats["all_classes"][2] == "car"
+    assert ds.collapsed_cache_dir.startswith(str(tmp_path))
+    assert callable(ds.annotation)
