@@ -33,7 +33,7 @@ from loguru import logger
 
 from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.nuscenes import NuScenes
-from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, smoothOnehot, iou3d, flip_vertical, flip_horizontal, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx, require_shared_instance, require_request_scope
+from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx, require_shared_instance, require_request_scope
 from detection_vis_backend.datasets.cfar import CA_CFAR
 
 
@@ -2299,6 +2299,9 @@ class CARRADA(Dataset):
 
 class RADDetDataset(Dataset):
     name = "RADDet dataset instance"
+    # Model-specific sample construction lives in datasets/adapters/raddet.py
+    # (RADDetOnRADDet, DARODOnRADDet). This class is the parser: it reads files and
+    # serves raw views and annotations, and has no __getitem__ of its own.
 
     def __init__(self, features=None):
         self.feature_path = ""
@@ -2443,67 +2446,6 @@ class RADDetDataset(Dataset):
         with open(self.anno_filenames[idx], "rb") as f:
             return pickle.load(f)
 
-    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
-        require_request_scope(self)
-        #assert model_cfg["n_class"] == len(self.data_stats["all_classes"])
-        if 'input_size' in model_cfg:
-            self.input_shape = model_cfg["input_size"]
-        elif 'input_size' in train_cfg:
-            self.input_shape = train_cfg["input_size"]
-        self.features = features
-
-        if 'transformations' in train_cfg:
-            self.transformations = train_cfg['transformations']
-        # Which split this copy serves -- transform() augments the train split only.
-        self.splittype = splittype
-
-        if model_cfg["class"] == "RADDet":
-            self.model_type = "RADDet"
-            self.anchor_boxes = np.array(model_cfg["anchor_boxes"])
-            self.headoutput_shape = [3,16,16,4,78]
-            self.grid_strides = np.array(self.input_shape[:3]) / np.array(self.headoutput_shape[1:4])
-        else:
-            self.model_type = model_cfg["class"]
-        # DAROD standardizes its input: the reference divides the spectrum by the
-        # per-dataset data_mean/data_std (darod/utils/data_utils.py). They live in the
-        # TRAIN config because model_cfg is splatted into the network constructor
-        # (network.py:38) and may only hold DAROD.__init__ arguments. None means "not
-        # configured" -- __getitem__ then leaves the input untouched, as before.
-        self.data_mean = train_cfg.get("data_mean")
-        self.data_std = train_cfg.get("data_std")
-        return
-
-    def transform(self, frame, gt_boxes):
-        """Random flip augmentation, matching the reference's data_preprocessing
-        (colindecourt/darod, darod/utils/data_utils.py): one uniform draw per sample,
-        < 0.25 -> horizontal, < 0.5 -> vertical, otherwise unchanged. Never both, and
-        only on the train split.
-
-        This used to apply EVERY entry of self.transformations to EVERY sample: the
-        is_vflip/is_hflip parameters were accepted and never read, and the sole caller
-        passed neither. With transformations ["hflip", "vflip"] that meant both flips
-        on every frame of train, val AND test -- a deterministic 180 degree rotation of
-        the whole dataset rather than augmentation, with no stochastic regularization at
-        all. Both 75-epoch seeds overfit accordingly (val loss 0.35 -> 0.47, val mAP
-        peaking around epoch 62 of 75).
-        The permanent mirroring also fed RadarFeatures wrong physics: it converts box
-        coordinates to range/Doppler via range_res/doppler_res, so a target at range r
-        was reported to the classifier as R - r.
-        """
-        if not self.transformations:
-            return frame, gt_boxes
-        # splittype is None only if a caller builds one instance for every split; treat
-        # that as train to preserve the previous default rather than silently drop
-        # augmentation. CreateDataLoaders builds a copy per split (train.py).
-        if self.splittype not in (None, 'train'):
-            return frame, gt_boxes
-        r = np.random.uniform(0, 1)
-        if r < 0.25 and 'hflip' in self.transformations:
-            frame, gt_boxes = flip_horizontal(frame, gt_boxes)
-        elif r < 0.5 and 'vflip' in self.transformations:
-            frame, gt_boxes = flip_vertical(frame, gt_boxes)
-        return frame, gt_boxes
-    
     def __len__(self):
         return self.frame_sync
 
@@ -2538,168 +2480,6 @@ class RADDetDataset(Dataset):
         os.replace(tmp, path)
         return arr
 
-    def __getitem__(self, index):
-        gt_instances = self.annotation(index)
-
-        if self.model_type == "RADDet":
-            RAD_complex = self.get_RAD(index)
-            # Gloabl Normalization
-            RAD_log = complexTo2Channels(RAD_complex)
-            RAD_data = (RAD_log - self.data_stats["global_mean_log"]) / self.data_stats["global_variance_log"]
-            # decode ground truth boxes to YOLO format
-            gt_labels, has_label, gt_boxes = self.encodeToLabels(gt_instances)
-            feature_data = RAD_data
-            feature_data = np.transpose(feature_data, (2, 0, 1))
-            feature_name = "RAD"
-        elif self.model_type == "DAROD":
-            # Reference (colindecourt/darod, datasets/raddet_builder/raddet.py) builds the
-            # spectrum as a SUM OF LOGS over the collapsed axis:
-            #     complexTo2channels(RAD) = log10(|RAD|^2 + 1)  then  getSumDim(axis)
-            # get_RD/get_RA instead return 10*log10(sum(|RAD|^2)) -- a log OF a sum, which
-            # is dominated by the single strongest bin and is a different representation
-            # of the scene, not a rescaling of the same one. Measured mean 58.8 against
-            # the reference's 830.4 (config_raddet.json data_mean; note 256 *
-            # global_mean_log = 830.4 exactly, confirming the sum-of-logs reading).
-            # get_RD/get_RA are left alone because the visualization path uses them.
-            #
-            # The collapsed map is cached on disk pre-standardization, so changing
-            # data_mean/data_std does not invalidate it -- see _get_collapsed.
-            if self.features == ["RD"]:
-                feature_name = "RD"                      # collapse azimuth -> (range, doppler)
-            elif self.features == ["RA"]:
-                feature_name = "RA"                      # collapse doppler -> (range, azimuth)
-            feature_data = self._get_collapsed(index, feature_name)
-
-            # The reference normalizes the RAD cube ELEMENTWISE BEFORE collapsing
-            # (datasets/raddet_builder/raddet.py:91 -> :99):
-            #     RAD = (log10(|RAD|^2 + 1) - global_mean_log) / global_variance_log
-            #     RD  = sum over the azimuth axis
-            # which, since the cache holds the raw sum S, is (S - n*mean) / variance for
-            # n the number of collapsed bins (256 azimuth for RD, 64 doppler for RA).
-            # Only then does data_utils.py standardize by data_mean/data_std.
-            #
-            # We used to skip straight to the standardization, giving 0.010723*S - 8.9049
-            # against the reference's 0.0015684*S - 10.2072: 6.8x their dynamic range and
-            # a different offset. I had dismissed that as harmless on the grounds that the
-            # first conv is linear and GroupNorm follows it, so a positive affine transform
-            # washes out -- wrong, because the conv bias and the per-channel constants do
-            # not scale with the signal, so GroupNorm does not restore equivalence.
-            # Measured: the reference's own trained weights score mAP 0.0031 through this
-            # loader with the old scaling, against 0.4414 from its own eval.py.
-            n_collapsed = 256 if feature_name == "RD" else 64   # RADDet RAD is (256, 256, 64)
-            feature_data = ((feature_data - n_collapsed * self.data_stats["global_mean_log"])
-                            / self.data_stats["global_variance_log"])
-
-            # Standardize, as the reference does in darod/utils/data_utils.py:
-            #     spectrums = (spectrums - data_mean) / data_std
-            if self.data_mean is not None and self.data_std is not None:
-                feature_data = (feature_data - self.data_mean) / self.data_std
-
-            x_shape, y_shape = feature_data.shape[1], feature_data.shape[0]
-            boxes = gt_instances["boxes"]
-            classes = gt_instances["classes"]
-            gt_boxes = []
-            gt_labels = []
-            for (box, class_) in zip(boxes, classes):
-                yc, xc, h, w = box[0], box[2], box[3], box[5]
-                y1, y2, x1, x2 = int(yc - h / 2), int(yc + h / 2), int(xc - w / 2), int(xc + w / 2)
-                if x1 < 0:
-                    # Create 2 boxes
-                    x1 += x_shape
-                    box1 = [y1 / y_shape, x1 / x_shape, y2 / y_shape, x_shape / x_shape]
-                    box2 = [y1 / y_shape, 0 / x_shape, y2 / y_shape, x2 / x_shape]
-                    #
-                    gt_boxes.append(box1)
-                    gt_labels.append(class_)
-                    #
-                    gt_boxes.append(box2)
-                    gt_labels.append(class_)
-                elif x2 >= x_shape:
-                    x2 -= x_shape
-                    box1 = [y1 / y_shape, x1 / x_shape, y2 / y_shape, x_shape / x_shape]
-                    box2 = [y1 / y_shape, 0 / x_shape, y2 / y_shape, x2 / x_shape]
-                    #
-                    gt_boxes.append(box1)
-                    gt_labels.append(class_)
-                    #
-                    gt_boxes.append(box2)
-                    gt_labels.append(class_)
-                else:
-                    gt_boxes.append([y1 / y_shape, x1 / x_shape, y2 / y_shape, x2 / x_shape])
-                    gt_labels.append(class_)
-            
-            gt_labels = [self.data_stats["all_classes"].index(class_name)+1 for class_name in gt_labels] # Plus 1: map to 1~6
-            gt_labels = np.array(gt_labels)
-            gt_boxes = np.array(gt_boxes)
-            feature_data, gt_boxes = self.transform(feature_data, gt_boxes) 
-            feature_data = np.expand_dims(feature_data, axis=0)  
-        else:
-            raise ValueError("Model type not supported")    
-        return {feature_name: feature_data, 'label': gt_labels, 'boxes': gt_boxes, 'image_path': self.image_filenames[index]}
-    
-    def encodeToLabels(self, gt_instances):
-        """ Transfer ground truth instances into Detection Head format """
-        raw_boxes_xyzwhd = np.zeros((self.data_stats["max_boxes_per_frame"], 7))
-        gt_labels = np.zeros(list(self.headoutput_shape[1:4]) + \
-                        [len(self.anchor_boxes)] + \
-                        [len(self.data_stats["all_classes"]) + 7]) # (16, 16, 4, 6, 13)
-
-        ### start transferring box to ground truth label format ###
-        for i in range(len(gt_instances["classes"])):
-            if i > self.data_stats["max_boxes_per_frame"]:
-                continue
-            class_name = gt_instances["classes"][i]
-            box_xyzwhd = gt_instances["boxes"][i]
-            class_id = self.data_stats["all_classes"].index(class_name)
-            if i < self.data_stats["max_boxes_per_frame"]:
-                raw_boxes_xyzwhd[i, :6] = box_xyzwhd
-                raw_boxes_xyzwhd[i, 6] = class_id
-            class_onehot = smoothOnehot(class_id, len(self.data_stats["all_classes"]))
-            
-            exist_positive = False
-
-            grid_strid = self.grid_strides
-            anchor_stage = self.anchor_boxes
-            box_xyzwhd_scaled = box_xyzwhd[np.newaxis, :].astype(np.float32)
-            box_xyzwhd_scaled[:, :3] /= grid_strid
-            anchorstage_xyzwhd = np.zeros([len(anchor_stage), 6])
-            anchorstage_xyzwhd[:, :3] = np.floor(box_xyzwhd_scaled[:, :3]) + 0.5
-            anchorstage_xyzwhd[:, 3:] = anchor_stage.astype(np.float32)
-
-            iou_scaled = iou3d(box_xyzwhd_scaled, anchorstage_xyzwhd, \
-                                        self.input_shape)
-            ### NOTE: 0.3 is from YOLOv4, maybe this should be different here ###
-            ### it means, as long as iou is over 0.3 with an anchor, the anchor
-            ### should be taken into consideration as a ground truth label
-            iou_mask = iou_scaled > 0.3
-
-            if np.any(iou_mask):
-                xind, yind, zind = np.floor(np.squeeze(box_xyzwhd_scaled)[:3]).\
-                                    astype(np.int32)
-                ### TODO: consider changing the box to raw yolohead output format ###
-                gt_labels[xind, yind, zind, iou_mask, 0:6] = box_xyzwhd
-                gt_labels[xind, yind, zind, iou_mask, 6:7] = 1.
-                gt_labels[xind, yind, zind, iou_mask, 7:] = class_onehot
-                exist_positive = True
-
-            if not exist_positive:
-                ### NOTE: this is the normal one ###
-                ### it means take the anchor box with maximum iou to the raw
-                ### box as the ground truth label
-                anchor_ind = np.argmax(iou_scaled)
-                xind, yind, zind = np.floor(np.squeeze(box_xyzwhd_scaled)[:3]).\
-                                    astype(np.int32)
-                gt_labels[xind, yind, zind, anchor_ind, 0:6] = box_xyzwhd
-                gt_labels[xind, yind, zind, anchor_ind, 6:7] = 1.
-                gt_labels[xind, yind, zind, anchor_ind, 7:] = class_onehot
-
-        has_label = False
-        for label_stage in gt_labels:
-            if label_stage.max() != 0:
-                has_label = True
-        gt_labels = np.array([np.where(gt_i == 0, 1e-16, gt_i) for gt_i in gt_labels])
-        return gt_labels, has_label, raw_boxes_xyzwhd
-    
 
 class Astyx(Dataset):
     name = "Astyx 2019 dataset instance"

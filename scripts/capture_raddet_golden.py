@@ -67,17 +67,19 @@ def pick_indices(root_path):
 
 
 def build(model, features, variant, splittype, file_row):
-    """Return (dataset_or_adapter, model_cfg, train_cfg) for one case on the CURRENT code."""
+    """Return (adapter, model_cfg, train_cfg) for one case on the CURRENT code.
+    Before 2026-10-15 this called RADDetDataset.prepare_for_train; the fixture was
+    captured through that path and the adapters must keep matching it."""
     from smoke_sweep import resolve_configs
     from detection_vis_backend.datasets.dataset import DatasetFactory
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
     model_cfg, train_cfg = resolve_configs(model, DATASET, features, variant)
     factory = DatasetFactory()
-    factory.get_shared_instance(DATASET, file_row["id"],
-                                parse_args=(file_row["id"], file_row["path"],
-                                            file_row["name"], file_row["config"]))
-    ds = factory.get_instance(DATASET, file_row["id"])
-    ds.prepare_for_train(features, train_cfg, model_cfg, splittype=splittype)
-    return ds, model_cfg, train_cfg
+    parser = factory.get_shared_instance(DATASET, file_row["id"],
+                                         parse_args=(file_row["id"], file_row["path"],
+                                                     file_row["name"], file_row["config"]))
+    adapter = make_sample_adapter(model, parser, features, model_cfg, train_cfg, splittype=splittype)
+    return adapter, model_cfg, train_cfg
 
 
 def capture(file_row):
