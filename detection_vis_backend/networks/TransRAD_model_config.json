@@ -1,0 +1,10 @@
+{
+    "input_size": [256, 256, 256],
+    "n_class": 6,
+    "phi": "n",
+    "embed_dims": [32, 64, 128, 256],
+    "depths": [2, 2, 8, 2],
+    "num_heads": [4, 4, 8, 16],
+    "drop_path_rate": 0.1,
+    "reg_max": 16
+}

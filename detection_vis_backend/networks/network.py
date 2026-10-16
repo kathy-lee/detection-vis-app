@@ -14,6 +14,7 @@ from detection_vis_backend.networks.darod import RoIBBox, RoIPooling, RadarFeatu
 from detection_vis_backend.networks.radarpillar import RadarPillarBackboneNet, assign_targets, radarpillar_loss
 from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
+from detection_vis_backend.networks.transrad import TransRADBody, TransRADLoss
 
 class NetworkFactory:
     # Old: cached instances keyed by class name only, so a second model of the same
@@ -1121,3 +1122,43 @@ class RadarPillar(PointPillar):
     (fthbng77 vod_radarpillar_rot.yaml:35) -- the extras are components, not a detector.
     """
     EXTRAS_EXPECTED = True
+
+
+class TransRAD(BaseNetwork):
+    """TransRAD (Cheng & Cao 2025): RMT backbone + YOLOv8 neck and decoupled anchor-free
+    heads on the Doppler-as-channels RAD cube; 3D boxes [x, y, z, w, h, d]. Everything
+    model-shaped lives in networks/transrad.py; this class is the app contract."""
+
+    def __init__(self, input_size, n_class, phi="n", embed_dims=(32, 64, 128, 256),
+                 depths=(2, 2, 8, 2), num_heads=(4, 4, 8, 16), drop_path_rate=0.1, reg_max=16):
+        super().__init__()
+        self.body = TransRADBody(input_size, n_class, phi, embed_dims, depths, num_heads, drop_path_rate, reg_max)
+        self.input_size = list(input_size)
+        self.n_class = n_class
+        self.class_names = ["person", "bicycle", "car", "motorcycle", "bus", "truck"][:n_class]
+        self.criterion = None
+        self.last_loss_components = None
+
+    def forward(self, x):
+        dbox, cls, heads, anchors, strides = self.body(x)
+        return {"dbox": dbox, "cls": cls, "heads": heads, "anchors": anchors, "strides": strides}
+
+    def init_lossfunc(self, config, device):
+        self.criterion = TransRADLoss(self.body)
+
+    def get_loss(self, pred, target, config):
+        if self.criterion is None:
+            self.criterion = TransRADLoss(self.body)
+        outputs = (pred["dbox"], pred["cls"], pred["heads"], pred["anchors"], pred["strides"])
+        total, parts = self.criterion(outputs, target["label"])
+        self.last_loss_components = parts.detach()
+        return total
+
+    def state_dict(self, *args, **kwargs):
+        # Keys without the 'body.' prefix, so the authors' checkpoint and ours interchange.
+        sd = super().state_dict(*args, **kwargs)
+        return type(sd)((k[len("body."):] if k.startswith("body.") else k, v) for k, v in sd.items())
+
+    def load_state_dict(self, state_dict, strict=True):
+        return super().load_state_dict({("body." + k if not k.startswith("body.") else k): v
+                                        for k, v in state_dict.items()}, strict=strict)

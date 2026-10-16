@@ -313,3 +313,83 @@ def test_transrad_train_config_carries_the_reference_recipe():
     assert t["test_checkpoint"] == {"monitor": "loss", "mode": "min"} and t["grad_norm_clip"] == 10.0
     assert t["dataloader"]["train"] == {"batch_size": 4, "num_workers": 4, "drop_last": True}
     assert t["eval_input_size"] == [256, 256, 64] and t["mAP_iou3d_threshold"] == 0.3
+
+
+# ---------------------------------------------------------------------------------------
+# Network class, registry entries and evaluator.
+# ---------------------------------------------------------------------------------------
+def test_transrad_network_through_the_factory_and_loss_contract():
+    import json
+    from detection_vis_backend.networks.network import NetworkFactory
+    with open("detection_vis_backend/networks/TransRAD_model_config.json") as f:
+        cfg = json.load(f)
+    net = NetworkFactory().get_instance("TransRAD", cfg).eval()
+    net.init_lossfunc({}, torch.device("cpu"))
+    with torch.no_grad():
+        out = net(torch.randn(1, 256, 256, 256))
+    assert set(out) == {"dbox", "cls", "heads", "anchors", "strides"}
+    loss = net.get_loss(out, {"label": _one_target_batch()[:1], "boxes": torch.zeros(1, 1, 7)}, {})
+    assert torch.isfinite(loss) and tuple(net.last_loss_components.shape) == (9,)
+    assert net.n_class == 6 and net.class_names[2] == "car"
+
+
+@needs_ref
+def test_transrad_network_loads_the_authors_checkpoint_without_a_key_map():
+    import json
+    from detection_vis_backend.networks.network import NetworkFactory
+    with open("detection_vis_backend/networks/TransRAD_model_config.json") as f:
+        cfg = json.load(f)
+    net = NetworkFactory().get_instance("TransRAD", cfg)
+    sd = torch.load(T.REF_CHECKPOINT, map_location="cpu")
+    net.load_state_dict(sd, strict=True)
+    assert set(net.state_dict()) == set(sd)
+
+
+def test_transrad_is_registered_everywhere_the_app_looks():
+    import json
+    from detection_vis_backend.train.evaluate import eval_func_dict, TransRAD_evaluation
+    from detection_vis_backend.train.train import CreateDataLoaders
+    import inspect
+    assert eval_func_dict["TransRAD", "RADDetDataset"] is TransRAD_evaluation
+    assert "'TransRAD': TransRAD_collate" in inspect.getsource(CreateDataLoaders)
+    with open("detection_vis_backend/networks/model_features.json") as f:
+        feats = json.load(f)["TransRAD"]
+    assert feats["features"] == ["RAD"] and feats["datasets"] == ["RADDetDataset"] and feats["input_size"] == [256, 256, 256]
+
+
+def test_transrad_configs_resolve_through_smoke_sweep():
+    import sys
+    sys.path.insert(0, "scripts")
+    from smoke_sweep import resolve_configs
+    m, t = resolve_configs("TransRAD", "RADDetDataset", ["RAD"])
+    assert m["class"] == "TransRAD" and m["input_size"] == [256, 256, 256] and m["n_class"] == 6
+    assert t["lr_scheduler"]["type"] == "cos_warmup" and t["eval_input_size"] == [256, 256, 64]
+    assert not any(k.startswith("_") for k in t)
+
+
+def test_transrad_evaluation_scores_a_perfect_prediction_at_one():
+    """Feed the evaluator a fake net whose decode yields exactly the gt box."""
+    from detection_vis_backend.train import evaluate as E
+
+    class FakeNet(torch.nn.Module):
+        n_class = 6
+        class_names = ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
+        def forward(self, x):
+            return {"fake": True}
+        def get_loss(self, pred, data, cfg):
+            return torch.tensor(0.5)
+    rows = np.zeros((1, 1, 13), dtype=np.float32)
+    rows[0, 0, :6] = [100, 120, 30, 10, 12, 6]; rows[0, 0, 6] = 0.9; rows[0, 0, 7 + 2] = 0.9
+    batch = {"RAD": torch.zeros(1, 2, 2, 2), "label": torch.zeros(0, 8),
+             "boxes": torch.tensor([[[100., 120., 30., 10., 12., 6., 2.]]]), "image_path": ["x"]}
+    cfg = {"eval_input_size": [256, 256, 64], "confidence_threshold": 0.3, "nms_iou3d_threshold": 0.1,
+           "la_nms_iou3d_threshold": 0.1, "mAP_iou3d_threshold": 0.3, "mAP_iou3d_threshold_list": [0.3, 0.5],
+           "dataloader": {"val": {"batch_size": 1}}}
+
+    class Loader(list):
+        dataset = [0]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(E, "transrad_decode", lambda outputs, n_class, size: rows)
+        res = E.TransRAD_evaluation(FakeNet(), Loader([batch]), cfg, ["RAD"], None, "val", torch.device("cpu"))
+    assert res["mAP"] == pytest.approx(1.0) and res["mAP@0.5"] == pytest.approx(1.0)
+    assert res["AP@0.3_car"] == pytest.approx(1.0) and res["loss"] == pytest.approx(0.5)

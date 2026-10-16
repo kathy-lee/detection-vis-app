@@ -66,6 +66,7 @@ RUNS = (
     + [
         {"model": "MVRECORD", "dataset": "CARRADA", "features": ["RD", "RA", "AD"]},
         {"model": "RADDet", "dataset": "RADDetDataset", "features": ["RAD"]},
+        {"model": "TransRAD", "dataset": "RADDetDataset", "features": ["RAD"]},
         {"model": "DAROD", "dataset": "CARRADA", "features": ["RD"]},
         {"model": "DAROD", "dataset": "RADDetDataset", "features": ["RD"]},
         {"model": "RAMP_CNN", "dataset": "UWCR", "features": ["RD", "RA", "AD"]},
@@ -323,6 +324,7 @@ LIVE_METRICS = {
     ("RECORDNoLstmMulti", "CARRADA"): ("mAP", "mAR", "mIoU"),
     ("MVRECORD", "CARRADA"): ("mAP", "mAR", "mIoU"),
     ("RADDet", "RADDetDataset"): ("mAP",),
+    ("TransRAD", "RADDetDataset"): ("mAP",),
     ("DAROD", "CARRADA"): ("mAP", "mAR"),
     ("DAROD", "RADDetDataset"): ("mAP", "mAR"),
     ("RAMP_CNN", "UWCR"): ("mAP", "mAR"),

@@ -26,7 +26,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.datasets.adapters import make_sample_adapter
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
 from data import crud, schemas
 from data.database import get_session_local
@@ -110,6 +110,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'MVRECORD': default_collate,
         'RADDet': default_collate,
         'DAROD': DAROD_collate,
+        'TransRAD': TransRAD_collate,
         'RAMP_CNN': default_collate,
         'RadarCrossAttention': default_collate,
         'RadarPillar': radarpillar_collate,
