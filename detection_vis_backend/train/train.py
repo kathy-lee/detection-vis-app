@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import torch.nn as nn
 import os
 import json
+import math
+import copy
 import pandas as pd
 
 
@@ -50,6 +52,43 @@ def function_specific_log_to_file(file_name, level="INFO"):
         yield
     finally:
         logger.remove(log_id)
+
+def cos_warmup_lr(lr, min_lr, total_epochs, warmup_epochs, warmup_lr_start, hold_last_epochs, epoch):
+    """TransRAD reference schedule (radar-lab/TransRAD nets/yolo_training.py
+    yolox_warm_cos_lr, lines 725-741), evaluated once per epoch: quadratic warmup from
+    warmup_lr_start, cosine from lr to min_lr, the last hold_last_epochs held at min_lr."""
+    if epoch <= warmup_epochs:
+        return (lr - warmup_lr_start) * pow(epoch / float(warmup_epochs), 2) + warmup_lr_start
+    if epoch >= total_epochs - hold_last_epochs:
+        return min_lr
+    return min_lr + 0.5 * (lr - min_lr) * (
+        1.0 + math.cos(math.pi * (epoch - warmup_epochs) / (total_epochs - warmup_epochs - hold_last_epochs)))
+
+
+class WeightEMA:
+    """Exponential moving average of every floating entry of the state dict (parameters
+    AND buffers), as the TransRAD reference's ModelEMA (nets/yolo_training.py lines
+    672-702): decay ramps as decay * (1 - exp(-updates / tau)) so the first epochs are
+    not dominated by the random init. The averaged copy is what is validated, saved and
+    tested when a config enables it."""
+
+    def __init__(self, net, decay=0.9999, tau=2000, updates=0):
+        self.ema = copy.deepcopy(net).eval()
+        self.updates = updates
+        self.decay_fn = lambda x: decay * (1 - math.exp(-x / tau))
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
+
+    def update(self, net):
+        with torch.no_grad():
+            self.updates += 1
+            d = self.decay_fn(self.updates)
+            msd = net.state_dict()
+            for k, v in self.ema.state_dict().items():
+                if v.dtype.is_floating_point:
+                    v *= d
+                    v += (1 - d) * msd[k].detach()
+
 
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, output_path: str):
     """
@@ -297,17 +336,21 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         else:
             raise ValueError(f"{dataset_type} Dataset doesn't provide default data split.")
     
-    train_loader = DataLoader(datasets['train'], 
-                        batch_size=train_config['dataloader']['train']['batch_size'], 
+    # drop_last is off by default (every existing recipe keeps the ragged batch); the
+    # TransRAD reference drops it on its train and val loaders (Train.py:291,294).
+    train_loader = DataLoader(datasets['train'],
+                        batch_size=train_config['dataloader']['train']['batch_size'],
                         shuffle=True,
                         num_workers=train_config['dataloader']['train']['num_workers'],
                         pin_memory=True,
+                        drop_last=bool(train_config['dataloader']['train'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
-    val_loader =  DataLoader(datasets['val'], 
-                        batch_size=train_config['dataloader']['val']['batch_size'], 
+    val_loader =  DataLoader(datasets['val'],
+                        batch_size=train_config['dataloader']['val']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['val']['num_workers'],
                         pin_memory=True,
+                        drop_last=bool(train_config['dataloader']['val'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
     # test_loader =  DataLoader(datasets['test'], ...)
     # A sequence split may legitimately have no test files; then there is no test loader
@@ -320,6 +363,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
                         pin_memory=True,
+                        drop_last=bool(train_config['dataloader']['test'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
     
     if isinstance(split_samples_info['train'][0], (int, np.integer)):
@@ -386,6 +430,11 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         logger.info(f'Network initialized: {exp_name}')
         net.to(device)
         net.init_lossfunc(train_config, device)
+        # Config-gated weight EMA (the TransRAD recipe). eval_net is what every validation,
+        # checkpoint and the final test use; without 'ema' it is the training net itself.
+        ema = WeightEMA(net, float(train_config['ema'].get('decay', 0.9999)),
+                        float(train_config['ema'].get('tau', 2000))) if train_config.get('ema') else None
+        eval_net = ema.ema if ema else net
 
         # Optimizer
         lr = float(train_config['optimizer']['lr'])
@@ -396,7 +445,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             optimizer = optim.AdamW(filter(lambda p: p.requires_grad, net.parameters()),
                                     lr=lr, weight_decay=float(train_config['optimizer'].get('weight_decay', 0.01)))
         else:
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr)
+            # betas from config when given (the TransRAD reference passes momentum 0.937 as
+            # beta1, Train.py:256); every existing config omits the key and keeps torch's default.
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr,
+                                   betas=tuple(train_config['optimizer'].get('betas', (0.9, 0.999))))
 
         # RadarPillar reference recipe (fthbng77/RadarPillar kitti_pointpillar.yaml:145-164,
         # adam_onecycle): OneCycleLR stepped per iteration, MOMS [0.95, 0.85] -> torch
@@ -473,6 +525,14 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
             scheduler = lr_scheduler.LambdaLR(optimizer, _decay_to_floor)
             step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'cos_warmup':
+            # TransRAD reference recipe: see cos_warmup_lr. Epoch-indexed and stepped once
+            # per epoch like 'step' and 'exp'; LambdaLR multiplies the base lr, hence the ratio.
+            sched_cfg = train_config['lr_scheduler']
+            _cos = lambda epoch: cos_warmup_lr(lr, float(sched_cfg['min_lr']), num_epochs,
+                                               int(sched_cfg['warmup_epochs']), float(sched_cfg['warmup_lr_start']),
+                                               int(sched_cfg['hold_last_epochs']), epoch) / lr
+            scheduler = lr_scheduler.LambdaLR(optimizer, _cos)
         elif train_config['lr_scheduler']['type'] == 'plateau':
             # RadarCrossAttention reference recipe (ravikothari510/crossattention_radar_
             # detector train.py:157-158): ReduceLROnPlateau(patience=4, factor=0.1), stepped
@@ -543,6 +603,12 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             logger.info('===========  Resume training  ==================:')
             dict = torch.load(pretrained)
             net.load_state_dict(dict['net_state_dict'])
+            if ema and 'raw_net_state_dict' in dict:
+                # net_state_dict holds the EMA weights (what evaluation used); the training
+                # weights travel separately so the average resumes from both halves.
+                ema.ema.load_state_dict(dict['net_state_dict'])
+                net.load_state_dict(dict['raw_net_state_dict'])
+                ema.updates = int(dict.get('ema_updates', 0))
             optimizer.load_state_dict(dict['optimizer'])
             scheduler.load_state_dict(dict['scheduler'])
             startEpoch = dict['epoch']+1
@@ -626,6 +692,8 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()
+                    if ema:
+                        ema.update(net)
                     if step_scheduler_per_iter:
                         scheduler.step()
 
@@ -646,7 +714,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             ######################
             logger.info(f'=========== Validation of Val data ===========')
             if callable(eval_func_dict[model_type, dataset_type]):
-                eval = eval_func_dict[model_type, dataset_type](net, val_loader, train_config, features, output_dir, 'val', device)
+                eval = eval_func_dict[model_type, dataset_type](eval_net, val_loader, train_config, features, output_dir, 'val', device)
                 logger.info('Validation of Val data finished.')
             else:
                 raise ValueError(f"Evaluation of {model_type} model with {dataset_type} dataset not supported. ")
@@ -696,7 +764,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             filename = output_dir / name_output_file
             
             checkpoint={}
-            checkpoint['net_state_dict'] = net.state_dict()
+            checkpoint['net_state_dict'] = eval_net.state_dict()   # the weights evaluation used (EMA when enabled)
+            if ema:
+                checkpoint['raw_net_state_dict'] = net.state_dict()
+                checkpoint['ema_updates'] = ema.updates
             checkpoint['optimizer'] = optimizer.state_dict()
             checkpoint['scheduler'] = scheduler.state_dict()
             checkpoint['epoch'] = epoch
@@ -714,7 +785,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 if improved:
                     best_score = score
                     best_state_epoch = epoch
-                    best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+                    best_state = {k: v.detach().clone() for k, v in eval_net.state_dict().items()}
 
             if early_stop:
                 # Derived from history rather than a running counter so a resumed run
@@ -736,7 +807,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             series = history['val_loss'] if monitor == 'loss' else history[monitor]
             best_idx = (int(np.argmin(series)) if mode == 'min' else int(np.argmax(series))) if series else None
             if best_idx is not None and best_state is not None and best_idx == best_state_epoch:
-                net.load_state_dict(best_state)
+                eval_net.load_state_dict(best_state)
                 logger.info(f'Restored best checkpoint for testing: epoch {best_idx} '
                             f'({monitor}={series[best_idx]:.4f}).')
             elif best_idx is not None:
@@ -746,7 +817,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
                 matches = sorted(glob.glob(os.path.join(os.path.dirname(pretrained),
                                                         f'{model_type}_epoch{best_idx:02d}_*.pth'))) if pretrained else []
                 if matches:
-                    net.load_state_dict(torch.load(matches[0], map_location=device)['net_state_dict'])
+                    eval_net.load_state_dict(torch.load(matches[0], map_location=device)['net_state_dict'])
                     logger.info(f'Restored best checkpoint for testing from {matches[0]} '
                                 f'(epoch {best_idx}, {monitor}={series[best_idx]:.4f}).')
                 else:
@@ -759,7 +830,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
             # Sequence split with no files assigned to 'test' -- a legitimate choice.
             logger.info('No files assigned to the test split; skipping test evaluation.')
         elif callable(eval_func_dict[model_type, dataset_type]):
-            eval = eval_func_dict[model_type, dataset_type](net, test_loader, train_config, features, output_dir, 'test', device)
+            eval = eval_func_dict[model_type, dataset_type](eval_net, test_loader, train_config, features, output_dir, 'test', device)
             logger.info('Evaluation on Test data finished.')
             df_test_val = pd.DataFrame.from_dict(eval, orient='index').transpose()
             df_test_val.to_csv(test_eval_path, index=False)

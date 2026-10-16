@@ -261,3 +261,55 @@ def test_transrad_collate_concatenates_labels_with_batch_index_and_pads_boxes():
     assert tuple(b["label"].shape) == (2, 8) and b["label"][:, 0].tolist() == [0.0, 2.0]
     assert tuple(b["boxes"].shape) == (3, 1, 7) and b["boxes"][1].abs().sum() == 0
     assert b["image_path"] == ["/img/0.jpg", "/img/1.jpg", "/img/2.jpg"]
+
+
+# ---------------------------------------------------------------------------------------
+# Trainer additions: cosine-warmup schedule, weight EMA, config invariants.
+# ---------------------------------------------------------------------------------------
+def test_cos_warmup_matches_the_reference_schedule():
+    """REF/nets/yolo_training.py yolox_warm_cos_lr with the Train.py arguments."""
+    from detection_vis_backend.train.train import cos_warmup_lr
+    import math as m
+    lr, mn, total, wu, wu0, hold = 3e-4, 3e-6, 100, 3, 3e-5, 5
+    assert cos_warmup_lr(lr, mn, total, wu, wu0, hold, 0) == pytest.approx(wu0)
+    assert cos_warmup_lr(lr, mn, total, wu, wu0, hold, 3) == pytest.approx(lr)
+    mid = mn + 0.5 * (lr - mn) * (1 + m.cos(m.pi * (50 - 3) / (100 - 3 - 5)))
+    assert cos_warmup_lr(lr, mn, total, wu, wu0, hold, 50) == pytest.approx(mid)
+    assert cos_warmup_lr(lr, mn, total, wu, wu0, hold, 99) == pytest.approx(mn)
+
+
+def test_weight_ema_moves_toward_the_model_with_ramped_decay():
+    from detection_vis_backend.train.train import WeightEMA
+    net = torch.nn.Linear(2, 1)
+    with torch.no_grad():
+        net.weight.fill_(1.0); net.bias.fill_(0.0)
+    ema = WeightEMA(net, decay=0.9999, tau=2000)
+    with torch.no_grad():
+        net.weight.fill_(3.0)
+    ema.update(net)
+    d = 0.9999 * (1 - np.exp(-1 / 2000))
+    assert ema.updates == 1
+    np.testing.assert_allclose(ema.ema.weight.detach().numpy(), 1.0 * d + 3.0 * (1 - d), rtol=1e-6)
+    assert not any(p.requires_grad for p in ema.ema.parameters())
+
+
+def test_existing_configs_do_not_enable_the_new_options():
+    import json
+    for name in ("RADDet_train_config_reference.json", "DAROD_train_config.json"):
+        with open(os.path.join("detection_vis_backend", "train", name)) as f:
+            cfg = json.load(f)
+        node = cfg.get("RADDetDataset", cfg.get("default", cfg))
+        assert "ema" not in node and "betas" not in node.get("optimizer", {})
+        assert node.get("lr_scheduler", {}).get("type") != "cos_warmup"
+
+
+def test_transrad_train_config_carries_the_reference_recipe():
+    import json
+    with open("detection_vis_backend/train/TransRAD_train_config.json") as f:
+        cfg = json.load(f)
+    t = dict(cfg["default"]); t.update(cfg["RADDetDataset"])
+    assert t["optimizer"] == {"type": "Adam", "lr": 0.0003, "betas": [0.937, 0.999], "weight_decay": 0}
+    assert t["lr_scheduler"]["type"] == "cos_warmup" and t["ema"] == {"decay": 0.9999, "tau": 2000}
+    assert t["test_checkpoint"] == {"monitor": "loss", "mode": "min"} and t["grad_norm_clip"] == 10.0
+    assert t["dataloader"]["train"] == {"batch_size": 4, "num_workers": 4, "drop_last": True}
+    assert t["eval_input_size"] == [256, 256, 64] and t["mAP_iou3d_threshold"] == 0.3
