@@ -8,8 +8,14 @@ array in every sample, so equality is byte-level, not metric-level.
     python scripts/capture_raddet_golden.py            # write the fixture
     python scripts/capture_raddet_golden.py --verify   # rebuild and compare
 
-Frames are taken from the OFFICIAL VAL split (no augmentation on that path). One extra
-train-path DAROD sample is recorded under a fixed numpy seed to pin the flip augmentation.
+Frames are taken from the OFFICIAL VAL split (no augmentation on that path). The same
+frames are also recorded through the DAROD TRAIN path under fixed numpy seeds chosen so
+that the single uniform draw lands in each augmentation branch (hflip, vflip, none), which
+pins the flips and the draw order byte-for-byte.
+
+The fixture was captured at commit 4d3b96c, where RADDetDataset still built samples in
+prepare_for_train/__getitem__; build() handles both that API and the adapters, so the
+same script captures on the old code and verifies on the new.
 """
 import argparse
 import json
@@ -37,7 +43,9 @@ DATASET = "RADDetDataset"
 # DAROD has a single nested config. Neither variant changes how a sample is BUILT except
 # through transformations / data_mean / data_std, which the fixture embeds verbatim.
 CASES = [("RADDet", ["RAD"], "_reference"), ("DAROD", ["RD"], "")]
-TRAIN_SEED = 123
+# First np.random.uniform(0, 1) after np.random.seed(s), legacy RNG:
+#   5 -> 0.222 (< 0.25: hflip)   1 -> 0.417 (< 0.5: vflip)   123 -> 0.697 (no flip)
+TRAIN_SEEDS = [5, 1, 123]
 
 
 def pick_indices(root_path):
@@ -67,17 +75,20 @@ def pick_indices(root_path):
 
 
 def build(model, features, variant, splittype, file_row):
-    """Return (adapter, model_cfg, train_cfg) for one case on the CURRENT code.
-    Before 2026-10-15 this called RADDetDataset.prepare_for_train; the fixture was
-    captured through that path and the adapters must keep matching it."""
+    """Return (indexable sample source, model_cfg, train_cfg) for one case on the CURRENT
+    code: a sample adapter, or on the pre-refactor code a configured dataset copy."""
     from smoke_sweep import resolve_configs
     from detection_vis_backend.datasets.dataset import DatasetFactory
-    from detection_vis_backend.datasets.adapters import make_sample_adapter
     model_cfg, train_cfg = resolve_configs(model, DATASET, features, variant)
     factory = DatasetFactory()
     parser = factory.get_shared_instance(DATASET, file_row["id"],
                                          parse_args=(file_row["id"], file_row["path"],
                                                      file_row["name"], file_row["config"]))
+    if hasattr(parser, "prepare_for_train"):          # pre-refactor RADDetDataset
+        ds = factory.get_instance(DATASET, file_row["id"])
+        ds.prepare_for_train(features, train_cfg, model_cfg, splittype=splittype)
+        return ds, model_cfg, train_cfg
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
     adapter = make_sample_adapter(model, parser, features, model_cfg, train_cfg, splittype=splittype)
     return adapter, model_cfg, train_cfg
 
@@ -88,7 +99,7 @@ def capture(file_row):
     fixture = {"dataset": DATASET, "file_id": file_row["id"], "file_name": file_row["name"],
                "root_path": file_row["path"], "config": file_row["config"],
                "tmp_rootdir": os.environ["TMP_ROOTDIR"],
-               "chosen": chosen, "train_seed": TRAIN_SEED, "cases": []}
+               "chosen": chosen, "train_seeds": TRAIN_SEEDS, "cases": []}
     for model, features, variant in CASES:
         ds, model_cfg, train_cfg = build(model, features, variant, "val", file_row)
         case = {"model": model, "features": features, "variant": variant,
@@ -100,10 +111,12 @@ def capture(file_row):
         if model == "DAROD":
             ds_train, _, _ = build(model, features, variant, "train", file_row)
             case["train_seeded"] = {}
-            for i in indices:
-                np.random.seed(TRAIN_SEED)
-                case["train_seeded"][str(i)] = digest_sample(ds_train[i])
-            print(f"  {model} train (seed {TRAIN_SEED}) ok", flush=True)
+            for seed in TRAIN_SEEDS:
+                case["train_seeded"][str(seed)] = {}
+                for i in indices:
+                    np.random.seed(seed)
+                    case["train_seeded"][str(seed)][str(i)] = digest_sample(ds_train[i])
+                print(f"  {model} train (seed {seed}) ok", flush=True)
         fixture["cases"].append(case)
     return fixture
 
@@ -130,10 +143,11 @@ def verify(file_row):
             diff(expected, digest_sample(ds[int(i)]), f"{case['model']} val[{i}]", errors)
         if "train_seeded" in case:
             ds_train, _, _ = build(case["model"], case["features"], case["variant"], "train", file_row)
-            for i, expected in case["train_seeded"].items():
-                np.random.seed(fixture["train_seed"])
-                diff(expected, digest_sample(ds_train[int(i)]),
-                     f"{case['model']} train_seeded[{i}]", errors)
+            for seed, per_frame in case["train_seeded"].items():
+                for i, expected in per_frame.items():
+                    np.random.seed(int(seed))
+                    diff(expected, digest_sample(ds_train[int(i)]),
+                         f"{case['model']} train_seeded[seed {seed}][{i}]", errors)
     return errors
 
 

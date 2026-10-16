@@ -19,7 +19,11 @@
   ],
   "empty": []
  },
- "train_seed": 123,
+ "train_seeds": [
+  5,
+  1,
+  123
+ ],
  "cases": [
   {
    "model": "RADDet",
@@ -472,113 +476,335 @@
     }
    },
    "train_seeded": {
-    "116": {
-     "RD": {
-      "sha256": "5422c3dc38fdbfe3e4458f9b53a6a599df7e0babc4e0eab8fbabd4dc189a5142",
-      "dtype": "float32",
-      "shape": [
-       1,
-       256,
-       64
-      ]
+    "5": {
+     "116": {
+      "RD": {
+       "sha256": "23a5988c0135f9459d4e0651a8bf9c0cfc073546734c5872c512d01dcd6e2040",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "88ac623e7ce72a5731d9a6fbe2a15854bbec422399935b031c6de3d0dc87e4e6",
+       "dtype": "int64",
+       "shape": [
+        3
+       ]
+      },
+      "boxes": {
+       "sha256": "075cae29d790aa72d7c179219cc1a32da66d1df74fe620de2337c25b1fb3ac3c",
+       "dtype": "float64",
+       "shape": [
+        3,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
      },
-     "label": {
-      "sha256": "88ac623e7ce72a5731d9a6fbe2a15854bbec422399935b031c6de3d0dc87e4e6",
-      "dtype": "int64",
-      "shape": [
-       3
-      ]
+     "200": {
+      "RD": {
+       "sha256": "2818b51427508c1d9791e4c2468a97e8b551da60b29b8e4542a7c2bbe2a7aefb",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "ba31822bbf83139c3a88f30f73227a3abe78a85fbb4b0a534ed1f5c20e0f1f85",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "9a7cc0c897d4655e01c565da215a518e2913114721b13add9e279e426c91ecbb",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
      },
-     "boxes": {
-      "sha256": "7a0077a94df5449a0bbbb67f636d30a26a078af1f6d1cc8367e05e47628c1714",
-      "dtype": "float64",
-      "shape": [
-       3,
-       4
-      ]
+     "308": {
+      "RD": {
+       "sha256": "9630fe4a95f19afa8cf93b3a3b7123defbbc6189e56ae9a6a1d92a69bd5fd172",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "55e560ad30938caa0c934cd18746afa2c8fe6766bb9352c93a72de6894750555",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "0154a911d59818eebf8b1eaa8a5a95a92bbd2f5255ca30e3c698007c9937531e",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+     "9966": {
+      "RD": {
+       "sha256": "ccd75e659f2490323b9be4e3901fd7a68e1517c538d6807a1de0c9776a05809d",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "cdcf5e437a0dfe324e0e5178d16a84f69448adfd85e338e9abf0e70838e56ad0",
+       "dtype": "int64",
+       "shape": [
+        5
+       ]
+      },
+      "boxes": {
+       "sha256": "01326a5cd449027c8eeccbd589dd3eb893686ad8580655923fffcc7cdf21844f",
+       "dtype": "float64",
+       "shape": [
+        5,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     }
     },
-    "200": {
-     "RD": {
-      "sha256": "404e6aa745003db1c9f2a7119135ff82224eb37170533fcf18899a427f4d431d",
-      "dtype": "float32",
-      "shape": [
-       1,
-       256,
-       64
-      ]
+    "1": {
+     "116": {
+      "RD": {
+       "sha256": "23504ade25476ad5caaa974076013e2f0ca897a37156a2bcffcdc8bf41bddb0d",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "88ac623e7ce72a5731d9a6fbe2a15854bbec422399935b031c6de3d0dc87e4e6",
+       "dtype": "int64",
+       "shape": [
+        3
+       ]
+      },
+      "boxes": {
+       "sha256": "565c413495da778b00ff0f978929a808683c5e97ab749173f2658050d3d696b1",
+       "dtype": "float64",
+       "shape": [
+        3,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
      },
-     "label": {
-      "sha256": "ba31822bbf83139c3a88f30f73227a3abe78a85fbb4b0a534ed1f5c20e0f1f85",
-      "dtype": "int64",
-      "shape": [
-       4
-      ]
+     "200": {
+      "RD": {
+       "sha256": "f9717d7d2db569c1223df35cab1f64b33454e1b85be81afb5b1dbcdb4b8dc7c3",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "ba31822bbf83139c3a88f30f73227a3abe78a85fbb4b0a534ed1f5c20e0f1f85",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "85b84ae6f0ad21c0a52d3cdaf0c4f8ccf6704c0291272ebdd16d05de88d81889",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
      },
-     "boxes": {
-      "sha256": "2c8fb3581e8a43fb541a25e96d398c761ac957c0cd6848220dd8bf4010bcb52c",
-      "dtype": "float64",
-      "shape": [
-       4,
-       4
-      ]
+     "308": {
+      "RD": {
+       "sha256": "bce184a9dab8ff1cb633634afadf2792743350c2ae148fe2a97b90a3cdd6d3f9",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "55e560ad30938caa0c934cd18746afa2c8fe6766bb9352c93a72de6894750555",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "5ea444fbc3e5d6a238626b5f7b5f3e37bb464087ed16a7d07ed21fe119816ceb",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+     "9966": {
+      "RD": {
+       "sha256": "b1d6245d94569c1badc00db3fc014290846fafdb0ae8e9faf0bbf8581d6146b1",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "cdcf5e437a0dfe324e0e5178d16a84f69448adfd85e338e9abf0e70838e56ad0",
+       "dtype": "int64",
+       "shape": [
+        5
+       ]
+      },
+      "boxes": {
+       "sha256": "b7519d62fd3c7a148b079244a77e3128668ef10dacb5b43d1ef643f8cc1171fe",
+       "dtype": "float64",
+       "shape": [
+        5,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     }
     },
-    "308": {
-     "RD": {
-      "sha256": "19d5ac55bb4a1230e0bb37f95dba9424af86b0cf566d3eef8f41c333ab4d7700",
-      "dtype": "float32",
-      "shape": [
-       1,
-       256,
-       64
-      ]
+    "123": {
+     "116": {
+      "RD": {
+       "sha256": "5422c3dc38fdbfe3e4458f9b53a6a599df7e0babc4e0eab8fbabd4dc189a5142",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "88ac623e7ce72a5731d9a6fbe2a15854bbec422399935b031c6de3d0dc87e4e6",
+       "dtype": "int64",
+       "shape": [
+        3
+       ]
+      },
+      "boxes": {
+       "sha256": "7a0077a94df5449a0bbbb67f636d30a26a078af1f6d1cc8367e05e47628c1714",
+       "dtype": "float64",
+       "shape": [
+        3,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
      },
-     "label": {
-      "sha256": "55e560ad30938caa0c934cd18746afa2c8fe6766bb9352c93a72de6894750555",
-      "dtype": "int64",
-      "shape": [
-       4
-      ]
+     "200": {
+      "RD": {
+       "sha256": "404e6aa745003db1c9f2a7119135ff82224eb37170533fcf18899a427f4d431d",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "ba31822bbf83139c3a88f30f73227a3abe78a85fbb4b0a534ed1f5c20e0f1f85",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "2c8fb3581e8a43fb541a25e96d398c761ac957c0cd6848220dd8bf4010bcb52c",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
      },
-     "boxes": {
-      "sha256": "a83489af802e8e6d4e6c6eb7ff7fdd5cf1d66e4d6215532b4ae41c3abfd579f1",
-      "dtype": "float64",
-      "shape": [
-       4,
-       4
-      ]
+     "308": {
+      "RD": {
+       "sha256": "19d5ac55bb4a1230e0bb37f95dba9424af86b0cf566d3eef8f41c333ab4d7700",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "55e560ad30938caa0c934cd18746afa2c8fe6766bb9352c93a72de6894750555",
+       "dtype": "int64",
+       "shape": [
+        4
+       ]
+      },
+      "boxes": {
+       "sha256": "a83489af802e8e6d4e6c6eb7ff7fdd5cf1d66e4d6215532b4ae41c3abfd579f1",
+       "dtype": "float64",
+       "shape": [
+        4,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
-    },
-    "9966": {
-     "RD": {
-      "sha256": "b2775f80f00e5edbe7f66a8a9c71dce4fbeace0279da69594ca7e575e2b3bed0",
-      "dtype": "float32",
-      "shape": [
-       1,
-       256,
-       64
-      ]
-     },
-     "label": {
-      "sha256": "cdcf5e437a0dfe324e0e5178d16a84f69448adfd85e338e9abf0e70838e56ad0",
-      "dtype": "int64",
-      "shape": [
-       5
-      ]
-     },
-     "boxes": {
-      "sha256": "f559d14b8cca9cf7b6ba5a841a65848fece9058b00317de9dd4386bbaa4cdec9",
-      "dtype": "float64",
-      "shape": [
-       5,
-       4
-      ]
-     },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     "9966": {
+      "RD": {
+       "sha256": "b2775f80f00e5edbe7f66a8a9c71dce4fbeace0279da69594ca7e575e2b3bed0",
+       "dtype": "float32",
+       "shape": [
+        1,
+        256,
+        64
+       ]
+      },
+      "label": {
+       "sha256": "cdcf5e437a0dfe324e0e5178d16a84f69448adfd85e338e9abf0e70838e56ad0",
+       "dtype": "int64",
+       "shape": [
+        5
+       ]
+      },
+      "boxes": {
+       "sha256": "f559d14b8cca9cf7b6ba5a841a65848fece9058b00317de9dd4386bbaa4cdec9",
+       "dtype": "float64",
+       "shape": [
+        5,
+        4
+       ]
+      },
+      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     }
     }
    }
   }
