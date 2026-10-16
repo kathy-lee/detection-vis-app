@@ -171,6 +171,15 @@ RECORD is a task-agnostic encoder–decoder, the dataset's annotation decides wh
 | **Wired dataset(s)** | RADDetDataset|
 | **Adjustable configs** | n_anchors(default 6, corresponds to "anchor_boxes" in model config file); n_class; the **range and azimuth** axes of `input_size` (each ÷16). Pinned despite also being entries in the model config json: `input_channels`, and the **Doppler** axis of `input_size` — both fixed by the literal arguments passed to `YoloHead`. |
 
+| **TransRAD** | Requirements |
+|---|---|
+|**Input** | RAD cube with Doppler as channels, `256×256×256` (Doppler×Range×Azimuth) — the on-disk `256×256×64` cube resized along Doppler by nearest neighbour |
+| **Frames** | single |
+| **Label** | Per-frame box list `(N, 7)` `[cls, x, y, z, w, h, d]` normalised to the cube (x,w ÷256; y,h ÷256; z,d ÷64); anchor-free, assigned at train time (task-aligned assignment) |
+| **Preprocessing** | complex→log-power `log10(\|z\|²+1)`; global affine norm (same constants as RADDet); edge-crossing boxes clamped to their larger part (not split); Doppler resize 64→256 (`scipy.ndimage.zoom`, order 0) |
+| **Wired dataset(s)** | RADDetDataset |
+| **Adjustable configs** | `n_class`; `embed_dims`/`depths`/`num_heads` (RMT); `phi` (neck width); `reg_max` (DFL bins). The range and azimuth axes of `input_size` must be ÷32; the Doppler axis is pinned at 256 by the adapter's resize, and `eval_input_size` in the train config names the on-disk 64. |
+
 
 | **DAROD** | Requirements |
 |---|---|
@@ -273,6 +282,7 @@ train any network (C2/C5).
 | **RECORDNoLstmMulti** | ⚠️gt | ✅ | ✅ | ❌seq | ⚠️np | ❌mod | ❌mod | ❌mod |
 | **MVRECORD** | ❌mod | ❌mod | ✅ | ❌mod,gt | ❌gt | ❌mod | ❌mod | ❌mod |
 | **RADDet** | ❌mod | ❌mod | ⚠️gt | ✅ | ❌mod | ❌mod | ❌mod | ❌mod |
+| **TransRAD** | ❌mod | ❌mod | ⚠️gt | ✅ | ❌mod | ❌mod | ❌mod | ❌mod |
 | **DAROD** | ❌gt | ❌mod | ✅ | ✅ | ❌gt | ❌mod | ❌mod | ❌mod |
 | **RAMP_CNN** | ❌mod | ❌mod | ⚠️gt | ❌mod,seq | ✅ | ❌mod | ❌mod | ❌mod |
 | **RadarCrossAttention** | ❌mod | ❌mod | ✅ | ❌mod,seq | ❌geo,gt | ❌mod | ❌mod | ❌mod |
@@ -313,6 +323,8 @@ train any network (C2/C5).
   `[x,y,z,w,h,d]`; CARRADA annotates 2D boxes per view (RA and RD separately). A 3D
   box can in principle be reconstructed by combining the two views — feasible but
   non-trivial, hence ⚠️ not ✅.
+- **TransRAD on CARRADA:** the same situation as RADDet — the cube exists, the 3D RAD
+  box does not.
 - **Pillar models on Astyx / NuScenes:** correct modality (radar point cloud) and GT
   (3D boxes), but `__getitem__` returns `None` (`np`) — no training path — and the
   per-point attributes differ (Astyx has no per-point Doppler for RadarPillar's
@@ -331,10 +343,10 @@ train any network (C2/C5).
 
 ### Summary
 
-- **Supported today (✅):** exactly the 16 wired pairs below (21 entries in
+- **Supported today (✅):** exactly the 17 wired pairs below (22 entries in
   `eval_func_dict`, counting RODNet's six subtypes individually) — FFTRadNet/RADIal;
   RODNet×6/CRUW; RECORD·RECORDNoLstm·RECORDNoLstmMulti /CRUW & /CARRADA;
-  MVRECORD/CARRADA; RADDet/RADDetDataset; DAROD/CARRADA & /RADDetDataset;
+  MVRECORD/CARRADA; RADDet/RADDetDataset; TransRAD/RADDetDataset; DAROD/CARRADA & /RADDetDataset;
   RAMP_CNN/UWCR; RadarCrossAttention/CARRADA; PointPillar/ViewOfDelft;
   RadarPillar/ViewOfDelft.
 - **Astyx and NuScenes** carry the right modality and GT for the **pillar models**, and

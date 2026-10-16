@@ -17,6 +17,7 @@ from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATE
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import post_process_single_frame, get_class_name, worldToImage, decode, process_predictions_FFT, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, radarpillar_collate
 from detection_vis_backend.networks.radarpillar import postprocess
+from detection_vis_backend.networks.transrad import decode_predictions as transrad_decode, nms_class_then_location as transrad_nms
 
 def radarpillar_display_geometry(res, dataset_inst, sample_id):
     """Pure output formatter for RadarPillar (like carrada_seg_readout below):
@@ -394,6 +395,26 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 yc, xc, h, w = bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5]
                 rd_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
                 # RA view: x-axis=azimuth (bbox3d[1],[4]), y-axis=range (bbox3d[0],[3])
+                yc, xc, h, w = bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4]
+                ra_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
+            pred_objs = {"RD": rd_objs, "RA": ra_objs}
+        elif model_type == "TransRAD":
+            input = torch.tensor(data['RAD']).unsqueeze(0).to(device).float()
+            output = net(input)
+            train_config = parameters["train_config"]
+            eval_size = train_config["eval_input_size"]
+            rows = transrad_decode(output, net.n_class, eval_size)[0]
+            pred_objs = transrad_nms(rows, eval_size, train_config["confidence_threshold"],
+                                     train_config["nms_iou3d_threshold"], train_config["la_nms_iou3d_threshold"])
+            rd_objs = []
+            ra_objs = []
+            for i in range(len(pred_objs)):
+                bbox3d = pred_objs[i, :6]   # [x=range, y=azimuth, z=doppler, w, h, d], z in the 64-bin cube
+                cls = int(pred_objs[i, 7])
+                # Same corner-box conversion as the RADDet branch above, so the UI draws
+                # TransRAD boxes exactly where it draws RADDet's and the gt from get_label.
+                yc, xc, h, w = bbox3d[0], bbox3d[2], bbox3d[3], bbox3d[5]
+                rd_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
                 yc, xc, h, w = bbox3d[0], bbox3d[1], bbox3d[3], bbox3d[4]
                 ra_objs.append([int(xc - w / 2), int(yc - h / 2), int(xc + w / 2), int(yc + h / 2), cls])
             pred_objs = {"RD": rd_objs, "RA": ra_objs}

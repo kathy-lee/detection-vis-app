@@ -113,13 +113,13 @@ Model architectures currently registered:
 | RAMP_CNN | RD+RA+AD | per-class confidence map in RA plane, peak-picked into detections | https://github.com/Xiangyu-Gao/Radar-multiple-perspective-object-detection |
 | RadarCrossAttention | RD+RA+AD | per-class map + center-offset + orientation in RA plane, peak-pick + offset | https://github.com/ravikothari510/crossattention_radar_detector |
 | RadarPillar | radarPC (VoD 5-frame accumulation by default) | 3D boxes [x,y,z,l,w,h,yaw] in the radar frame, per-class anchors + rotated NMS; official VoD devkit mAP | https://github.com/fthbng77/RadarPillar (RadarPillars, arXiv:2408.05020) |
-| TransRAD | - | - | https://github.com/radar-lab/TransRAD |
+| TransRAD | RAD | per-class 3D boxes [x,y,z,w,h,d] in RAD space, anchor-free (RMT backbone + YOLOv8 heads), class NMS then Location-Aware NMS | https://github.com/radar-lab/TransRAD (arXiv:2501.17977) |
 
 
 Three output paradigms: **fixed-size localizer** (FFTRadNet), **confidence-map peak-pickers**
 (RODNet, RECORD, MVRECORD, RAMP_CNN, RadarCrossAttention — the last also adds center-offset
-and heading), and **true box regressors** (RADDet 3D/YOLO, DAROD 2D/Faster-RCNN,
-RadarPillar 3D/anchor-based).
+and heading), and **true box regressors** (RADDet 3D/YOLO, TransRAD 3D/anchor-free,
+DAROD 2D/Faster-RCNN, RadarPillar 3D/anchor-based).
 
 ## Adding a new model / network
 
