@@ -97,3 +97,39 @@ def test_body_state_dict_matches_the_authors_checkpoint_exactly():
     assert set(body.state_dict()) == set(sd)
     assert {k: tuple(v.shape) for k, v in body.state_dict().items()} == {k: tuple(v.shape) for k, v in sd.items()}
     body.load_state_dict(sd, strict=True)
+
+
+def _one_target_batch():
+    # one car in frame 0, normalised xyzwhd; frame 1 empty
+    return torch.tensor([[0, 2, 100 / 256, 120 / 256, 30 / 64, 10 / 256, 12 / 256, 6 / 64]], dtype=torch.float32)
+
+
+def test_loss_is_finite_with_nine_components():
+    body = T.TransRADBody(**BODY_KW).eval()
+    crit = T.TransRADLoss(body)
+    with torch.no_grad():
+        preds = body(torch.randn(2, 256, 256, 256))
+    total, parts = crit(preds, _one_target_batch())
+    assert torch.isfinite(total) and total > 0
+    assert tuple(parts.shape) == (9,) and torch.isfinite(parts).all()
+    assert torch.isclose(parts.sum(), total)
+
+
+def test_loss_survives_a_batch_with_no_objects():
+    body = T.TransRADBody(**BODY_KW).eval()
+    crit = T.TransRADLoss(body)
+    with torch.no_grad():
+        preds = body(torch.randn(1, 256, 256, 256))
+    total, parts = crit(preds, torch.zeros(0, 8))
+    assert torch.isfinite(total)
+    assert parts[0] == 0 and parts[2] == 0      # no positives: box and dfl terms are zero
+
+
+def test_torch_iou3d_matches_the_numpy_version_used_by_evaluation():
+    from detection_vis_backend.train.utils import iou3d_np
+    a = torch.tensor([[100., 120., 30., 10., 12., 6.]])
+    b = torch.tensor([[102., 121., 31., 10., 12., 6.], [10., 10., 10., 4., 4., 4.]])
+    size = torch.tensor([256., 256., 64.])
+    got = T.torch_iou3d(a.expand(2, 6), b, size)
+    want = iou3d_np(a.numpy().repeat(2, 0), b.numpy(), [256, 256, 64])
+    np.testing.assert_allclose(got.numpy(), want, rtol=1e-5)
