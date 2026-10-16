@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
+from detection_vis_backend.datasets.adapters import make_sample_adapter
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
@@ -261,25 +262,20 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 if skip_empty_label:
                     logger.debug(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}") 
         elif dataset_type == "RADDetDataset":
-            # One request copy PER SPLIT. Augmentation is train-only and is decided from
-            # instance state (splittype), so a single shared object would augment val and
-            # test too -- exactly what the ViewOfDelft branch below already avoids.
-            dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-            dataset.prepare_for_train(features, train_config, model_config, splittype='train')
-            sample_ids = [os.path.splitext(os.path.basename(f))[0] for f in dataset.anno_filenames]
-            with open(os.path.join(dataset.root_path, "original_split_info.json"), "r") as f:
-                dataset.original_split = json.load(f)
-            split_samples_info['val'] = [sample_ids.index(i) for i in dataset.original_split['val'] if i in sample_ids]
-            split_samples_info['test'] = [sample_ids.index(i) for i in dataset.original_split['test'] if i in sample_ids]
-            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))
+            # Migrated to sample adapters (datasets/adapters/raddet.py): ONE parser serves
+            # every split, and a per-split adapter carries splittype, so augmentation
+            # stays train-only without per-split dataset copies.
+            parser = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+            sample_ids = [os.path.splitext(os.path.basename(f))[0] for f in parser.anno_filenames]
+            with open(os.path.join(parser.root_path, "original_split_info.json"), "r") as f:
+                original_split = json.load(f)
+            split_samples_info['val'] = [sample_ids.index(i) for i in original_split['val'] if i in sample_ids]
+            split_samples_info['test'] = [sample_ids.index(i) for i in original_split['test'] if i in sample_ids]
+            split_samples_info['train'] = np.setdiff1d(np.arange(len(parser)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))
             for split_type in ('train', 'val', 'test'):
-                if split_type == 'train':
-                    split_ds = dataset
-                else:
-                    split_ds = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-                    split_ds.prepare_for_train(features, train_config, model_config,
-                                               splittype=split_type)
-                datasets[split_type] = Subset(split_ds, split_samples_info[split_type])
+                adapter = make_sample_adapter(model_config['class'], parser, features,
+                                              model_config, train_config, splittype=split_type)
+                datasets[split_type] = Subset(adapter, split_samples_info[split_type])
         elif dataset_type == "ViewOfDelft":
             # Official split from ImageSets (5,139 train / 1,296 val). One request
             # copy PER SPLIT (slice 3.5): the train copy carries the augmentor, the

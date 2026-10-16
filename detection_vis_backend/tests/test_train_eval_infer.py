@@ -642,3 +642,25 @@ def test_relocate_datafile_falls_back_when_db_is_unreachable(monkeypatch):
     _patch_db(monkeypatch, raises=ValueError("No DATABASE_URL environment variable found."))
 
     assert relocate_datafile(SNAPSHOT, 110) == SNAPSHOT
+
+
+def test_raddet_loader_branch_builds_adapters_not_prepare_for_train():
+    """RADDetDataset is migrated: its CreateDataLoaders branch must wrap the parser in a
+    sample adapter per split and never call prepare_for_train on it."""
+    import inspect
+    from detection_vis_backend.train.train import CreateDataLoaders
+    src = inspect.getsource(CreateDataLoaders)
+    branch = src.split('elif dataset_type == "RADDetDataset":')[1].split('elif dataset_type == "ViewOfDelft":')[0]
+    assert "make_sample_adapter(" in branch
+    assert "prepare_for_train" not in branch
+    assert branch.count("get_instance(") == 1, "one parser serves all three splits"
+
+
+def test_infer_routes_migrated_datasets_through_the_adapter():
+    import inspect
+    from detection_vis_backend.train import inference
+    src = inspect.getsource(inference.infer)
+    assert "if dataset_type in MIGRATED:" in src
+    assert "make_sample_adapter(" in src
+    assert "sample_source.transformations = None" in src
+    assert "data = sample_source[sample_id]" in src

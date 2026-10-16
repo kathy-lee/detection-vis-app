@@ -70,7 +70,11 @@ insert directories+files ─┘
   features to disk;
 - feature getters for the data types it has (`get_RD`, `get_RA`, `get_RAD`,
   `get_radarpointcloud`, `get_lidarpointcloud`, image/depth handling, …);
-- `get_feature(...)`, `__getitem__`, `__len__` for the dataloader and the UI.
+- `get_feature(...)` and `__len__` for the UI and the dataloader; `annotation(idx)` returning the
+  frame's raw labels. **Migrated datasets** (today: `RADDetDataset`) have no `__getitem__` of
+  their own — each model that reads them gets a *sample adapter* in
+  `detection_vis_backend/datasets/adapters/` (see "Adding a new model"). The other datasets
+  still build samples in their own `__getitem__` / `prepare_for_train`.
 
 No explicit registration is needed — defining the class in that module is enough.
 
@@ -109,6 +113,7 @@ Model architectures currently registered:
 | RAMP_CNN | RD+RA+AD | per-class confidence map in RA plane, peak-picked into detections | https://github.com/Xiangyu-Gao/Radar-multiple-perspective-object-detection |
 | RadarCrossAttention | RD+RA+AD | per-class map + center-offset + orientation in RA plane, peak-pick + offset | https://github.com/ravikothari510/crossattention_radar_detector |
 | RadarPillar | radarPC (VoD 5-frame accumulation by default) | 3D boxes [x,y,z,l,w,h,yaw] in the radar frame, per-class anchors + rotated NMS; official VoD devkit mAP | https://github.com/fthbng77/RadarPillar (RadarPillars, arXiv:2408.05020) |
+| TransRAD | - | - | https://github.com/radar-lab/TransRAD |
 
 
 Three output paradigms: **fixed-size localizer** (FFTRadNet), **confidence-map peak-pickers**
@@ -137,6 +142,7 @@ network.py  (class NewModel(BaseNetwork))
    +  train/NewModel_train_config.json       (training hyperparams)
    +  networks/model_features.json entry     (adds it to the dropdown + guard)
    +  collate_func entry in train/train.py
+   +  datasets/adapters/<dataset>.py: a SampleAdapter subclass, if the dataset is migrated
         └─▶ restart backend ─▶ appears in Train page ─▶ trainable
 ```
 
@@ -165,4 +171,14 @@ network.py  (class NewModel(BaseNetwork))
 5. **Collate.** Add a `collate_func` entry for `NewModel` in `train/train.py`
    (`default_collate` or a custom collate). Required — training indexes
    `collate_func[model_config['class']]` and raises `KeyError` otherwise.
+
+6. **Sample adapter** (migrated datasets only — today `RADDetDataset`). Add a
+   `SampleAdapter` subclass in `detection_vis_backend/datasets/adapters/<dataset>.py`
+   with `MODELS = ("NewModel",)`, `DATASET = "<DatasetClass>"`, decorated with
+   `@register`, and a `__getitem__` that builds the sample from the parser's raw views
+   (`get_RAD`, `_get_collapsed`, `annotation`, ...). `make_sample_adapter` resolves it by
+   `(model class name, dataset class name)` and raises, listing what is registered, for
+   any pair that has none. Test it with a fake parser (see
+   `tests/test_sample_adapters.py`); no dataset edit is needed. For a non-migrated
+   dataset, add a branch to its `__getitem__` as before.
 

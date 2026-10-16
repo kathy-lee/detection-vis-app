@@ -217,8 +217,8 @@ PARSE_DEFS = {  # module path -> number of parse() defs expected
     "detection_vis_backend/datasets/view_of_delft.py": 1,
     "detection_vis_backend/datasets/nuscenes.py": 1,
 }
-PREPARE_DEFS = {
-    "detection_vis_backend/datasets/dataset.py": 6,
+PREPARE_DEFS = {  # RADDetDataset has none: its model logic lives in datasets/adapters
+    "detection_vis_backend/datasets/dataset.py": 5,
     "detection_vis_backend/datasets/view_of_delft.py": 1,
     "detection_vis_backend/datasets/nuscenes.py": 1,
 }
