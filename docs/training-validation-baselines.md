@@ -128,7 +128,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 14 | RadarCrossAttention / CARRADA | **88.8 / 78.4** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **42.7 / 34.3** on the official sequence split (1 seed each, final weights) | 94.0 / 86.0 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences | `RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29` (frame-random) + `RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01` (official split) |
 | 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` (the base model shares the radarpillar.py path, hence the dir name) |
 | 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
-| 17 | TransRAD / RADDetDataset | pending run (official split, seed 11, best-val-loss EMA weights) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | port validated at parity; training result pending | — |
+| 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -161,7 +161,7 @@ validation — real elapsed time, not GPU-busy time).
 | 14 | RadarCrossAttention / CARRADA | 11.62 M | 134 M | 80 | 1.1 h | 0.8 m |
 | 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
 | 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
-| 17 | TransRAD / RADDetDataset | 5.79 M | pending | 100 | pending | pending |
+| 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -675,7 +675,34 @@ EMA 0.9999 with tau 2000, grad clip 10, batch 4, 100 epochs, seed 11, best check
 EMA validation loss. Three config-gated additions to `train()` carry it: `cos_warmup`,
 `ema`, `optimizer.betas`; every existing config is bit-for-bit unchanged.
 
-**Training result:** pending (row 17).
+**Training result (row 17).** `TransRAD_RADDetDataset_Oct-16-2026_15:10:07`, 100 epochs,
+23.5 h on the RTX 3090, 14.0 min per epoch. Validation mAP@0.3 rose to 0.55 by epoch 29
+and stayed between 0.54 and 0.56 for the remaining 70 epochs (best 0.562 at epoch 34),
+while validation loss bottomed at 34.68 at epoch 28 and climbed to 50.3 by epoch 99 as
+training loss fell from 19.5 to 5.6: the model overfits from epoch 30 on and the
+cosine tail does not recover it. The reference's rule (lowest EMA validation loss) selects
+epoch 28, which scores on the 2032-frame test split:
+
+| IoU | 0.1 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 |
+|---|---|---|---|---|---|---|
+| ours, epoch 28 | 0.674 | **0.537** | 0.438 | **0.314** | 0.202 | 0.101 |
+| authors' checkpoint | 0.731 | 0.602 | 0.496 | 0.378 | 0.250 | 0.129 |
+
+Per-class AP@0.3 ours / authors: car 0.680 / 0.728, bus 0.500 / 0.763, truck 0.555 /
+0.636, person 0.195 / 0.269, bicycle 0.159 / 0.334, motorcycle 0 / 0. The headline is
+10.8% under at IoU 0.3 and 16.9% under at 0.5: inside the campaign's ~20% rule, not a
+match. Since the gate shows our pipeline reproduces the authors' weights to the third
+decimal, the gap is in how the weights were trained, and the most likely cause is in
+the paper itself (§III.E): "after model convergence, adjusting α1 = 40 and α2 = 15 and
+a second round of transfer learning can significantly improve objectness and
+classification accuracy". The shipped `yolo_training.py` carries exactly those gains
+(with 30 and 7.5 still in comments) and the shipped `Train.py` starts from
+`best_epoch_weights.pth`, i.e. the published script IS the second round. This run
+applied the second-round gains from random init, which is neither round. A faithful
+reproduction would be round one with gains 30 / 7.5 from scratch, then the shipped
+script from round one's best epoch; the second round's schedule is not documented and
+would have to be guessed. Smaller contributors: 7314 training frames instead of about
+7720, and a different (and larger) validation set driving the checkpoint choice.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
