@@ -1400,6 +1400,11 @@ def TransRAD_evaluation(net, dataloader, train_config, features, output_dir, eva
         rows = transrad_decode(outputs, n_class, eval_size)
         raw_boxes = data['boxes'].detach().cpu().numpy()
         for batch_id in range(raw_boxes.shape[0]):
+            if not raw_boxes[batch_id][:, :6].any():
+                # No ground truth in this frame (the adapter yields (0, 7) boxes and the
+                # collate pads with zeros): mAP() would average an empty list to NaN. It
+                # counts as a frame scoring 0, RADDet's convention for absent classes.
+                continue
             nms_pred = transrad_nms(rows[batch_id], eval_size, train_config["confidence_threshold"],
                                     train_config["nms_iou3d_threshold"], train_config["la_nms_iou3d_threshold"])
             for thr in thresholds:
