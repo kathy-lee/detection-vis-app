@@ -181,6 +181,16 @@ def test_decode_recovers_a_box_planted_in_the_head_maps():
     assert r[6] == pytest.approx(1.0) and r[7 + 2] == pytest.approx(1.0)
 
 
+def test_decode_follows_the_body_reg_max_not_a_constant():
+    """reg_max is an editable model-config key; the decoder must read the head layout
+    from the maps it is given rather than assume 16."""
+    body = T.TransRADBody(input_size=[256, 256, 256], n_class=6, reg_max=8).eval()
+    with torch.no_grad():
+        out = body(torch.randn(1, 256, 256, 256))
+    rows = T.decode_predictions(out, 6, [256, 256, 64])
+    assert rows.shape == (1, 1344, 13)
+
+
 def test_decode_accepts_the_network_dict_output():
     body = T.TransRADBody(**BODY_KW).eval()
     with torch.no_grad():
@@ -393,3 +403,30 @@ def test_transrad_evaluation_scores_a_perfect_prediction_at_one():
         res = E.TransRAD_evaluation(FakeNet(), Loader([batch]), cfg, ["RAD"], None, "val", torch.device("cpu"))
     assert res["mAP"] == pytest.approx(1.0) and res["mAP@0.5"] == pytest.approx(1.0)
     assert res["AP@0.3_car"] == pytest.approx(1.0) and res["loss"] == pytest.approx(0.5)
+
+
+def test_transrad_evaluation_scores_a_frame_without_ground_truth_as_zero_not_nan():
+    """The adapter yields (0, 7) boxes for an object-free frame; the evaluator must count
+    it as a frame scoring 0 (RADDet's convention), not poison the mean with NaN."""
+    from detection_vis_backend.train import evaluate as E
+
+    class FakeNet(torch.nn.Module):
+        n_class = 6
+        class_names = ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
+        def forward(self, x):
+            return {"fake": True}
+    rows = np.zeros((2, 1, 13), dtype=np.float32)
+    rows[:, 0, :6] = [100, 120, 30, 10, 12, 6]; rows[:, 0, 6] = 0.9; rows[:, 0, 7 + 2] = 0.9
+    boxes = torch.zeros(2, 1, 7)
+    boxes[0, 0] = torch.tensor([100., 120., 30., 10., 12., 6., 2.])   # frame 1 has no gt
+    batch = {"RAD": torch.zeros(2, 2, 2, 2), "label": torch.zeros(0, 8), "boxes": boxes, "image_path": ["a", "b"]}
+    cfg = {"eval_input_size": [256, 256, 64], "confidence_threshold": 0.3, "nms_iou3d_threshold": 0.1,
+           "la_nms_iou3d_threshold": 0.1, "mAP_iou3d_threshold": 0.3, "mAP_iou3d_threshold_list": [0.3],
+           "dataloader": {"test": {"batch_size": 2}}}
+
+    class Loader(list):
+        dataset = [0, 1]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(E, "transrad_decode", lambda outputs, n_class, size: rows)
+        res = E.TransRAD_evaluation(FakeNet(), Loader([batch]), cfg, ["RAD"], None, "test", torch.device("cpu"))
+    assert np.isfinite(res["mAP"]) and res["mAP"] == pytest.approx(0.5)

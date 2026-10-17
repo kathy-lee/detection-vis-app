@@ -1441,8 +1441,11 @@ def decode_predictions(outputs, n_class, eval_input_size):
     if isinstance(outputs, dict):
         outputs = (outputs["dbox"], outputs["cls"], outputs["heads"], outputs["anchors"], outputs["strides"])
     dbox, _, feats, anchors, strides = outputs
-    reg_max, box_attri = 16, 4
-    no = n_class + reg_max * box_attri + 1 + 2
+    # Head layout per anchor: 4 * reg_max distribution bins, n_class scores, 1 objectness,
+    # 2 Doppler end points. reg_max is a model-config key, so read it off the maps.
+    box_attri = 4
+    no = feats[0].shape[1]
+    reg_max = (no - n_class - 1 - 2) // box_attri
     pred_distri, pred_scores, pred_objness, pred_points = torch.cat(
         [xi.view(feats[0].shape[0], no, -1) for xi in feats], 2).split(
         (reg_max * box_attri, n_class, 1, 2), 1)
