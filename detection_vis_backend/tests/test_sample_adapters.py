@@ -46,7 +46,7 @@ def test_registry_is_keyed_by_model_and_dataset_and_fans_out_models():
     assert _REGISTRY[("RADDet", "RADDetDataset")] is not _REGISTRY[("DAROD", "RADDetDataset")]
     for (model, dataset), cls in _REGISTRY.items():
         assert model in cls.MODELS and dataset == cls.DATASET
-    assert MIGRATED == frozenset({"RADDetDataset"})
+    assert MIGRATED == frozenset({"RADDetDataset", "CRUW"})
 
 
 def test_base_len_delegates_to_parser_and_keeps_split_and_features():
