@@ -35,9 +35,9 @@ def test_missing_annotation_is_a_typeerror_at_construction():
 
 def test_unregistered_pair_names_both_sides_and_lists_registered():
     with pytest.raises(ValueError) as e:
-        make_sample_adapter("TransRAD", RADDetDataset(), ["RAD"], {}, {})
+        make_sample_adapter("NoSuchModel", RADDetDataset(), ["RAD"], {}, {})
     msg = str(e.value)
-    assert "TransRAD" in msg and "RADDetDataset" in msg and "registered" in msg
+    assert "NoSuchModel" in msg and "RADDetDataset" in msg and "registered" in msg
 
 
 def test_registry_is_keyed_by_model_and_dataset_and_fans_out_models():

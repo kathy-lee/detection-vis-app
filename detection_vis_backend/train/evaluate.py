@@ -19,6 +19,7 @@ from loguru import logger
 
 from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
+from detection_vis_backend.networks.transrad import decode_predictions as transrad_decode, nms_class_then_location as transrad_nms
 
 
 
@@ -1369,6 +1370,66 @@ def RADDet_evaluation(net, dataloader, train_config, features, output_dir, eval_
     return  result
 
 
+def TransRAD_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
+    """3D RAD-box mAP, the paper's Table I protocol: decode, class NMS then Location-Aware
+    NMS, RADDet's per-class AP at every IoU threshold from the one forward pass. Keys
+    follow RADDet_evaluation so the baselines row reads the same way."""
+    net.eval()
+    n_class = net.n_class
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    eval_size = train_config["eval_input_size"]
+    primary_thr = train_config["mAP_iou3d_threshold"]
+    thresholds = [primary_thr] + [t for t in (train_config.get("mAP_iou3d_threshold_list") or []) if t != primary_thr]
+    class_names = getattr(net, 'class_names', None) or ["person", "bicycle", "car", "motorcycle", "bus", "truck"][:n_class]
+    ap_by_thr = {thr: [[] for _ in range(n_class)] for thr in thresholds}
+    total_by_thr = {thr: 0.0 for thr in thresholds}
+
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        inputs = data["RAD"]
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.shape[0]
+            logger.info(f"Val sample {iter} loss: {loss}")
+
+        rows = transrad_decode(outputs, n_class, eval_size)
+        raw_boxes = data['boxes'].detach().cpu().numpy()
+        for batch_id in range(raw_boxes.shape[0]):
+            if not raw_boxes[batch_id][:, :6].any():
+                # No ground truth in this frame (the adapter yields (0, 7) boxes and the
+                # collate pads with zeros): mAP() would average an empty list to NaN. It
+                # counts as a frame scoring 0, RADDet's convention for absent classes.
+                continue
+            nms_pred = transrad_nms(rows[batch_id], eval_size, train_config["confidence_threshold"],
+                                    train_config["nms_iou3d_threshold"], train_config["la_nms_iou3d_threshold"])
+            for thr in thresholds:
+                mean_ap, ap_by_thr[thr] = mAP(nms_pred, raw_boxes[batch_id], eval_size, ap_by_thr[thr], tp_iou_threshold=thr)
+                total_by_thr[thr] += mean_ap
+        if eval_type == "val":
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+
+    # mean AP accumulates once per FRAME, so normalise by the frame count (RADDet_evaluation
+    # does the same; batch_size * len(dataloader) would over-count a ragged last batch).
+    n_frames = len(dataloader.dataset)
+    result = {'mAP': total_by_thr[primary_thr] / n_frames, 'mAR': 0.0, 'mIoU': 0.0}
+    for thr in thresholds:
+        per_class = [float(np.mean(c)) if len(c) else 0.0 for c in ap_by_thr[thr]]
+        if thr != primary_thr:
+            result[f'mAP@{thr}'] = total_by_thr[thr] / n_frames
+        for name, ap in zip(class_names, per_class):
+            result[f'AP@{thr}_{name}'] = ap
+    if eval_type == 'val':
+        result.update({'loss': running_loss / n_frames})
+    return result
+
+
 class RunningAverage():
     def __init__(self):
         self.total = 0
@@ -2153,7 +2214,7 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
 
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
+network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
 eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
@@ -2165,6 +2226,7 @@ for i in RECORD_subtypes:
 eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
 eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
 eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
+eval_func_dict["TransRAD", "RADDetDataset"] = TransRAD_evaluation
 eval_func_dict["DAROD", "CARRADA"] = DAROD_evaluation
 eval_func_dict["RAMP_CNN", "UWCR"] = RAMP_CNN_evaluation
 eval_func_dict["RadarCrossAttention", "CARRADA"] = RadarCrossAttention_evaluation

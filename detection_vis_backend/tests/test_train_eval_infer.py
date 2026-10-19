@@ -664,3 +664,13 @@ def test_infer_routes_migrated_datasets_through_the_adapter():
     assert "make_sample_adapter(" in src
     assert "sample_source.transformations = None" in src
     assert "data = sample_source[sample_id]" in src
+
+
+def test_infer_has_a_transrad_branch_that_mirrors_raddets_box_conversion():
+    import inspect
+    from detection_vis_backend.train import inference
+    src = inspect.getsource(inference.infer)
+    branch = src.split('elif model_type == "TransRAD":')[1].split("elif model_type ==")[0]
+    assert "transrad_decode(" in branch and "transrad_nms(" in branch
+    assert "eval_input_size" in branch
+    assert 'pred_objs = {"RD": rd_objs, "RA": ra_objs}' in branch

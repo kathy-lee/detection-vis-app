@@ -1,0 +1,34 @@
+{
+    "_about": "radar-lab/TransRAD Train.py at 8f9b9ad, run as shipped with model_path cleared (train from scratch) and phi 'n'. Every value below is the script's EFFECTIVE value, not the paper's prose: Init_lr_fit = min(max(batch/64 * 1e-3, 3e-4), 1e-3) = 3e-4 at batch 4 (the paper says 1e-3), Min_lr_fit = 3e-6; cos schedule from get_lr_scheduler: warmup_epochs = min(max(0.05*100, 1), 3) = 3 (quadratic, from warmup_lr_start = max(0.1*lr, 1e-6) = 3e-5), cosine to epoch 95, last min(max(0.05*100,1),15) = 5 epochs held at min_lr; Adam betas (momentum 0.937, 0.999), weight_decay 0; EMA decay 0.9999 with tau 2000 (ModelEMA); grad clip 10 (utils_fit.py:34); seed 11; drop_last on train/val loaders; best checkpoint = lowest EMA val loss (utils_fit.py:106), which Test.py then evaluates.",
+
+    "_split_note": "The reference holds out the last 5% of an UNSORTED glob of the train directory (about 406 frames) and trains on the rest; this config uses the repo's official split (7314 train / 812 val, original_split_info.json) for comparability with the RADDet and DAROD rows. The 2032-frame test set is identical. Test.py uses batch 12 with drop_last and so scores 2028 frames; here all 2032 are scored (the evaluator normalises per frame).",
+
+    "_eval_note": "eval_input_size is the cube on disk [range, azimuth, doppler]: the decoder scales Doppler back from the resized 256 to 64 and the 3D IoU uses that size (config.json MODEL.input_shape). confidence/nms/la_nms thresholds are yolo.py _defaults (0.3, 0.1) and detect_image line 98 (0.1). mAP_iou3d_threshold_list is Test.py's mAP_iou3d_threshold; the primary 0.3 drives the val curve.",
+
+    "default": {
+        "seed": 11,
+        "num_epochs": 100,
+        "optimizer": {"type": "Adam", "lr": 0.0003, "betas": [0.937, 0.999], "weight_decay": 0},
+        "lr_scheduler": {"type": "cos_warmup", "min_lr": 0.000003,
+                         "warmup_epochs": 3, "warmup_lr_start": 0.00003, "hold_last_epochs": 5},
+        "ema": {"decay": 0.9999, "tau": 2000},
+        "grad_norm_clip": 10.0,
+        "test_checkpoint": {"monitor": "loss", "mode": "min"},
+        "dataloader": {
+            "splitmode": "original",
+            "train": {"batch_size": 4, "num_workers": 4, "drop_last": true},
+            "val":   {"batch_size": 4, "num_workers": 2, "drop_last": true},
+            "test":  {"batch_size": 12, "num_workers": 2}
+        },
+        "losses": {}
+    },
+
+    "RADDetDataset": {
+        "eval_input_size": [256, 256, 64],
+        "confidence_threshold": 0.3,
+        "nms_iou3d_threshold": 0.1,
+        "la_nms_iou3d_threshold": 0.1,
+        "mAP_iou3d_threshold": 0.3,
+        "mAP_iou3d_threshold_list": [0.1, 0.3, 0.4, 0.5, 0.6, 0.7]
+    }
+}

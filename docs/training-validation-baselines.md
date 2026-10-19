@@ -74,8 +74,9 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 14 | RadarCrossAttention | CARRADA | AP @2m / @1m | **0.94 / 0.86** overall (Ped 0.91/0.80, Cyc 0.93/0.88, Car 0.97/0.91) | RadarCrossAttention Table I, `Bivar Cross Atten. + offset loss` |
 | 15 | PointPillar | ViewOfDelft | mAP entire / corridor | **46.7 / 67.8** (5-frame) | RadarPillars Table I, `PointPillars*` |
 | 16 | RadarPillar | ViewOfDelft | mAP entire / corridor | **50.7 / 70.5** (5-frame) | RadarPillars Table I, `RadarPillars (ours)` |
+| 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
 
-Coverage: **20 of the 24 runs have a published number**; 4 are unbaselined
+Coverage: **21 of the 25 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
 is bracketed rather than pointed (`RODNet_HGwIv2`).
 
@@ -127,6 +128,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 14 | RadarCrossAttention / CARRADA | **88.8 / 78.4** test AP@2m/@1m on the reference's frame-random 70/15/15 protocol; **42.7 / 34.3** on the official sequence split (1 seed each, final weights) | 94.0 / 86.0 | impossible (shipped reference cannot train or evaluate as-is) | **match on the published protocol** (−5.5% / −8.8%); the frame-leaky split inflates the number 2.1× over held-out sequences | `RadarCrossAttention_CARRADA_Sep-08-2026_07:37:29` (frame-random) + `RadarCrossAttention_CARRADA_Sep-07-2026_21:50:01` (official split) |
 | 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` (the base model shares the radarpillar.py path, hence the dir name) |
 | 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
+| 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -159,6 +161,7 @@ validation — real elapsed time, not GPU-busy time).
 | 14 | RadarCrossAttention / CARRADA | 11.62 M | 134 M | 80 | 1.1 h | 0.8 m |
 | 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
 | 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
+| 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -631,6 +634,75 @@ Three things were checked before making that change:
   present in the batch, so batches whose frames differ in class composition do not
   decompose into per-sample losses (measured: 6 of 25 batches differ, max 0.0153). Read
   MVRECORD's val loss only against itself, never against the batch-1 RD/RA curves.
+
+### TransRAD: validated against the authors' checkpoint (2026-10-16)
+
+TransRAD (radar-lab/TransRAD @8f9b9ad, GPL-3.0; a pristine clone with the shipped
+`model_data/best_epoch_weights.pth` lives at `/home/kangle/dataset/transrad_reference/`)
+is the first network added through the sample-adapter mechanism: `RADDetDataset` is
+untouched and `TransRADOnRADDet` builds the reference's sample (log-magnitude cube,
+Doppler resized 64→256 by nearest neighbour, edge boxes clamped to their larger part).
+
+**The strong check ran first.** `scripts/transrad_reference_check.py` loads the authors'
+checkpoint into our port with `strict=True` (650 keys, 5,788,131 parameters, no key map)
+and scores the official 2032-frame test split through our adapter, collate, decoder,
+two-stage NMS and evaluator:
+
+| IoU | authors (Test.py, 2028 frames) | ours (2032 frames) |
+|---|---|---|
+| 0.1 | 0.7309 | 0.7304 |
+| 0.3 | 0.6016 | 0.6011 |
+| 0.4 | 0.4958 | 0.4951 |
+| 0.5 | 0.3777 | 0.3773 |
+| 0.6 | 0.2496 | 0.2498 |
+| 0.7 | 0.1293 | 0.1292 |
+
+Per-class AP@0.3 ours / authors: person 0.268 / 0.269, bicycle 0.338 / 0.334, car
+0.727 / 0.728, motorcycle 0 / 0, bus 0.763 / 0.763, truck 0.635 / 0.636. Every gap is
+under 0.001, i.e. the four frames their `drop_last` skips plus float order. Data path,
+model, decoding, NMS and metric are therefore proven against the reference; whatever a
+training run scores is attributable to the recipe.
+
+**Deviations from the reference, all deliberate:** official 7314/812 split instead of
+their unsorted 5 % hold-out (≈7720/406; the test set is identical); all 2032 test
+frames scored; `SyncBatchNorm` → `BatchNorm2d` (same keys, same single-GPU maths);
+feature strides fixed at 8/16/32 instead of a dummy forward at construction; per-step
+prints dropped; the two `timm` helpers vendored. The recipe in
+`train/TransRAD_train_config.json` carries the script's *effective* values, which differ
+from the paper's prose: lr 3e-4 (the script clamps 1e-3 by batch size), cosine with a
+3-epoch quadratic warmup and the last 5 epochs held at 3e-6, Adam betas (0.937, 0.999),
+EMA 0.9999 with tau 2000, grad clip 10, batch 4, 100 epochs, seed 11, best checkpoint by
+EMA validation loss. Three config-gated additions to `train()` carry it: `cos_warmup`,
+`ema`, `optimizer.betas`; every existing config is bit-for-bit unchanged.
+
+**Training result (row 17).** `TransRAD_RADDetDataset_Oct-16-2026_15:10:07`, 100 epochs,
+23.5 h on the RTX 3090, 14.0 min per epoch. Validation mAP@0.3 rose to 0.55 by epoch 29
+and stayed between 0.54 and 0.56 for the remaining 70 epochs (best 0.562 at epoch 34),
+while validation loss bottomed at 34.68 at epoch 28 and climbed to 50.3 by epoch 99 as
+training loss fell from 19.5 to 5.6: the model overfits from epoch 30 on and the
+cosine tail does not recover it. The reference's rule (lowest EMA validation loss) selects
+epoch 28, which scores on the 2032-frame test split:
+
+| IoU | 0.1 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 |
+|---|---|---|---|---|---|---|
+| ours, epoch 28 | 0.674 | **0.537** | 0.438 | **0.314** | 0.202 | 0.101 |
+| authors' checkpoint | 0.731 | 0.602 | 0.496 | 0.378 | 0.250 | 0.129 |
+
+Per-class AP@0.3 ours / authors: car 0.680 / 0.728, bus 0.500 / 0.763, truck 0.555 /
+0.636, person 0.195 / 0.269, bicycle 0.159 / 0.334, motorcycle 0 / 0. The headline is
+10.8% under at IoU 0.3 and 16.9% under at 0.5: inside the campaign's ~20% rule, not a
+match. Since the gate shows our pipeline reproduces the authors' weights to the third
+decimal, the gap is in how the weights were trained, and the most likely cause is in
+the paper itself (§III.E): "after model convergence, adjusting α1 = 40 and α2 = 15 and
+a second round of transfer learning can significantly improve objectness and
+classification accuracy". The shipped `yolo_training.py` carries exactly those gains
+(with 30 and 7.5 still in comments) and the shipped `Train.py` starts from
+`best_epoch_weights.pth`, i.e. the published script IS the second round. This run
+applied the second-round gains from random init, which is neither round. A faithful
+reproduction would be round one with gains 30 / 7.5 from scratch, then the shipped
+script from round one's best epoch; the second round's schedule is not documented and
+would have to be guessed. Smaller contributors: 7314 training frames instead of about
+7720, and a different (and larger) validation set driving the checkpoint choice.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
