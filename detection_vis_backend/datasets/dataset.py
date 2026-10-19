@@ -1594,26 +1594,59 @@ class CRUW(Dataset):
         else:
             self.n_chirps = 1
 
-        self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
-
-        data_details = pickle.load(open(self.pkl_path, 'rb'))
-        self.image_paths = data_details['image_paths']
-        self.radar_paths = data_details['radar_paths']
-        if data_details['anno'] is not None:
-            self.obj_infos = data_details['anno']['metadata']
-            self.confmaps = data_details['anno']['confmaps']
-        n_frame = data_details['n_frame']
+        self._load_details()
+        n_frame = self.n_frame
         n_data_in_seq = (n_frame - (self.win_size * self.step - 1)) // self.stride + (
             1 if (n_frame - (self.win_size * self.step - 1)) % self.stride > 0 else 0)
         self.datasamples_length = n_data_in_seq
 
         self.model_type = model_cfg['class']
+        return
+
+    def _load_details(self):
+        """Bind the parsed sequence (paths, annotations, grids) from the pickle on first
+        use. Inference builds the sample source without calling prepare_for_train, so
+        every raw view below loads on demand; rebinding only, never mutating, keeps the
+        request-scoped copies independent."""
+        if getattr(self, '_details_loaded', False):
+            return
+        data_details = pickle.load(open(self.pkl_path, 'rb'))
+        self.image_paths = data_details['image_paths']
+        self.radar_paths = data_details['radar_paths']
+        self.n_frame = data_details['n_frame']
+        if data_details['anno'] is not None:
+            self.obj_infos = data_details['anno']['metadata']
+            self.confmaps = data_details['anno']['confmaps']
+        else:
+            self.obj_infos = []
+            self.confmaps = []
+        self.n_class = 3
+        self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
         self.rng_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='range')
         self.agl_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='angle')
-        return
-    
+        self._details_loaded = True
+
     def __len__(self):
-        return self.datasamples_length #self.frame_sync
+        # Frames, not windows: windowing belongs to the sample adapters.
+        if hasattr(self, 'datasamples_length'):
+            return self.datasamples_length
+        self._load_details()
+        return self.n_frame
+
+    def annotation(self, idx):
+        """Raw per-frame metadata dict of frame idx (categories, center_ids, ...)."""
+        self._load_details()
+        return self.obj_infos[idx]
+
+    def confmap(self, idx):
+        """Pre-rendered confidence maps of frame idx, (n_class, range, azimuth) float32."""
+        self._load_details()
+        return self.confmaps[idx][:self.n_class]
+
+    def radar_chirp(self, idx, chirp_index):
+        """One chirp of frame idx as stored on disk, (range, azimuth, 2) real/imag."""
+        self._load_details()
+        return np.load(self.radar_paths[idx][chirp_index])
 
     def __getitem__(self, index):
         data_dict = dict(
