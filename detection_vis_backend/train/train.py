@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
-from detection_vis_backend.datasets.adapters import make_sample_adapter
+from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATED
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
@@ -151,8 +151,15 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 counter = 0
                 dataset_inst_list = []
                 for file in train_config['dataloader']['split_sequence'][split_type]:
-                    dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                    dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    if file['parse'] in MIGRATED:
+                        # One parser per sequence serves its raw frames; the adapter
+                        # windows them the way this model reads them.
+                        parser = dataset_factory.get_instance(file['parse'], file['id'])
+                        dataset_inst = make_sample_adapter(model_config['class'], parser, features,
+                                                           model_config, train_config, splittype=split_type)
+                    else:
+                        dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
+                        dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
                     dataset_inst_list.append(dataset_inst)
                     for i in range(len(dataset_inst)):
                         samples_info.append([file['parse'], file['name'], file['id'], i])
