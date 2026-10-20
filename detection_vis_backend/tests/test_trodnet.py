@@ -190,3 +190,15 @@ def test_rodnet_evaluation_deletes_stale_result_files_before_writing():
     src = inspect.getsource(RODNet_evaluation)
     first_write_to_current = src.index("write_dets_results_single_frame(res_final, cur_frame_id, save_path")
     assert src.index("os.remove(save_path)") < first_write_to_current
+
+
+def test_scorer_check_converts_our_rows_to_the_reference_order():
+    """Ours: frame class row col conf (grid indices). Theirs: frame range angle class
+    conf, metres / radians to 4 decimals and the score to 2, trailing space
+    (rodnet/core/post_processing/output_results.py:32)."""
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    from trodnet_scorer_check import to_reference_rows
+    rng_grid = [0.0, 1.5, 3.0, 4.5]
+    agl_grid = [-0.5, 0.0, 0.5]
+    assert to_reference_rows(["12 car 2 1 0.8731", "12 pedestrian 3 2 1.2"], rng_grid, agl_grid) == [
+        "12 3.0000 0.0000 car 0.87 ", "12 4.5000 0.5000 pedestrian 1.00 "]
