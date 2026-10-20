@@ -183,6 +183,11 @@ def test_trodnet_configs_and_split_resolve_through_smoke_sweep():
     assert not any(r["name"] in TEST_SEQS for r in patch["split_sequence"]["train"])
     with pytest.raises(ValueError):
         build_split("CARRADA", rows, "trodnet")
+    # monitor="one": the per-epoch curve on a single test sequence; the test set is unchanged
+    _, one = build_split("CRUW", rows, "trodnet", monitor="one")
+    assert [r["name"] for r in one["split_sequence"]["val"]] == ["2019_04_30_MLMS001"]
+    assert [r["name"] for r in one["split_sequence"]["test"]] == list(TEST_SEQS)
+    assert len(one["split_sequence"]["train"]) == 36
 
 
 def test_rodnet_evaluation_deletes_stale_result_files_before_writing():
