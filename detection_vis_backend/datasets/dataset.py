@@ -1591,15 +1591,34 @@ class CRUW(Dataset):
         self.n_frame = data_details['n_frame']
         if data_details['anno'] is not None:
             self.obj_infos = data_details['anno']['metadata']
-            self.confmaps = data_details['anno']['confmaps']
+            self.confmaps = self._memory_mapped_confmaps(data_details['anno']['confmaps'])
         else:
             self.obj_infos = []
             self.confmaps = []
+        del data_details
         self.n_class = 3
         self.chirp_ids = self.sensor_cfg['radar_cfg']['chirp_ids']
         self.rng_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='range')
         self.agl_grid = confmap2ra(self.sensor_cfg['radar_cfg'], name='angle')
         self._details_loaded = True
+
+    def _memory_mapped_confmaps(self, confmaps):
+        """The pre-rendered maps as a read-only memory map of a .npy beside the pickle.
+
+        In the pickle they are float64, ~0.5 GB per sequence and 20 GB for ROD2021, and
+        every training process (the trainer and each loader worker) used to hold its own
+        copy -- 30 GB of host memory on this machine, which starved the page cache and
+        got a run killed. A memory map is one shared copy, paged in on demand; the file
+        keeps the pickle's dtype so the bytes an adapter serves are unchanged. Written
+        once per sequence, atomically, so concurrent processes never see a partial file.
+        """
+        path = self.pkl_path[:-len('.pkl')] + '_confmaps.npy'
+        if not os.path.exists(path):
+            # np.save appends '.npy' to any other suffix, so the temporary name ends in it
+            tmp = '%s.%d.tmp.npy' % (path[:-len('.npy')], os.getpid())
+            np.save(tmp, confmaps)
+            os.replace(tmp, path)
+        return np.load(path, mmap_mode='r')
 
     def __len__(self):
         # Frames, not windows: windowing belongs to the sample adapters.

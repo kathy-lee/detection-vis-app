@@ -79,6 +79,37 @@ def test_parser_without_annotations_serves_frames_only(cruw_parser_no_anno):
     assert cruw_parser_no_anno.confmaps == [] and cruw_parser_no_anno.obj_infos == []
 
 
+def expected_dtype(parser):
+    # the sidecar keeps the pickle's dtype (float64 on disk today): identical bytes, so the
+    # goldens captured before the refactor still hold
+    with open(parser.pkl_path, "rb") as fh:
+        return pickle.load(fh)["anno"]["confmaps"].dtype
+
+
+@needs_sensor_cfg
+def test_parser_memory_maps_the_confidence_maps(cruw_parser, tmp_path):
+    """The pre-rendered maps are float64 and ~0.5 GB per sequence; held in RAM by the
+    trainer and every loader worker they fill the host (20 GB for ROD2021). Serve them
+    from a .npy beside the pickle through a memory map instead: same bytes, one shared
+    copy, paged in on demand."""
+    cruw_parser._load_details()
+    sidecar = tmp_path / "seq_confmaps.npy"
+    assert sidecar.exists()
+    assert isinstance(cruw_parser.confmaps, np.memmap) and cruw_parser.confmaps.dtype == expected_dtype(cruw_parser)
+    with open(cruw_parser.pkl_path, "rb") as fh:
+        expected = pickle.load(fh)["anno"]["confmaps"]
+    assert np.array_equal(np.asarray(cruw_parser.confmaps), expected)
+    assert np.array_equal(cruw_parser.confmap(7), expected[7][:3])
+    # a second instance reuses the sidecar rather than rewriting it
+    before = sidecar.stat().st_mtime_ns
+    from detection_vis_backend.datasets.dataset import CRUW
+    other = CRUW()
+    for attr in ("pkl_path", "root_path", "seq_name", "feature_path", "sensor_cfg", "_request_scoped"):
+        setattr(other, attr, getattr(cruw_parser, attr))
+    other._load_details()
+    assert sidecar.stat().st_mtime_ns == before and isinstance(other.confmaps, np.memmap)
+
+
 # ---------------------------------------------------------------------------------------
 # Adapters on an in-memory parser (the registry keys on the class NAME, so the fake
 # shares it).
