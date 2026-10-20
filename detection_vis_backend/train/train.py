@@ -65,6 +65,13 @@ def cos_warmup_lr(lr, min_lr, total_epochs, warmup_epochs, warmup_lr_start, hold
         1.0 + math.cos(math.pi * (epoch - warmup_epochs) / (total_epochs - warmup_epochs - hold_last_epochs)))
 
 
+def cosine_scheduler(optimizer, sched_cfg, num_epochs):
+    """Plain cosine annealing from the optimizer's lr to min_lr over num_epochs, one step
+    per epoch; the curve of torch's CosineAnnealingLR with T_max = num_epochs."""
+    return lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs,
+                                          eta_min=float(sched_cfg.get('min_lr', 0)))
+
+
 class WeightEMA:
     """Exponential moving average of every floating entry of the state dict (parameters
     AND buffers), as the TransRAD reference's ModelEMA (nets/yolo_training.py lines
@@ -103,6 +110,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
         'RODNet_HGv2': default_collate,
         'RODNet_HGwI': default_collate,
         'RODNet_HGwIv2': default_collate,
+        'T_RODNet': default_collate,
         'RadarFormer_hrformer2d': default_collate,
         'RECORD': default_collate,
         'RECORDNoLstm': default_collate,
@@ -533,6 +541,10 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
 
             scheduler = lr_scheduler.LambdaLR(optimizer, _decay_to_floor)
             step_scheduler_per_iter = True
+        elif train_config['lr_scheduler']['type'] == 'cosine':
+            # T-RODNet reference recipe: CosineAnnealingLR(optimizer, n_epoch) stepped once
+            # per epoch (tools/train.py:167,301); no warmup, so cos_warmup cannot express it.
+            scheduler = cosine_scheduler(optimizer, train_config['lr_scheduler'], num_epochs)
         elif train_config['lr_scheduler']['type'] == 'cos_warmup':
             # TransRAD reference recipe: see cos_warmup_lr. Epoch-indexed and stepped once
             # per epoch like 'step' and 'exp'; LambdaLR multiplies the base lr, hence the ratio.

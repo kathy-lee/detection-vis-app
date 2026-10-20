@@ -2212,7 +2212,7 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
     return result
 
 
-RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2"]
+RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "T_RODNet"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
 network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]

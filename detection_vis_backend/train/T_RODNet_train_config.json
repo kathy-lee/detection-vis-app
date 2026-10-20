@@ -1,0 +1,50 @@
+{
+    "_about": "Published T-RODNet recipe, transcribed from the reference implementation Zhuanglong2/T-RODNet (configs/config_T_Rodnet_win16.py train_cfg/test_cfg/model_cfg and tools/train.py:129-167): Adam lr 1e-4 weight_decay 0, CosineAnnealingLR over the 100 epochs stepped once per epoch, batch 4, 16-frame windows at train stride 4 and test stride 8, MSE on the raw network output (the paper's text says smooth-L1; the code that produced its numbers uses nn.MSELoss), RODNet post-processing with max_dets 20, peak and OLS thresholds 0.3. The reference keeps no validation set and reports its final checkpoint on four held-out training sequences, so no test_checkpoint is set: the final epoch's weights are what gets tested.",
+    "_split_note": "The authors' split (their README): test = 2019_04_09_BMS1001, 2019_04_30_MLMS001, 2019_05_23_PM1S013, 2019_09_29_ONRD005; train = the other 36 labelled ROD2021 sequences. scripts/smoke_sweep.py --split trodnet builds it, with the four test sequences also serving as the per-epoch monitor (val).",
+
+    "default": {
+        "seed": 3,
+        "losses": {
+            "type": "mse"
+        },
+        "lr_scheduler": {
+            "type": "cosine",
+            "min_lr": 0
+        },
+        "optimizer": {
+            "lr": 0.0001,
+            "weight_decay": 0
+        },
+        "num_epochs": 100,
+        "dataloader": {
+            "splitmode": "",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {
+                "batch_size": 4,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 1,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        },
+
+        "win_size": 16,
+        "train_step": 1,
+        "train_stride": 4,
+        "test_step": 1,
+        "test_stride": 8,
+        "max_dets": 20,
+        "peak_thres": 0.3,
+        "ols_thres": 0.3
+    }
+}

@@ -67,6 +67,7 @@ RUNS = (
         {"model": "MVRECORD", "dataset": "CARRADA", "features": ["RD", "RA", "AD"]},
         {"model": "RADDet", "dataset": "RADDetDataset", "features": ["RAD"]},
         {"model": "TransRAD", "dataset": "RADDetDataset", "features": ["RAD"]},
+        {"model": "T_RODNet", "dataset": "CRUW", "features": ["RA"]},
         {"model": "DAROD", "dataset": "CARRADA", "features": ["RD"]},
         {"model": "DAROD", "dataset": "RADDetDataset", "features": ["RD"]},
         {"model": "RAMP_CNN", "dataset": "UWCR", "features": ["RD", "RA", "AD"]},
@@ -79,6 +80,12 @@ RUNS = (
 # Datasets whose split is built into train.py (splitmode "original"). CRUW and UWCR have
 # none, so they always go through an explicit sequence split.
 HAS_ORIGINAL_SPLIT = {"RADIal", "CARRADA", "RADDetDataset", "ViewOfDelft"}
+
+# The T-RODNet authors' CRUW split (Zhuanglong2/T-RODNet README): these four labelled
+# ROD2021 sequences are the test set, the other 36 train. They publish no validation set
+# and report the final checkpoint, so --split trodnet also points val at these four: the
+# per-epoch curve is a monitor on the test sequences, never used for selection.
+TRODNET_TEST = ("2019_04_09_BMS1001", "2019_04_30_MLMS001", "2019_05_23_PM1S013", "2019_09_29_ONRD005")
 
 # CARRADA's official train/val sequences, copied from train.py's original-split branch so
 # the smoke subset is drawn from the right side of the split (no train/val leakage).
@@ -193,6 +200,17 @@ def build_split(dataset, files, mode):
 
     if mode == "random":
         return files, {"splitmode": "random", "split_random": [0.7, 0.15, 0.15]}
+
+    if mode == "trodnet":
+        if dataset != "CRUW":
+            raise ValueError(f"--split trodnet is the T-RODNet authors' CRUW split; {dataset} has no such split")
+        missing = [n for n in TRODNET_TEST if n not in by_name]
+        if missing:
+            raise ValueError(f"T-RODNet test sequences not registered: {missing}")
+        test = [by_name[n] for n in TRODNET_TEST]
+        train = [f for f in files if f["name"] not in TRODNET_TEST]
+        return train + test, {"splitmode": "sequence",
+                              "split_sequence": {"train": train, "val": test, "test": test}}
 
     if dataset == "CARRADA":
         if mode == "original":
@@ -336,6 +354,7 @@ for _m in RODNET_VARIANTS:
     LIVE_METRICS[_m, "CRUW"] = ("mAP", "mAR")
 for _m in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
     LIVE_METRICS[_m, "CRUW"] = ("mAP", "mAR")
+LIVE_METRICS["T_RODNet", "CRUW"] = ("mAP", "mAR")
 
 
 def check_health(rows, model=None, dataset=None):
@@ -447,7 +466,7 @@ def main():
     p.add_argument("--only", help="substring filter on the run id, e.g. RECORD or CARRADA")
     p.add_argument("--exclude", action="append", default=[], metavar="SUBSTR",
                    help="skip runs whose id contains SUBSTR; repeatable")
-    p.add_argument("--split", choices=["smoke", "original", "random"], default="smoke")
+    p.add_argument("--split", choices=["smoke", "original", "random", "trodnet"], default="smoke")
     p.add_argument("--epochs", type=int, help="override num_epochs (default: config value)")
     # Repeat a pair across seeds to measure run-to-run spread. With --split original the
     # split is fixed by sequence/frame lists, so the seed only moves weight init, batch

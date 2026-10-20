@@ -248,5 +248,17 @@
     "win_size": 1,
     "input_size": null,
     "notes": "PointPillars base of RadarPillars (arXiv:2408.05020) on the VoD radar point cloud (N*7). Pillar grid/anchors pinned in model config; radar accumulation variant (radar/3frames/5frames) in train config."
+  },
+  "T_RODNet": {
+    "features": [
+      "RA"
+    ],
+    "datasets": [
+      "CRUW"
+    ],
+    "in_channels": 2,
+    "win_size": 16,
+    "input_size": [16, 128, 128],
+    "notes": "16-frame window of complex (real+imag) RA maps, one chirp per window (random in training, chirp 0 at test, as the reference's CRDataset/test.py), built by TRODNetOnCRUW. Output: RODNet-style per-class confidence maps (3, 16, 128, 128), peak-picked by the RODNet post-processing; scored with the OLS evaluator. The Swin patch embedding fixes the window at 16 frames and the maps at 128x128."
   }
 }
