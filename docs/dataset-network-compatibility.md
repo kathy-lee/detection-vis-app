@@ -181,6 +181,16 @@ RECORD is a task-agnostic encoder–decoder, the dataset's annotation decides wh
 | **Adjustable configs** | `n_class`; `embed_dims`/`depths`/`num_heads` (RMT); `phi` (neck width); `reg_max` (DFL bins). The range and azimuth axes of `input_size` must be ÷32; the Doppler axis is pinned at 256 by the adapter's resize, and `eval_input_size` in the train config names the on-disk 64. |
 
 
+| **T_RODNet** | Requirements |
+|---|---|
+|**Input** | RA sequence `2×16×128×128` — **2 = real+imag** of one chirp per window (random chirp in training, chirp 0 at test, as the reference's loader and test script), **16 frames** fixed by the 3D patch embedding |
+| **Frames** | Seq(win=16), train stride 4, test stride 8 |
+| **Label** | Gaussian confidence maps `(3,16,128,128)` — the same RODNet maps the dataset pre-renders; MSE on the raw (un-sigmoided) output, as the reference trains |
+| **Preprocessing** | none beyond windowing (no normalisation, as RODNet); built by `TRODNetOnCRUW` in `datasets/adapters/cruw.py` |
+| **Wired dataset(s)** | CRUW |
+| **Adjustable configs** | `n_class`; `embed_dim` is pinned at 64 by hard-coded channel widths in the reference's patch embedding and merging blocks; `win_size` (attention window, 4) must divide the 8×64×64 token grid; the 16-frame window and 128×128 maps are pinned by the patch embedding. |
+
+
 | **DAROD** | Requirements |
 |---|---|
 |**Input** | RD `1×256×64`|
@@ -283,6 +293,7 @@ train any network (C2/C5).
 | **MVRECORD** | ❌mod | ❌mod | ✅ | ❌mod,gt | ❌gt | ❌mod | ❌mod | ❌mod |
 | **RADDet** | ❌mod | ❌mod | ⚠️gt | ✅ | ❌mod | ❌mod | ❌mod | ❌mod |
 | **TransRAD** | ❌mod | ❌mod | ⚠️gt | ✅ | ❌mod | ❌mod | ❌mod | ❌mod |
+| **T_RODNet** | ❌mod | ✅ | ⚠️gt | ❌seq | ⚠️np | ❌mod | ❌mod | ❌mod |
 | **DAROD** | ❌gt | ❌mod | ✅ | ✅ | ❌gt | ❌mod | ❌mod | ❌mod |
 | **RAMP_CNN** | ❌mod | ❌mod | ⚠️gt | ❌mod,seq | ✅ | ❌mod | ❌mod | ❌mod |
 | **RadarCrossAttention** | ❌mod | ❌mod | ✅ | ❌mod,seq | ❌geo,gt | ❌mod | ❌mod | ❌mod |
@@ -343,12 +354,16 @@ train any network (C2/C5).
 
 ### Summary
 
-- **Supported today (✅):** exactly the 17 wired pairs below (22 entries in
+- **Supported today (✅):** exactly the 18 wired pairs below (23 entries in
   `eval_func_dict`, counting RODNet's six subtypes individually) — FFTRadNet/RADIal;
-  RODNet×6/CRUW; RECORD·RECORDNoLstm·RECORDNoLstmMulti /CRUW & /CARRADA;
+  RODNet×6/CRUW; T_RODNet/CRUW; RECORD·RECORDNoLstm·RECORDNoLstmMulti /CRUW & /CARRADA;
   MVRECORD/CARRADA; RADDet/RADDetDataset; TransRAD/RADDetDataset; DAROD/CARRADA & /RADDetDataset;
   RAMP_CNN/UWCR; RadarCrossAttention/CARRADA; PointPillar/ViewOfDelft;
   RadarPillar/ViewOfDelft.
+- **Adapter-served datasets:** RADDetDataset and CRUW no longer build samples in their
+  dataset class; every model that reads them goes through a registered sample adapter
+  (`datasets/adapters/raddet.py`, `datasets/adapters/cruw.py`), so adding a network to
+  either dataset means adding an adapter, not a branch in `dataset.py`.
 - **Astyx and NuScenes** carry the right modality and GT for the **pillar models**, and
   there they are blocked only by a missing training path (+ per-point attribute
   mapping) — enabling `__getitem__` would make them candidates. Every other network is
