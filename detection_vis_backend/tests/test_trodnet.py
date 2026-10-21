@@ -197,6 +197,28 @@ def test_rodnet_evaluation_deletes_stale_result_files_before_writing():
     assert src.index("os.remove(save_path)") < first_write_to_current
 
 
+def test_infer_routes_trodnet_through_the_rodnet_confmap_branch():
+    """A model trained through the app must be usable for inference in the app: the
+    RODNet branch handles a single confidence-map tensor, which is what T_RODNet returns."""
+    from detection_vis_backend.train import inference
+    src = inspect.getsource(inference.infer)
+    branch = src.split('elif model_type in ("RODNet_CDC"')[1].split("elif model_type in")[0]
+    assert '"T_RODNet"' in src.split('elif model_type in ("RODNet_CDC"')[1].split(":")[0]
+    assert "post_process_single_frame(confmap_pred[0,:,0,:,:]" in branch
+
+
+def test_random_splitmode_refuses_a_migrated_dataset():
+    """Adapter-served datasets window through their adapters, which the random split never
+    builds; it must say so up front instead of failing opaquely mid-training."""
+    from detection_vis_backend.train.train import CreateDataLoaders
+    cfg = {"dataloader": {"splitmode": "random", "split_random": [0.7, 0.15, 0.15],
+                          "train": {"batch_size": 1, "num_workers": 0},
+                          "val": {"batch_size": 1, "num_workers": 0},
+                          "test": {"batch_size": 1, "num_workers": 0}}, "seed": 0}
+    with pytest.raises(ValueError, match="CRUW"):
+        CreateDataLoaders([{"parse": "CRUW", "id": 1, "name": "x"}], ["RA"], {"class": "T_RODNet"}, cfg, "/tmp")
+
+
 def test_scorer_check_converts_our_rows_to_the_reference_order():
     """Ours: frame class row col conf (grid indices). Theirs: frame range angle class
     conf, metres / radians to 4 decimals and the score to 2, trailing space

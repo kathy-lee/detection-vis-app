@@ -87,6 +87,30 @@ def expected_dtype(parser):
 
 
 @needs_sensor_cfg
+def test_sidecar_is_rebuilt_when_the_pickle_is_newer(cruw_parser, tmp_path):
+    """Regenerating a sequence (delete the pickle, parse again) must not pair the new
+    annotations with the old confidence maps left in the sidecar."""
+    cruw_parser._load_details()
+    sidecar = tmp_path / "seq_confmaps.npy"
+    old_first = np.asarray(cruw_parser.confmaps[0]).copy()
+    with open(cruw_parser.pkl_path, "rb") as fh:
+        details = pickle.load(fh)
+    details["anno"]["confmaps"] = details["anno"]["confmaps"] + 1.0
+    import time
+    time.sleep(0.01)
+    with open(cruw_parser.pkl_path, "wb") as fh:
+        pickle.dump(details, fh)
+    os.utime(cruw_parser.pkl_path, None)
+    from detection_vis_backend.datasets.dataset import CRUW
+    fresh = CRUW()
+    for attr in ("pkl_path", "root_path", "seq_name", "feature_path", "sensor_cfg", "_request_scoped"):
+        setattr(fresh, attr, getattr(cruw_parser, attr))
+    fresh._load_details()
+    assert sidecar.stat().st_mtime_ns >= os.stat(cruw_parser.pkl_path).st_mtime_ns
+    assert np.allclose(np.asarray(fresh.confmaps[0]), old_first + 1.0)
+
+
+@needs_sensor_cfg
 def test_parser_memory_maps_the_confidence_maps(cruw_parser, tmp_path):
     """The pre-rendered maps are float64 and ~0.5 GB per sequence; held in RAM by the
     trainer and every loader worker they fill the host (20 GB for ROD2021). Serve them

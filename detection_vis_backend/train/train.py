@@ -182,6 +182,13 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 if skip_empty_label:
                     logger.debug(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}")  
         elif train_config['dataloader']['splitmode'] == 'random':
+            # Adapter-served datasets window their frames through a per-split adapter,
+            # which this branch never builds; refuse here rather than fail opaquely
+            # inside the first training batch.
+            migrated = sorted({f['parse'] for f in datafiles if f['parse'] in MIGRATED})
+            if migrated:
+                raise ValueError(f"random splitmode cannot serve the adapter-served dataset(s) {migrated}; "
+                                 "use the 'sequence' or 'original' splitmode")
             samples_info = []
             valid_ids = []
             counter = 0
