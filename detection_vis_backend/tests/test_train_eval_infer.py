@@ -113,8 +113,9 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     that actually had objects, because `if objs:` skips empty ones. DatasetFactory caches one
     instance per file_id, so a single /predict poisoned /feature for the rest of the process.
 
-    The RCA schema now lives in self.rca_annos. This pins that configuring for RCA leaves
-    parse()'s annotations -- and therefore get_label -- intact.
+    The RCA schema now lives in self.rca_annos, loaded by rca_annotations() (which the
+    RadarCrossAttention sample adapter calls). This pins that loading it leaves parse()'s
+    annotations -- and therefore get_label -- intact.
     """
     seq = "2019-09-16-12-52-12"
     # parse() now keeps only its own sequence's slice of the annotation file
@@ -132,16 +133,9 @@ def test_rca_prepare_for_train_does_not_clobber_parse_annotations(tmp_path):
     ds.seq_name = seq
     ds.annos = frame_oriented          # as parse() would leave it
     ds.frame_sync = 3
-    # prepare_for_train now guards against running on the shared cached instance
-    # (state-ownership boundary; see test_dataset_state.py). This test plays the
-    # role of a request copy, so mark it as one.
     ds._request_scoped = True
 
-    ds.prepare_for_train(
-        ["RA"],
-        {"win_size": 1, "gauss_type": "Bivar"},
-        {"class": "RadarCrossAttention", "center_offset": False, "orientation": False},
-    )
+    ds.rca_annotations()
 
     # the bug: this call raised TypeError because self.annos had been replaced
     gt = ds.get_label("RA", 66)

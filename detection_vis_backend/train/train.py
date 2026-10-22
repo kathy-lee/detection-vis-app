@@ -308,8 +308,9 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     dataset_factory.get_shared_instance(
                         'CARRADA', datafile.id,
                         parse_args=(datafile.id, datafile.path, file_name, datafile.config))
-                    dataset_inst = dataset_factory.get_instance('CARRADA', datafile.id)
-                    dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                    parser = dataset_factory.get_instance('CARRADA', datafile.id)
+                    dataset_inst = make_sample_adapter(model_config['class'], parser, features,
+                                                       model_config, train_config, splittype=split_type)
                     dataset_inst_list.append(dataset_inst)
                     for i in range(len(dataset_inst)):
                         samples_info.append(['CARRADA', file_name, datafile.id, i])

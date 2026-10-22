@@ -8,6 +8,7 @@ encoding are here. Flips and noise draw from numpy's global RNG in the same orde
 old code, so a seeded run reproduces it sample for sample.
 """
 import numpy as np
+from loguru import logger
 
 from detection_vis_backend.datasets.adapters import SampleAdapter, register
 from detection_vis_backend.datasets.utils import (
@@ -228,6 +229,9 @@ class RadarCrossAttentionOnCARRADA(SampleAdapter):
         # Normalize broadcasts over the stack); train-only noise N(0, gauss_noise_std)
         # with probability 1/2 per view.
         self.input_norm = train_cfg.get('input_norm')
+        if not self.input_norm:
+            logger.warning("RadarCrossAttention: no 'input_norm' in train config -- inputs "
+                           "will be fed unnormalized, which the reference never does.")
         self.noise_std = (float(train_cfg.get('gauss_noise_std') or 0.0)
                           if splittype in (None, 'train') else 0.0)
 
