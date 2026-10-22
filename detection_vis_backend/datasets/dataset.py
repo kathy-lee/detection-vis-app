@@ -1654,6 +1654,16 @@ class CARRADA(Dataset):
 
         self.frame_sync = 0
         self.features = ['image', 'RA', 'RD', 'AD', 'RAD']
+        # AD maps are derived from the 16 MB RAD cube by an FFT over range -- measured
+        # 254 ms per frame against 10 ms to load the cube -- and recomputed identically
+        # every epoch. Memoized on disk under a hash of the producing code, so an edit to
+        # get_AD_map/get_RAD misses the cache instead of silently serving stale arrays
+        # (same guard as UWCR.frame_cache_dir / RADDetDataset.collapsed_cache_dir). A
+        # corpus fact, not run config, so it is set here rather than per model.
+        _src = "".join(inspect.getsource(fn) for fn in (CARRADA.get_AD_map, CARRADA.get_RAD))
+        self.ad_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "carrada_ad_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
 
     def parse(self, file_id, file_path, file_name, config):
         require_shared_instance(self)
@@ -1740,6 +1750,48 @@ class CARRADA(Dataset):
         os.replace(tmp, path)
         return ad
 
+    def _load_details(self):
+        """Corpus facts the sample adapters and inference read: the range/angle/Doppler
+        grids, the class count (background + 3) and the dense-annotation folder. Bound on
+        first use, because inference builds its sample source without prepare_for_train;
+        rebinding only, so request-scoped copies stay independent."""
+        if getattr(self, '_details_loaded', False):
+            return
+        radar_range_max, radar_range_resolution = 50, 0.2
+        radar_vel_max, radar_vel_resolution = 13.43, 0.42
+        radar_angle_max, radar_angle_resolution = 180, 0.7
+        num_chirps_in_frame, num_samples_in_chirp, num_angles = 64, 256, 256
+        self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
+        self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
+        self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
+        self.n_class = 4
+        self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', 'dense')
+        self._details_loaded = True
+
+    def annotation(self, idx):
+        """Frame-oriented annotations of frame idx: {obj_id: {'range_angle': ..., 'range_doppler': ...}}."""
+        return self.annos["{:06d}".format(idx)]
+
+    def processed_map(self, view, idx, kind='processed'):
+        """One stored map of frame idx: view is 'range_doppler', 'range_angle' or
+        'angle_doppler'; kind 'processed' (what every model reads) or 'raw'."""
+        return np.load(os.path.join(self.path_to_seq, f'{view}_{kind}', "{:06d}".format(idx) + '.npy'))
+
+    def dense_mask(self, view, idx):
+        """The dense one-hot segmentation mask of frame idx, (n_class, H, W)."""
+        self._load_details()
+        return np.load(os.path.join(self.path_to_annots, "{:06d}".format(idx), f'{view}.npy'))
+
+    def rca_annotations(self):
+        """This sequence's slice of new_gt_anno.json (RadarCrossAttention's point
+        annotations and tracks). A different schema from self.annos, so it lives in its
+        own attribute; loaded once, on first use."""
+        if getattr(self, 'rca_annos', None) is None:
+            anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
+            with open(anno_path, 'r') as f:
+                self.rca_annos = json.load(f)[self.seq_name]
+        return self.rca_annos
+
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
 
@@ -1748,10 +1800,10 @@ class CARRADA(Dataset):
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
-      
+
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-    
+
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
             'RAD': self.get_RAD,
@@ -1765,7 +1817,7 @@ class CARRADA(Dataset):
         }
         feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
         return feature_data
-    
+
     def get_label(self, feature_name, idx=None):
         # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         frame = "{:06d}".format(idx)
@@ -1934,7 +1986,11 @@ class CARRADA(Dataset):
         return
 
     def __len__(self):
-        return self.datasamples_length
+        # Frames, not samples: windowing belongs to the sample adapters.
+        if hasattr(self, 'datasamples_length'):
+            return self.datasamples_length
+        self._load_details()
+        return self.frame_sync
 
     def __getitem__(self, index):
         logger.debug(f"Data item index: {index}")
