@@ -360,10 +360,10 @@ train any network (C2/C5).
   MVRECORD/CARRADA; RADDet/RADDetDataset; TransRAD/RADDetDataset; DAROD/CARRADA & /RADDetDataset;
   RAMP_CNN/UWCR; RadarCrossAttention/CARRADA; PointPillar/ViewOfDelft;
   RadarPillar/ViewOfDelft.
-- **Adapter-served datasets:** RADDetDataset and CRUW no longer build samples in their
-  dataset class; every model that reads them goes through a registered sample adapter
-  (`datasets/adapters/raddet.py`, `datasets/adapters/cruw.py`), so adding a network to
-  either dataset means adding an adapter, not a branch in `dataset.py`.
+- **Adapter-served datasets:** RADDetDataset, CRUW and CARRADA no longer build samples in
+  their dataset class; every model that reads them goes through a registered sample
+  adapter (`datasets/adapters/raddet.py`, `cruw.py`, `carrada.py`), so adding a network
+  to any of them means adding an adapter, not a branch in `dataset.py`.
 - **Astyx and NuScenes** carry the right modality and GT for the **pillar models**, and
   there they are blocked only by a missing training path (+ per-point attribute
   mapping) — enabling `__getitem__` would make them candidates. Every other network is
