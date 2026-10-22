@@ -44,6 +44,39 @@ def test_parser_map_and_mask_views(parser):
     assert parser.dense_mask("range_doppler", 3).shape[0] == 4
 
 
+def test_registry_fans_out_the_six_carrada_consumers():
+    from detection_vis_backend.datasets.adapters import _REGISTRY
+    for m in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "DAROD", "RadarCrossAttention"):
+        assert (m, "CARRADA") in _REGISTRY, m
+
+
+def _case(model, features):
+    return next(c for c in _G["cases"] if c["model"] == model and c["features"] == features)
+
+
+@pytest.mark.parametrize("model,features", [("RECORD", ["RD"]), ("DAROD", ["RD"]),
+                                            ("MVRECORD", ["RD", "RA", "AD"])])
+def test_val_and_test_samples_are_unaugmented(parser, model, features):
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
+    c = _case(model, features)
+    for split in ("val", "test"):
+        a = make_sample_adapter(model, parser, features, c["model_cfg"], c["train_cfg"], splittype=split)
+        np.random.seed(0)
+        s0 = np.asarray(a[5][features[0]])
+        np.random.seed(1)
+        s1 = np.asarray(a[5][features[0]])
+        assert np.array_equal(s0, s1), split
+
+
+def test_radar_cross_attention_draws_noise_only_on_train(parser):
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
+    c = _case("RadarCrossAttention", ["RD", "RA", "AD"])
+    assert c["train_cfg"].get("gauss_noise_std")
+    val = make_sample_adapter("RadarCrossAttention", parser, c["features"], c["model_cfg"], c["train_cfg"], "val")
+    train = make_sample_adapter("RadarCrossAttention", parser, c["features"], c["model_cfg"], c["train_cfg"], "train")
+    assert val.noise_std == 0.0 and train.noise_std > 0
+
+
 def test_rca_annotations_load_lazily_and_leave_parse_annotations_intact(parser):
     before = parser.annos
     rca = parser.rca_annotations()
