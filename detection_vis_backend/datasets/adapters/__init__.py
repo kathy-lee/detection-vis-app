@@ -9,6 +9,7 @@ Two roles:
 Migrated datasets (every model that reads them goes through an adapter; the dataset class
 has no model branches left):
   RADDetDataset -- adapters in raddet.py
+  CRUW          -- adapters in cruw.py
 All other datasets still build samples in their own __getitem__ / prepare_for_train.
 """
 from typing import Protocol, runtime_checkable
@@ -81,6 +82,6 @@ def make_sample_adapter(model, parser, features, model_cfg, train_cfg, splittype
 
 # Per-dataset adapter modules register themselves on import. Imported last so they can
 # import the names above.
-from detection_vis_backend.datasets.adapters import raddet  # noqa: E402,F401
+from detection_vis_backend.datasets.adapters import raddet, cruw  # noqa: E402,F401
 
 MIGRATED = frozenset(dataset for (_, dataset) in _REGISTRY)

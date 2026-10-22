@@ -656,6 +656,18 @@ def test_raddet_loader_branch_builds_adapters_not_prepare_for_train():
     assert branch.count("get_instance(") == 1, "one parser serves all three splits"
 
 
+def test_sequence_split_wraps_migrated_parsers_in_adapters():
+    """CRUW is migrated: the sequence split must wrap each per-sequence parser in a
+    sample adapter instead of configuring it with prepare_for_train."""
+    import inspect
+    from detection_vis_backend.train.train import CreateDataLoaders
+    src = inspect.getsource(CreateDataLoaders)
+    branch = src.split("if train_config['dataloader']['splitmode'] == 'sequence':")[1]
+    branch = branch.split("elif train_config['dataloader']['splitmode'] == 'random':")[0]
+    assert "if file['parse'] in MIGRATED:" in branch
+    assert "make_sample_adapter(model_config['class'], parser, features" in branch
+
+
 def test_infer_routes_migrated_datasets_through_the_adapter():
     import inspect
     from detection_vis_backend.train import inference

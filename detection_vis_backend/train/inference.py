@@ -271,7 +271,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 pred_objs.append([u1, v1, u2, v2])
             #feature_show_pred = "image"
             pred_objs = {"image": pred_objs}
-        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
+        elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "T_RODNet"):
             input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
             logger.info(f"Input data: {input.shape}")
             output = net(input)

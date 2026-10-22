@@ -15,6 +15,7 @@ from detection_vis_backend.networks.radarpillar import RadarPillarBackboneNet, a
 from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, RODEncode_VA, RODDecode_VA, RODEncode_RV, RODDecode_RV, Fuse_fea_new_rep, FocalLoss_Neg, Cont_Loss
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 from detection_vis_backend.networks.transrad import TransRADBody, TransRADLoss
+from detection_vis_backend.networks.trodnet import TRODNetBody
 
 class NetworkFactory:
     # Old: cached instances keyed by class name only, so a second model of the same
@@ -1156,6 +1157,48 @@ class TransRAD(BaseNetwork):
 
     def state_dict(self, *args, **kwargs):
         # Keys without the 'body.' prefix, so the authors' checkpoint and ours interchange.
+        sd = super().state_dict(*args, **kwargs)
+        return type(sd)((k[len("body."):] if k.startswith("body.") else k, v) for k, v in sd.items())
+
+    def load_state_dict(self, state_dict, strict=True):
+        return super().load_state_dict({("body." + k if not k.startswith("body.") else k): v
+                                        for k, v in state_dict.items()}, strict=strict)
+
+
+class T_RODNet(BaseNetwork):
+    """T-RODNet (Jiang et al. 2023): 3D Swin-UNet with DAM blocks and T-W/SW-MSA decoder
+    on a 16-frame RA window; RODNet-style per-class confidence maps, so it trains and
+    evaluates through the RODNet path. Everything model-shaped lives in
+    networks/trodnet.py; this class is the app contract."""
+
+    def __init__(self, n_class=3, embed_dim=64, win_size=4, img_size=(8, 64, 64), patch_size=(2, 2, 2),
+                 depths=(2, 2, 2), depths_decoder=(2, 2, 2), num_heads=(2, 4, 8), drop_path_rate=0.1, ape=True):
+        super().__init__()
+        self.body = TRODNetBody(num_classes=n_class, embed_dim=embed_dim, win_size=win_size, img_size=img_size,
+                                patch_size=patch_size, in_chans=2, depths=depths, depths_decoder=depths_decoder,
+                                num_heads=num_heads, drop_path_rate=drop_path_rate, ape=ape)
+        self.n_class = n_class
+        self.class_names = ["pedestrian", "cyclist", "car"][:n_class]
+        self.criterion = None
+
+    def forward(self, x):
+        return self.body(x)
+
+    def init_lossfunc(self, config, device):
+        # The reference trains nn.MSELoss on the raw output (tools/train.py:135). The RODNet
+        # wrappers map "mse" to SmoothL1Loss; here it means what it says.
+        loss_type = config['losses']['type']
+        if loss_type != 'mse':
+            raise ValueError(f"T_RODNet trains with losses.type 'mse' (reference recipe), got {loss_type!r}")
+        self.criterion = nn.MSELoss()
+
+    def get_loss(self, pred, label, config):
+        if self.criterion is None:
+            self.criterion = nn.MSELoss()
+        return self.criterion(pred, label['gt_mask'])
+
+    def state_dict(self, *args, **kwargs):
+        # Keys without the 'body.' prefix, so a reference checkpoint and ours interchange.
         sd = super().state_dict(*args, **kwargs)
         return type(sd)((k[len("body."):] if k.startswith("body.") else k, v) for k, v in sd.items())
 

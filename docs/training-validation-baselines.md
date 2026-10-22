@@ -75,8 +75,9 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 15 | PointPillar | ViewOfDelft | mAP entire / corridor | **46.7 / 67.8** (5-frame) | RadarPillars Table I, `PointPillars*` |
 | 16 | RadarPillar | ViewOfDelft | mAP entire / corridor | **50.7 / 70.5** (5-frame) | RadarPillars Table I, `RadarPillars (ours)` |
 | 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
+| 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
 
-Coverage: **21 of the 25 runs have a published number**; 4 are unbaselined
+Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
 is bracketed rather than pointed (`RODNet_HGwIv2`).
 
@@ -129,6 +130,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 15 | PointPillar / ViewOfDelft | **49.41** val mAP entire-area, final weights (best 52.27 @ epoch 64; 1 seed, official split, 5-frame radar, N×7 point features) | 46.7 | not run (paper's own PointPillars row is the anchor) | **reproduced, exceeds published** (+5.8% final, +12% best) | `RadarPillar_ViewOfDelft_Jul-19-2026_21:44:32` (the base model shares the radarpillar.py path, hence the dir name) |
 | 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
 | 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
+| 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -162,6 +164,7 @@ validation — real elapsed time, not GPU-busy time).
 | 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
 | 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
 | 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
+| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | 0.82 G | 100 | **23.9 h** (+ a 1.5 h kill/resume gap) | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -703,6 +706,97 @@ reproduction would be round one with gains 30 / 7.5 from scratch, then the shipp
 script from round one's best epoch; the second round's schedule is not documented and
 would have to be guessed. Smaller contributors: 7314 training frames instead of about
 7720, and a different (and larger) validation set driving the checkpoint choice.
+
+### T-RODNet: the first CRUW result comparable to its paper (2026-10-21)
+
+**Why this row is different from every other CRUW row.** Rows 2–7 were measured on data
+we do not hold (the unreleased full corpus, or the challenge server's hidden test set).
+The T-RODNet authors instead hold out **four of the forty labelled ROD2021 sequences**
+as their test set — `2019_04_09_BMS1001`, `2019_04_30_MLMS001`, `2019_05_23_PM1S013`,
+`2019_09_29_ONRD005`, named in their README — and train on the other 36. We have all
+four with annotations, and the authors ship their four ground-truth files in
+`evaluate/gt/`, byte-identical to our `TRAIN_RAD_H_ANNO` files. So the published
+83.27 / 86.98 is the first CRUW number this repo can compare to **absolutely**, under
+the 20 % rule, instead of through the relative ladder.
+
+**Result.** Final-epoch weights on the four sequences, stride 8, our RODNet
+post-processing and OLS evaluator:
+
+| | AP | AR |
+|---|---|---|
+| **ours** | **81.18** | **85.99** |
+| paper Table I | 83.27 | 86.98 |
+| | −2.5 % | −1.1 % |
+
+| sequence | AP | AR | | class | ours AP / AR | paper AP / AR |
+|---|---|---|---|---|---|---|
+| BMS1001 | 83.3 | 84.4 | | pedestrian | 79.4 / 85.5 | 82.2 / 85.4 |
+| MLMS001 | 74.9 | 80.0 | | cyclist | 81.0 / 83.1 | 82.3 / 84.3 |
+| PM1S013 (parking) | 96.9 | 98.4 | | car | 84.3 / 90.2 | 86.2 / 92.5 |
+| ONRD005 (on-road) | 83.3 | 90.2 | | | | |
+
+**Verdict: reproduced.** One seed; the per-class gaps are 1–3 points, uniform across
+classes, which is seed-sized for a single run rather than a systematic miss.
+
+**What was and was not proven at parity.** The reference ships no trained weights, so
+the checkpoint-through-our-pipeline gate used for TransRAD was impossible. Two things
+were checked instead:
+
+- **The port.** `networks/trodnet.py` is a class-for-class port of `Nets/T_RODNet.py`
+  (commit 39a2444, MIT) with `einops.rearrange` replaced by permutes and the FLOPs code
+  dropped; its state-dict key set and parameter count (156,805,004) equal the
+  reference class loaded from the clone (`test_trodnet.py`). The paper's Table IV says
+  159.70 M; the reference's own "31.54 M" comment is thop's count of the modules its
+  forward calls, not of the model.
+- **The scorer** (`scripts/trodnet_scorer_check.py`). The authors revised the public
+  CRUW evaluation package; their `cruw.eval.evaluate_rod2021` was run from the clone
+  on the same detection files as ours. On 16,363 RODNet detections over ten sequences
+  the two agree to 0.001 AP / 0.003 AR with full-precision scores (their detection-file
+  format rounds scores to 0.01, which reorders near-ties and moves AP by ≤ 0.25); on
+  the final T-RODNet detections they give **81.19 / 86.00** against our 81.18 / 85.99.
+  Their pooled "total" and our object-count-weighted summary are the same number.
+
+**Recipe** (`T_RODNet_train_config.json`, transcribed from
+`configs/config_T_Rodnet_win16.py` and `tools/train.py`): Adam lr 1e-4, weight decay 0;
+`CosineAnnealingLR` over the 100 epochs, stepped per epoch (the new `cosine` branch in
+`train.py`); batch 4; 16-frame windows, train stride 4, test stride 8; random chirp
+per window in training, chirp 0 at test (`is_random_chirp=False` in their test
+script); `max_dets` 20, peak and OLS thresholds 0.3; seed 3. **Loss: `nn.MSELoss` on
+the raw output**, which is what `tools/train.py:135` does — the paper's text says
+smooth-L1. **Batch 4** is the shipped config; the paper's text says 2. No validation
+set and no checkpoint selection: the authors test their final checkpoint, and so does
+this row (`test_checkpoint` omitted).
+
+**Monitor.** The training loop needs a val split, so the per-epoch curve was scored on
+one of the four test sequences (`MLMS001`, `--monitor one`) at stride 4 — a monitor
+only, never used for selection. It rose 39.4 → 63.7 (epoch 3) → a 75–80 band from
+epoch 9, peaked at 79.5 (epoch 58), and settled at 75.8 / 80.6 once the learning rate
+fell below ~2e-5; its stride-8 test score is 74.9 / 80.0. Training loss 0.00351 →
+0.00025, still falling slowly at the end.
+
+**Cost, and what made it affordable.** The paper quotes 15 h on a 3080 Ti (training
+only, no per-epoch evaluation; the reference uses no AMP, no special loader). Our first
+timing run took 32.4 min/epoch (→ 54 h) for two reasons outside the recipe: CRUW lived
+on the 18 TB spinning disk (6.4 ms per cold chirp read, 16 reads per window), and the
+40 sequence pickles hold their pre-rendered confidence maps as **float64 — 19.9 GB** —
+which the trainer and every loader worker held in RAM (30 GB host), starving the page
+cache so every epoch re-read the files cold. Fixes, none touching the recipe: the
+radar files were moved to the NVMe (0.5 ms per read); the parser now serves the maps
+through a memory-mapped sidecar `.npy` (same bytes, one shared copy; host memory
+30 → 10 GB; `CRUW._memory_mapped_confmaps`); the monitor scores one sequence instead of
+four. Result: **14.2 min/epoch** (≈12 train + 2 monitor), 12 min for the one test
+pass, 23.9 h for the run. GPU peak 343 W / 73 °C. The run was killed once at epoch 89
+by the harness cleaning up an orphaned terminal session (no OOM, no GPU fault) and
+resumed from the epoch-88 checkpoint; optimizer, schedule and history restore, so only
+the shuffle of the last 12 epochs (lr ≤ 3.5e-6) differs from an uninterrupted run.
+
+**Also in this branch: CRUW migrated to the sample-adapter mechanism.** T-RODNet is
+the first consumer added through `datasets/adapters/cruw.py`; the six RODNet and three
+RECORD variants moved with it. Byte-level goldens captured on the unrefactored code
+(`tests/test_cruw_golden.py`, 27 model×split cases) pass, and a 10-epoch RODNet_CDC
+rerun through the adapters (`RODNet_CDC_CRUW_Oct-19-2026_18:28:54`) scored 39.9 / 44.8
+against the August run's 36.9 / 42.8 (final epoch) and 38.5 / 44.6 (best-val), with
+the same epoch-by-epoch val curve.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
