@@ -144,6 +144,42 @@ def test_carrada_build_maps_a_4_frame_ra_window_to_4_class_masks():
     assert out.shape == (1, 4, 4, 256, 256)
 
 
+def test_carrada_scoring_reads_the_windows_last_frame(tmp_path):
+    from detection_vis_backend.train.evaluate import eval_func_dict
+
+    def one_hot(cls_map):
+        return torch.nn.functional.one_hot(cls_map, 4).permute(0, 4, 1, 2, 3).float()
+
+    g = torch.Generator().manual_seed(0)
+    batches = [torch.randint(0, 4, (2, 4, 8, 8), generator=g) for _ in range(2)]  # (B, win, H, W)
+
+    class LastFrameOnly(nn.Module):
+        n_class = 4
+
+        def forward(self, x):
+            cls = self.labels.clone()
+            cls[:, :3] = (cls[:, :3] + 1) % 4   # every frame but the last is wrong
+            return one_hot(cls)
+
+    net = LastFrameOnly()
+    loader = []
+    for b in batches:
+        loader.append({"RA": torch.zeros(2, 1, 4, 8, 8), "gt_mask": one_hot(b)})
+
+    class Loader(list):
+        dataset = range(4)
+
+        def __iter__(self):
+            for d in list.__iter__(self):
+                net.labels = d["gt_mask"].argmax(1)
+                yield d
+
+    cfg = {"dataloader": {"test": {"batch_size": 2}}}
+    res = eval_func_dict["T_RODNet", "CARRADA"](net, Loader(loader), cfg, ["RA"], str(tmp_path), "test", torch.device("cpu"))
+    assert res["mIoU"] == pytest.approx(1.0) and res["mDice"] == pytest.approx(1.0)
+    assert len(res["iou_by_class"]) == 4 and len(res["dice_by_class"]) == 4
+
+
 def test_trodnet_mse_is_mean_squared_error_not_smooth_l1():
     from detection_vis_backend.networks.network import NetworkFactory
     net = NetworkFactory().get_instance("T_RODNet", _model_cfg())
@@ -180,7 +216,7 @@ def test_trodnet_is_registered_everywhere_the_app_looks():
     assert "'T_RODNet': default_collate" in inspect.getsource(CreateDataLoaders)
     with open(os.path.join(REPO, "detection_vis_backend", "networks", "model_features.json")) as f:
         feats = json.load(f)["T_RODNet"]
-    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW"]
+    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW", "CARRADA"]
 
 
 def test_cosine_branch_reproduces_the_reference_schedule():

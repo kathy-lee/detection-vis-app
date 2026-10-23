@@ -254,7 +254,8 @@
       "RA"
     ],
     "datasets": [
-      "CRUW"
+      "CRUW",
+      "CARRADA"
     ],
     "in_channels": null,
     "win_size": null,
