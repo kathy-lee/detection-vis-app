@@ -111,6 +111,16 @@ def test_trodnet_network_through_the_factory_and_loss_contract():
     assert torch.isfinite(loss) and net.n_class == 3 and net.class_names == ["pedestrian", "cyclist", "car"]
 
 
+def test_carrada_build_maps_a_4_frame_ra_window_to_4_class_masks():
+    # CARRADA RA is 1 real channel at 256 x 256, 4 frames, 4 classes (background included):
+    # the paper's 4 x 1 x 256 x 256 input, on the same body.
+    from detection_vis_backend.networks.network import T_RODNet
+    net = T_RODNet(n_class=4, win_size=4, img_size=(2, 128, 128), in_chans=1).eval()
+    with torch.no_grad():
+        out = net(torch.zeros(1, 1, 4, 256, 256))
+    assert out.shape == (1, 4, 4, 256, 256)
+
+
 def test_trodnet_mse_is_mean_squared_error_not_smooth_l1():
     from detection_vis_backend.networks.network import NetworkFactory
     net = NetworkFactory().get_instance("T_RODNet", _model_cfg())

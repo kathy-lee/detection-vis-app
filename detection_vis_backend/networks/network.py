@@ -1172,10 +1172,12 @@ class T_RODNet(BaseNetwork):
     networks/trodnet.py; this class is the app contract."""
 
     def __init__(self, n_class=3, embed_dim=64, win_size=4, img_size=(8, 64, 64), patch_size=(2, 2, 2),
-                 depths=(2, 2, 2), depths_decoder=(2, 2, 2), num_heads=(2, 4, 8), drop_path_rate=0.1, ape=True):
+                 depths=(2, 2, 2), depths_decoder=(2, 2, 2), num_heads=(2, 4, 8), drop_path_rate=0.1, ape=True,
+                 in_chans=2):
         super().__init__()
+        # in_chans: 2 for CRUW's complex RA (real + imaginary), 1 for CARRADA's real RA.
         self.body = TRODNetBody(num_classes=n_class, embed_dim=embed_dim, win_size=win_size, img_size=img_size,
-                                patch_size=patch_size, in_chans=2, depths=depths, depths_decoder=depths_decoder,
+                                patch_size=patch_size, in_chans=in_chans, depths=depths, depths_decoder=depths_decoder,
                                 num_heads=num_heads, drop_path_rate=drop_path_rate, ape=ape)
         self.n_class = n_class
         self.class_names = ["pedestrian", "cyclist", "car"][:n_class]
