@@ -10,7 +10,7 @@ afterwards CARRADA._get_ad_cached serves the 64 KB map straight from disk.
     python scripts/build_carrada_ad_cache.py [--workers 8]
 
 Idempotent: existing entries are skipped, so it doubles as a repair pass. The cache
-directory is content-addressed on the producing code (see CARRADA.prepare_for_train),
+directory is content-addressed on the producing code (see CARRADA.__init__),
 so this must be re-run after editing get_AD_map/get_RAD -- which is the point.
 """
 import argparse
@@ -33,23 +33,32 @@ FEATURES = ["RD", "RA", "AD"]
 _instances = {}
 
 
-def _dataset(f, model_cfg, train_cfg):
-    """One configured instance per (worker, file)."""
+def _source(f, model_cfg, train_cfg):
+    """One RadarCrossAttention sample adapter per (worker, file): it knows which frames the
+    windows read; its parser owns the AD cache."""
     if f["id"] not in _instances:
         from detection_vis_backend.datasets.dataset import DatasetFactory
+        from detection_vis_backend.datasets.adapters import make_sample_adapter
         factory = DatasetFactory()
         factory.get_shared_instance(f["parse"], f["id"],
                                     parse_args=(f["id"], f["path"], f["name"], f["config"]))
-        ds = factory.get_instance(f["parse"], f["id"])
-        ds.prepare_for_train(FEATURES, train_cfg, model_cfg)
-        _instances[f["id"]] = ds
+        parser = factory.get_instance(f["parse"], f["id"])
+        _instances[f["id"]] = make_sample_adapter("RadarCrossAttention", parser, FEATURES,
+                                                  model_cfg, train_cfg)
     return _instances[f["id"]]
+
+
+def _frames(source):
+    """Every frame any window will touch -- for win_size 1 that is exactly the annotated
+    frames; larger windows add their forward offsets -- and the cache dir they land in."""
+    frames = sorted({idx + i for idx in source.indexmapping for i in range(source.win_frames)})
+    return frames, source.parser.ad_cache_dir
 
 
 def _one(job):
     f, model_cfg, train_cfg, frame = job
     try:
-        _dataset(f, model_cfg, train_cfg)._get_ad_cached(frame)
+        _source(f, model_cfg, train_cfg).parser._get_ad_cached(frame)
         return True
     except Exception as e:                       # keep going; report at the end
         return f"{f['name']}/{frame}: {type(e).__name__}: {e}"
@@ -67,14 +76,10 @@ def main():
     datafiles = fetch_datafiles()["CARRADA"]
     _parse_datafiles(datafiles)
 
-    # Every frame any window will touch, per file -- for win_size 1 that is exactly the
-    # annotated frames; larger windows add their forward offsets.
     jobs = []
     cache_dir = None
     for f in datafiles:
-        ds = _dataset(f, model_cfg, train_cfg)
-        cache_dir = ds.ad_cache_dir
-        frames = sorted({idx + i for idx in ds.indexmapping for i in range(ds.win_frames)})
+        frames, cache_dir = _frames(_source(f, model_cfg, train_cfg))
         jobs.extend((f, model_cfg, train_cfg, fr) for fr in frames)
     n = len(jobs)
     print(f"{n} frames over {len(datafiles)} sequences -> {cache_dir}  ({args.workers} workers)", flush=True)

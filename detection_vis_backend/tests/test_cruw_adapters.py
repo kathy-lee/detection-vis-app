@@ -190,7 +190,7 @@ def _adapter(model, split="train", model_cfg=None, train_cfg=None, **kw):
 def test_registry_fans_out_the_eleven_cruw_models():
     for m in RODNET_VARIANTS + ["RadarFormer_hrformer2d", "RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "T_RODNet"]:
         assert (m, "CRUW") in _REGISTRY, m
-    assert MIGRATED == frozenset({"RADDetDataset", "CRUW"})
+    assert {"RADDetDataset", "CRUW"} <= MIGRATED
 
 
 @pytest.mark.parametrize("n_frame,split,expected", [(20, "train", 9), (20, "test", 6), (4, "train", 1)])

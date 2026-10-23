@@ -1654,6 +1654,16 @@ class CARRADA(Dataset):
 
         self.frame_sync = 0
         self.features = ['image', 'RA', 'RD', 'AD', 'RAD']
+        # AD maps are derived from the 16 MB RAD cube by an FFT over range -- measured
+        # 254 ms per frame against 10 ms to load the cube -- and recomputed identically
+        # every epoch. Memoized on disk under a hash of the producing code, so an edit to
+        # get_AD_map/get_RAD misses the cache instead of silently serving stale arrays
+        # (same guard as UWCR.frame_cache_dir / RADDetDataset.collapsed_cache_dir). A
+        # corpus fact, not run config, so it is set here rather than per model.
+        _src = "".join(inspect.getsource(fn) for fn in (CARRADA.get_AD_map, CARRADA.get_RAD))
+        self.ad_cache_dir = os.path.join(
+            os.environ.get("TMP_ROOTDIR", "/tmp"), "carrada_ad_cache",
+            hashlib.sha1(_src.encode()).hexdigest()[:10])
 
     def parse(self, file_id, file_path, file_name, config):
         require_shared_instance(self)
@@ -1726,7 +1736,7 @@ class CARRADA(Dataset):
         return os.path.join(self.ad_cache_dir, self.seq_name, f"{stem}.npy")
 
     def _get_ad_cached(self, idx):
-        """get_AD_map memoized on disk; see ad_cache_dir in prepare_for_train."""
+        """get_AD_map memoized on disk; see ad_cache_dir in __init__."""
         path = self._ad_cache_path(idx)
         if os.path.exists(path):
             return np.load(path)
@@ -1740,6 +1750,48 @@ class CARRADA(Dataset):
         os.replace(tmp, path)
         return ad
 
+    def _load_details(self):
+        """Corpus facts the sample adapters and inference read: the range/angle/Doppler
+        grids, the class count (background + 3) and the dense-annotation folder. Bound on
+        first use, because inference builds its sample source without prepare_for_train;
+        rebinding only, so request-scoped copies stay independent."""
+        if getattr(self, '_details_loaded', False):
+            return
+        radar_range_max, radar_range_resolution = 50, 0.2
+        radar_vel_max, radar_vel_resolution = 13.43, 0.42
+        radar_angle_max, radar_angle_resolution = 180, 0.7
+        num_chirps_in_frame, num_samples_in_chirp, num_angles = 64, 256, 256
+        self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
+        self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
+        self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
+        self.n_class = 4
+        self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', 'dense')
+        self._details_loaded = True
+
+    def annotation(self, idx):
+        """Frame-oriented annotations of frame idx: {obj_id: {'range_angle': ..., 'range_doppler': ...}}."""
+        return self.annos["{:06d}".format(idx)]
+
+    def processed_map(self, view, idx, kind='processed'):
+        """One stored map of frame idx: view is 'range_doppler', 'range_angle' or
+        'angle_doppler'; kind 'processed' (what every model reads) or 'raw'."""
+        return np.load(os.path.join(self.path_to_seq, f'{view}_{kind}', "{:06d}".format(idx) + '.npy'))
+
+    def dense_mask(self, view, idx):
+        """The dense one-hot segmentation mask of frame idx, (n_class, H, W)."""
+        self._load_details()
+        return np.load(os.path.join(self.path_to_annots, "{:06d}".format(idx), f'{view}.npy'))
+
+    def rca_annotations(self):
+        """This sequence's slice of new_gt_anno.json (RadarCrossAttention's point
+        annotations and tracks). A different schema from self.annos, so it lives in its
+        own attribute; loaded once, on first use."""
+        if getattr(self, 'rca_annos', None) is None:
+            anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
+            with open(anno_path, 'r') as f:
+                self.rca_annos = json.load(f)[self.seq_name]
+        return self.rca_annos
+
     def get_radarpointcloud(self, idx=None, for_visualize=False):
         return None
 
@@ -1748,10 +1800,10 @@ class CARRADA(Dataset):
 
     def get_depthimage(self, idx=None, for_visualize=False):
         return None
-      
+
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-    
+
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
             'RAD': self.get_RAD,
@@ -1765,7 +1817,7 @@ class CARRADA(Dataset):
         }
         feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
         return feature_data
-    
+
     def get_label(self, feature_name, idx=None):
         # idx = 117 # a testing frame with object labels in '2020-02-28-13-09-58'
         frame = "{:06d}".format(idx)
@@ -1793,414 +1845,18 @@ class CARRADA(Dataset):
                     gt.append([obj[0], obj[1], obj[2], obj[3], category])
         return gt
 
-    def transform(self, frame, is_vflip=False, is_hflip=False):
-        if self.transformations is not None:
-            for function in self.transformations:
-                if isinstance(function, VFlip):
-                    if is_vflip:
-                        frame = function(frame)
-                    else:
-                        continue
-                if isinstance(function, HFlip):
-                    if is_hflip:
-                        frame = function(frame)
-                    else:
-                        continue
-                if not isinstance(function, VFlip) and not isinstance(function, HFlip):
-                    frame = function(frame)
-        return frame
-    
     def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
+        # Model-specific sample construction lives in datasets/adapters/carrada.py; the
+        # parser only binds its corpus facts here. Kept because the visualisation API
+        # still calls it on every dataset.
         require_request_scope(self)
-        self.win_frames = train_cfg['win_size']
-        self.features = features
-
-        radar_range_max, radar_range_resolution = 50, 0.2
-        radar_vel_max, radar_vel_resolution = 13.43, 0.42
-        radar_angle_max, radar_angle_resolution = 180, 0.7
-        num_chirps_in_frame, num_samples_in_chirp, num_angles = 64, 256, 256
-        self.rng_grid = [i * radar_range_resolution for i in range(num_samples_in_chirp)]
-        self.agl_grid = [i * radar_angle_resolution / radar_angle_max * np.pi for i in range(int(- num_angles / 2), int(num_angles / 2))]
-        self.dpl_grid = [ i * radar_vel_resolution for i in range(int(- num_chirps_in_frame / 2), int(num_chirps_in_frame / 2))]
-        
-        self.model_type = model_cfg['class']
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
-            self.process_signal = True
-            # Pass the split: get_transformations only appends the flips when split ==
-            # 'train' (datasets/utils.py:882-887), and its default is 'train'. Calling it
-            # without one therefore augmented val and test as well -- every evaluation
-            # scored the model on randomly flipped spectrums, with each flip firing at
-            # p=0.5 independently, so ~75% of val/test samples were mirrored. The
-            # reference (colindecourt/darod, darod/utils/data_utils.py) flips only in
-            # prepare_dataset(split="train").
-            #
-            # splittype is None only for the 'random' splitmode, where one instance backs
-            # all three splits and there is nothing to distinguish them by; 'train' keeps
-            # that path behaving exactly as before. The 'sequence' and 'original'
-            # splitmodes both build a separate instance per split (train.py:114, 236), so
-            # there the val/test copies now come out clean.
-            self.transformations = get_transformations(transform_names=train_cfg['transformations'],
-                                                       split=splittype or 'train')
-            self.add_temp = True
-            self.annotation_type = 'dense'
-            self.path_to_annots = os.path.join(self.path_to_seq, 'annotations', self.annotation_type)
-            self.norm_type = train_cfg['norm_type']
-            self.n_class = 4
-            self.datasamples_length = self.frame_sync - self.win_frames + 1
-            # DAROD standardizes its input with per-dataset constants (the reference's
-            # darod/utils/data_utils.py). They come from the TRAIN config, not the model
-            # config: model_cfg is splatted into the network constructor (network.py:38),
-            # so it may only hold DAROD.__init__ arguments. The RECORD family uses
-            # norm_type above instead, so these stay None for them and __getitem__ leaves
-            # the input untouched.
-            self.data_mean = train_cfg.get("data_mean")
-            self.data_std = train_cfg.get("data_std")
-        elif self.model_type == 'RadarCrossAttention':
-            anno_path = os.path.join(self.root_path, 'new_gt_anno.json')
-            # new_gt_anno.json has a DIFFERENT schema from the annotations_frame_oriented.json
-            # that parse() loads into self.annos:
-            #   parse():       annos[seq][frame] = {obj_id: {'range_angle': {'label':.., 'box':..}}}
-            #   new_gt_anno:   annos[seq][frame] = {'cls': [3.0], 'idx': [92.0, 6.0, 132.0, 26.0]}
-            # Assigning it to self.annos clobbered parse()'s data, so get_label() (which assumes
-            # the frame-oriented schema) raised "list indices must be integers or slices, not str"
-            # on any frame that actually had objects. The DatasetFactory caches one instance per
-            # file_id, so the damage outlived the request and broke /feature too. Keep this
-            # schema in its own attribute and leave self.annos meaning one thing for its lifetime.
-            # with open(anno_path, 'r') as f:
-            #     self.annos = json.load(f)
-            # tracks = self.annos[self.seq_name]['tracks']
-            # with open(anno_path, 'r') as f:
-            #     self.rca_annos = json.load(f)
-            # tracks = self.rca_annos[self.seq_name]['tracks']
-            # Same slicing as parse()'s annos: the file holds all 30 sequences but this
-            # instance only reads its own, so keep just the slice (7.5MB file, ~14MB loaded).
-            with open(anno_path, 'r') as f:
-                self.rca_annos = json.load(f)[self.seq_name]
-            tracks = self.rca_annos['tracks']
-            # Get data frame intervals in the seq
-            intervals = []
-            for i, track in enumerate(tracks):
-                if i == 0:
-                    last_frame = track[0]
-                    new_frame = track[0]
-                    intervals.append(new_frame)
-                elif i == len(tracks) - 1:
-                    intervals.append(track[-1])
-                else:
-                    last_frame = tracks[i-1][0]
-                    new_frame = track[0]
-                    if new_frame != last_frame + 1:
-                        intervals.append(last_frame+4)
-                        intervals.append(new_frame)
-            
-            seq_intervals = []
-            self.indexmapping = []
-            self.datasamples_length = 0
-            for i in range(int(len(intervals)/2)):
-                seq_intervals.append([intervals[2*i], intervals[2*i + 1]])
-                self.datasamples_length += intervals[2*i + 1] - intervals[2*i] + 2 - self.win_frames 
-                self.indexmapping.extend(list(range(intervals[2*i], intervals[2*i + 1] + 2 - self.win_frames)))
-            self.gauss_type = train_cfg['gauss_type']
-            self.center_offset = model_cfg['center_offset']
-            self.orientation = model_cfg['orientation']
-
-            # Per-view input standardization, applied in __getitem__. The reference does it
-            # in Utils/transform.py data_transform(): one torchvision Normalize per view with
-            # a single mean/std, which broadcasts over all T frames -- so one constant pair
-            # per VIEW here too. Ours never did this until 2026-09-07 (the branch carried a
-            # literal `# TODO: normalize`). Constants come from the train config; see the
-            # `_input_norm_note` there for why the reference's own values are used verbatim.
-            self.input_norm = train_cfg.get('input_norm')
-            if not self.input_norm:
-                logger.warning("RadarCrossAttention: no 'input_norm' in train config -- inputs "
-                               "will be fed unnormalized, which the reference never does.")
-            # Train-only augmentation: the reference's noise_add adds N(0, 0.1) to each view
-            # with probability 1/2 (Utils/transform.py:96-102), after normalization. Its
-            # shipped version cannot run (`if random.choice([0,1]) and r_map != 0` on a
-            # tensor raises on every noisy draw); this is what it evidently intends. Absent
-            # from the config -> 0 -> no noise. splittype None means one instance backs all
-            # splits ('random' splitmode); treat it as train, as the RECORD branch does.
-            self.noise_std = (float(train_cfg.get('gauss_noise_std') or 0.0)
-                              if splittype in (None, 'train') else 0.0)
-            # AD maps are derived from the 16 MB RAD cube by an FFT over range -- measured
-            # 254 ms per frame against 10 ms to load the cube -- and recomputed identically
-            # every epoch. Memoized on disk under a hash of the producing code, so an edit to
-            # get_AD_map/get_RAD misses the cache instead of silently serving stale arrays
-            # (same guard as UWCR.frame_cache_dir / RADDetDataset.collapsed_cache_dir).
-            _src = "".join(inspect.getsource(fn) for fn in (CARRADA.get_AD_map, CARRADA.get_RAD))
-            self.ad_cache_dir = os.path.join(
-                os.environ.get("TMP_ROOTDIR", "/tmp"), "carrada_ad_cache",
-                hashlib.sha1(_src.encode()).hexdigest()[:10])
+        self._load_details()
         return
 
     def __len__(self):
-        return self.datasamples_length
-
-    def __getitem__(self, index):
-        logger.debug(f"Data item index: {index}")
-        if self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti', 'MVRECORD', 'DAROD') :
-            frame_id = index + self.win_frames - 1
-            init_frame_name = "{:06d}".format(frame_id)
-            frame_names = [str(f_id).zfill(6) for f_id in range(frame_id-self.win_frames+1, frame_id+1)]
-            if self.features == ['RD'] or self.features == ['RA']: 
-                # Get radar feature data 
-                featurestr = 'range_doppler' if self.features == ['RD'] else 'range_angle'
-                feature_matrices = list()
-                mask = np.load(os.path.join(self.path_to_annots, init_frame_name, f'{featurestr}.npy'))
-
-                for frame_name in frame_names:
-                    if self.process_signal:
-                        feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_processed', frame_name + '.npy'))
-                    else:
-                        feature_matrix = np.load(os.path.join(self.path_to_seq, f'{featurestr}_raw', frame_name + '.npy'))
-                    feature_matrices.append(feature_matrix)
-                feature_matrix = np.dstack(feature_matrices)
-                feature_matrix = np.rollaxis(feature_matrix, axis=-1)   
-                feature_frame = {'matrix': feature_matrix, 'gt_mask': mask}
-                # Apply the same transform to all representations
-                if np.random.uniform(0, 1) > 0.5:
-                    is_vflip = True
-                else:
-                    is_vflip = False
-                if np.random.uniform(0, 1) > 0.5:
-                    is_hflip = True
-                else:
-                    is_hflip = False
-                feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                
-                if  self.model_type in ('RECORD', 'RECORDNoLstm', 'RECORDNoLstmMulti'):
-                    # Expand one more dim
-                    if self.add_temp:
-                        if isinstance(self.add_temp, bool):
-                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=0)
-                        else:
-                            assert isinstance(self.add_temp, int)
-                            feature_frame['matrix'] = np.expand_dims(feature_frame['matrix'], axis=self.add_temp)
-                    # Apply normalization
-                    feature_frame['matrix'] = normalize(feature_frame['matrix'], featurestr, norm_type=self.norm_type)
-                    if self.model_type == 'RECORDNoLstmMulti':
-                        c, t, h, w = feature_frame['matrix'].shape
-                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c*t, h, w)
-                    elif self.model_type == 'RECORDNoLstm':
-                        c, t, h, w = feature_frame['matrix'].shape
-                        assert t == 1
-                        feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
-                    frame = {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
-                else:
-                    # Get ground truth boxes and labels for DAROD network
-                    gt_boxes = []
-                    gt_labels = []
-                    # if self.annos[self.seq_name][init_frame_name]:
-                    #     for obj_anno in self.annos[self.seq_name][init_frame_name].values():
-                    # DAROD works entirely in normalized [0,1] coordinates (anchors are
-                    # built with steps 1/H, 1/W; Decoder clamps to [0,1]; darod.py's
-                    # roi_delta documents gt_boxes as "normalized format between [0,1]").
-                    # CARRADA annotations are pixel coordinates on the H*W map, e.g.
-                    # [[237,55],[240,57]], so they must be normalized here -- exactly as
-                    # RADDetDataset.__getitem__ already does. Passing pixels straight
-                    # through made IoU(pred, gt) identically 0, hence mAP/mAR of 0.0.
-                    h_dim, w_dim = feature_frame['matrix'].shape[-2], feature_frame['matrix'].shape[-1]
-                    if self.annos[init_frame_name]:
-                        for obj_anno in self.annos[init_frame_name].values():
-                            # Box = extent of the DENSE annotation, as the reference builds
-                            # it (colindecourt/darod, datasets/carrada_builder/carrada.py:
-                            # _build_bbox takes min/max over the 'dense' polygon).
-                            #
-                            # This was the annotation's own 'box' field, which is the
-                            # extent of the SPARSE annotation -- a handful of seed points,
-                            # not the object. On sequence 2019-09-16-13-13-01 frame 000037
-                            # the same object measures:
-                            #     'box'/'sparse' -> [85, 39, 88, 40]   (3 x 1 px)
-                            #     'dense'        -> [83, 37, 90, 42]   (7 x 5 px)
-                            # IoU between the two is 0.086, so a correctly trained detector
-                            # scores ~0 against the sparse boxes: the reference's own
-                            # weights, which reproduce its published 0.5583, score only
-                            # 0.1025 through this loader.
-                            #
-                            # It also crippled training. Anchor scales are 0.03-0.12 of a
-                            # 256-bin range axis, i.e. 7.7-30 px, so almost no anchor can
-                            # reach the RPN's 0.3 positive IoU threshold against a 3 x 1 px
-                            # target -- the RPN was learning from nearly no positives.
-                            dense = np.asarray(obj_anno[featurestr]['dense'])
-                            y1, x1 = dense[:, 0].min(), dense[:, 1].min()
-                            y2, x2 = dense[:, 0].max(), dense[:, 1].max()
-                            gt_boxes.append([y1 / h_dim, x1 / w_dim, y2 / h_dim, x2 / w_dim])
-                            gt_labels.append(obj_anno[featurestr]['label'])
-                    # Mirror onto the boxes the flips self.transform already applied to
-                    # the matrix. The boxes come from the annotations, which are never
-                    # flipped, so without this the labels are spatially desynchronised
-                    # from the input on ~75% of samples (each flip fires with p=0.5).
-                    # The reference does both together -- flip_horizontally(spectrums,
-                    # gt_boxes) in darod/utils/data_utils.py adjusts 1.0 - x.
-                    #
-                    # Go by AXIS, not by class name: for CARRADA's (win, H, W) matrix
-                    # HFlip flips axis=1 (range, the y coord) and VFlip flips axis=2
-                    # (doppler, the x coord) -- the opposite of what the names suggest.
-                    # Gate on membership too: transform() only applies a flip when the
-                    # matching class is in self.transformations.
-                    for _t in (self.transformations or []):
-                        if isinstance(_t, HFlip) and is_hflip:
-                            gt_boxes = [[1.0 - y2, x1, 1.0 - y1, x2]
-                                        for (y1, x1, y2, x2) in gt_boxes]
-                        elif isinstance(_t, VFlip) and is_vflip:
-                            gt_boxes = [[y1, 1.0 - x2, y2, 1.0 - x1]
-                                        for (y1, x1, y2, x2) in gt_boxes]
-                    # Standardize, as the reference does in darod/utils/data_utils.py:
-                    #     spectrums = (spectrums - data_mean) / data_std
-                    # CARRADA RD is log-magnitude around 58.5 +- 3.7, so unstandardized
-                    # the network sees an almost constant DC level carrying a tiny signal.
-                    matrix = feature_frame['matrix']
-                    if self.data_mean is not None and self.data_std is not None:
-                        matrix = (matrix - self.data_mean) / self.data_std
-                    frame = {self.features[0]: matrix, 'label': gt_labels, 'boxes': gt_boxes}
-            elif len(self.features) > 1:
-                rd_matrices = list()
-                ra_matrices = list()
-                ad_matrices = list()
-                rd_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
-                                            'range_doppler.npy'))
-                ra_mask = np.load(os.path.join(self.path_to_annots, init_frame_name,
-                                            'range_angle.npy'))
-                for frame_name in frame_names:
-                    if self.process_signal:
-                        rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'range_doppler_processed',
-                                                        frame_name + '.npy'))
-                        ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'range_angle_processed',
-                                                        frame_name + '.npy'))
-                        ad_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'angle_doppler_processed',
-                                                        frame_name + '.npy'))
-                    else:
-                        rd_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'range_doppler_raw',
-                                                        frame_name + '.npy'))
-                        ra_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'range_angle_raw',
-                                                        frame_name + '.npy'))
-                        ad_matrix = np.load(os.path.join(self.path_to_seq,
-                                                        'angle_doppler_raw',
-                                                        frame_name + '.npy'))
-
-                    rd_matrices.append(rd_matrix)
-                    ra_matrices.append(ra_matrix)
-                    ad_matrices.append(ad_matrix)
-
-                # Apply the same transfo to all representations
-                if np.random.uniform(0, 1) > 0.5:
-                    is_vflip = True
-                else:
-                    is_vflip = False
-                if np.random.uniform(0, 1) > 0.5:
-                    is_hflip = True
-                else:
-                    is_hflip = False
-
-                rd_matrix = np.dstack(rd_matrices)
-                rd_matrix = np.rollaxis(rd_matrix, axis=-1)
-                rd_frame = {'matrix': rd_matrix, 'gt_mask': rd_mask}
-                rd_frame = self.transform(rd_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                if self.add_temp:
-                    if isinstance(self.add_temp, bool):
-                        rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'], axis=0)
-                    else:
-                        assert isinstance(self.add_temp, int)
-                        rd_frame['matrix'] = np.expand_dims(rd_frame['matrix'],
-                                                            axis=self.add_temp)
-
-                ra_matrix = np.dstack(ra_matrices)
-                ra_matrix = np.rollaxis(ra_matrix, axis=-1)
-                ra_frame = {'matrix': ra_matrix, 'gt_mask': ra_mask}
-                ra_frame = self.transform(ra_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                if self.add_temp:
-                    if isinstance(self.add_temp, bool):
-                        ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'], axis=0)
-                    else:
-                        assert isinstance(self.add_temp, int)
-                        ra_frame['matrix'] = np.expand_dims(ra_frame['matrix'],
-                                                            axis=self.add_temp)
-
-                ad_matrix = np.dstack(ad_matrices)
-                ad_matrix = np.rollaxis(ad_matrix, axis=-1)
-                # Fill fake mask just to apply transform
-                ad_frame = {'matrix': ad_matrix, 'gt_mask': rd_mask.copy()}
-                ad_frame = self.transform(ad_frame, is_vflip=is_vflip, is_hflip=is_hflip)
-                if self.add_temp:
-                    if isinstance(self.add_temp, bool):
-                        ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'], axis=0)
-                    else:
-                        assert isinstance(self.add_temp, int)
-                        ad_frame['matrix'] = np.expand_dims(ad_frame['matrix'],
-                                                            axis=self.add_temp)
-
-                rd_frame['matrix'] = normalize(rd_frame['matrix'], 'range_doppler', norm_type=self.norm_type)
-                ra_frame['matrix'] = normalize(ra_frame['matrix'], 'range_angle', norm_type=self.norm_type)
-                ad_frame['matrix'] = normalize(ad_frame['matrix'], 'angle_doppler', norm_type=self.norm_type)
-                frame = {'RD': rd_frame['matrix'], 'rd_mask': rd_frame['gt_mask'],
-                        'RA': ra_frame['matrix'], 'ra_mask': ra_frame['gt_mask'],
-                        'AD': ad_frame['matrix']}
-
-            # camera_path = os.path.join(self.path_to_seq, 'camera_images', frame_name + '.jpg')
-            # frame.update({'image_path': camera_path})
-        elif self.model_type == 'RadarCrossAttention':
-            raw_index = self.indexmapping[index]
-            frame = {'image_path': self.image_filenames[raw_index]}
-            ra_map = np.zeros((self.win_frames, 256, 256))
-            rd_map = np.zeros((self.win_frames, 256, 64))
-            ad_map = np.zeros((self.win_frames, 64, 256))
-            for i in range(self.win_frames):
-                frame_id = raw_index + i
-                ra_map[i, ::] = self.get_RA(frame_id)
-
-                rd_map_temp = self.get_RD(frame_id)
-                # flip the axis in the order of increasing velocity (L->R)
-                rd_map_temp = np.flip(rd_map_temp, 0)
-                rd_map_temp = np.flip(rd_map_temp, 1)
-                rd_map_temp[:, 31:34]=0 # removing dc component
-                rd_map[i, ::] = np.float32(rd_map_temp)
-
-                ad_map[i, ::] = self._get_ad_cached(frame_id)
-
-            # Standardize each view with one constant pair per view (the reference's
-            # torchvision Normalize broadcasts a single mean/std over every frame of the
-            # stack), then the train-only noise. See prepare_for_train for provenance.
-            ra_map = ra_map.astype(np.float32)
-            rd_map = rd_map.astype(np.float32)
-            ad_map = ad_map.astype(np.float32)
-            if self.input_norm:
-                for arr, key in ((ra_map, 'ra'), (rd_map, 'rd'), (ad_map, 'ad')):
-                    arr -= np.float32(self.input_norm[key]['mean'])
-                    arr /= np.float32(self.input_norm[key]['std'])
-            if self.noise_std > 0:
-                for arr in (ra_map, rd_map, ad_map):
-                    if np.random.randint(2):
-                        arr += np.random.normal(0.0, self.noise_std, arr.shape).astype(np.float32)
-            raw_index = str(raw_index).zfill(6)
-            # These read the new_gt_anno.json schema, which now lives in self.rca_annos rather
-            # than overwriting parse()'s self.annos.
-            if self.gauss_type == "Bivar":
-                # gauss_map = bi_var_gauss(self.annos[self.seq_name][raw_index])
-                gauss_map = bi_var_gauss(self.rca_annos[raw_index])
-            else:
-                # gauss_map = plain_gauss(self.annos[self.seq_name][raw_index], s_r=15, s_a=15)
-                gauss_map = plain_gauss(self.rca_annos[raw_index], s_r=15, s_a=15)
-            frame.update({'RD': rd_map, 'RA': ra_map, 'AD': ad_map, 'gt_mask': gauss_map})
-            if self.center_offset:
-                # center_offset = get_center_map(self.annos[self.seq_name][raw_index], vect=get_co_vec())
-                center_offset = get_center_map(self.rca_annos[raw_index], vect=get_co_vec())
-                frame.update({'gt_center_map': center_offset})
-            if self.orientation:
-                # orient_map = get_orent_map(self.annos[self.seq_name][raw_index])
-                orient_map = get_orent_map(self.rca_annos[raw_index])
-                frame.update({'gt_orent_map': orient_map})
-            
-            for key,value in frame.items():
-                if key != 'image_path':
-                    logger.debug(f"{key}: {value.shape}")
-        else:
-            raise ValueError(f"CARRADA dataset doesn't support the model type({self.model_type}) training/inference.")
-        return frame
+        # Frames, not samples: windowing belongs to the sample adapters.
+        self._load_details()
+        return self.frame_sync
 
 
 
