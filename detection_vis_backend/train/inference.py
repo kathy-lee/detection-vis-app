@@ -56,6 +56,12 @@ def display_frame(sample_source, sample_id):
     return sample_id + getattr(sample_source, "win_frames", 1) - 1
 
 
+def trodnet_carrada_readout(pred_logits, gt_mask, viz_idx):
+    """T-RODNet on CARRADA predicts a mask for every frame of its window, (n_class, win,
+    H, W); show the window's last frame, the one the evaluation scores and viz_idx names."""
+    return carrada_seg_readout(pred_logits[:, -1], gt_mask[:, -1], viz_idx)
+
+
 def carrada_seg_readout(pred_logits, gt_mask, viz_idx):
     """Segmentation readout for CARRADA (RECORD / MVRECORD).
 
@@ -275,6 +281,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
                 pred_objs.append([u1, v1, u2, v2])
             #feature_show_pred = "image"
             pred_objs = {"image": pred_objs}
+        elif model_type == "T_RODNet" and dataset_type == "CARRADA":
+            # CARRADA-trained T-RODNet segments the RA view; the CRUW branch below would
+            # peak-pick confidence maps it does not produce.
+            input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
+            output = net(input)
+            pred_objs = {"RA": trodnet_carrada_readout(output[0].detach().cpu().numpy(), data['gt_mask'], viz_idx)}
         elif model_type in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d", "T_RODNet"):
             input = torch.tensor(data["RA"]).unsqueeze(0).to(device).float()
             logger.info(f"Input data: {input.shape}")

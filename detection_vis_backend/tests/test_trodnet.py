@@ -276,6 +276,28 @@ def test_infer_routes_trodnet_through_the_rodnet_confmap_branch():
     assert "post_process_single_frame(confmap_pred[0,:,0,:,:]" in branch
 
 
+def test_trodnet_carrada_readout_shows_the_windows_last_frame():
+    import numpy as np
+    from detection_vis_backend.train.inference import trodnet_carrada_readout
+    logits = np.zeros((4, 4, 3, 3))      # (class, frame, H, W)
+    logits[2, 3, 0, 0] = 5.0             # cyclist on the last frame only
+    logits[1, 0, 0, 0] = 9.0             # a pedestrian on the first frame must not show
+    gt = np.zeros((4, 4, 3, 3))
+    gt[0] = 1.0
+    gt[3, 3, 1, 1], gt[0, 3, 1, 1] = 1.0, 0.0
+    out = trodnet_carrada_readout(logits, gt, viz_idx=13)
+    assert out["viz_idx"] == 13
+    assert np.array(out["pred_mask"])[0, 0] == 2 and np.array(out["gt_mask"])[1, 1] == 3
+
+
+def test_infer_routes_trodnet_on_carrada_to_the_segmentation_readout():
+    from detection_vis_backend.train import inference
+    src = inspect.getsource(inference.infer)
+    seg = src.index('model_type == "T_RODNet" and dataset_type == "CARRADA"')
+    assert seg < src.index('elif model_type in ("RODNet_CDC"')
+    assert "trodnet_carrada_readout(" in src[seg:src.index('elif model_type in ("RODNet_CDC"')]
+
+
 def test_random_splitmode_builds_adapters_for_migrated_datasets():
     """The random split is RadarCrossAttention's published protocol on CARRADA, so it has
     to serve adapter-served datasets: one adapter per file and split, never a dataset
