@@ -136,12 +136,12 @@ def resolve_configs(model, dataset, features, config_variant=""):
                 raise ValueError(f"{model} takes a single input feature, got {features}")
             node = data[model].get(dataset, data[model])
             model_cfg = node.get(features[0], node) if isinstance(node, dict) else node
-    elif model == "DAROD":
-        with open(os.path.join(NETWORKS_DIR, "DAROD_model_config.json")) as f:
+    elif model in ("DAROD", "T_RODNet"):
+        with open(os.path.join(NETWORKS_DIR, f"{model}_model_config.json")) as f:
             config = json.load(f)
         if dataset not in config:
-            raise ValueError(f"DAROD model config has no entry for {dataset}")
-        model_cfg = config[dataset]
+            raise ValueError(f"{model} model config has no entry for {dataset}")
+        model_cfg = {k: v for k, v in config[dataset].items() if not k.startswith("_")}
     elif model in RODNET_FAMILY:
         with open(os.path.join(NETWORKS_DIR, "RODNet_model_config.json")) as f:
             model_cfg = json.load(f)[model]
@@ -362,6 +362,7 @@ for _m in RODNET_VARIANTS:
 for _m in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"):
     LIVE_METRICS[_m, "CRUW"] = ("mAP", "mAR")
 LIVE_METRICS["T_RODNet", "CRUW"] = ("mAP", "mAR")
+LIVE_METRICS["T_RODNet", "CARRADA"] = ("mIoU", "mDice")
 
 
 def check_health(rows, model=None, dataset=None):

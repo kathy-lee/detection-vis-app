@@ -97,7 +97,30 @@ TEST_SEQS = ("2019_04_09_BMS1001", "2019_04_30_MLMS001", "2019_05_23_PM1S013", "
 
 def _model_cfg():
     with open(os.path.join(REPO, "detection_vis_backend", "networks", "T_RODNet_model_config.json")) as f:
-        return json.load(f)
+        return json.load(f)["CRUW"]
+
+
+def test_cruw_config_resolves_unchanged():
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    from smoke_sweep import resolve_configs
+    m, t = resolve_configs("T_RODNet", "CRUW", ["RA"])
+    assert {k: v for k, v in m.items() if k != "class"} == {
+        "n_class": 3, "embed_dim": 64, "win_size": 4, "img_size": [8, 64, 64], "patch_size": [2, 2, 2],
+        "depths": [2, 2, 2], "depths_decoder": [2, 2, 2], "num_heads": [2, 4, 8], "drop_path_rate": 0.1, "ape": True}
+    assert t["win_size"] == 16 and t["dataloader"]["train"]["batch_size"] == 4
+
+
+def test_carrada_config_is_the_papers_recipe():
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    from smoke_sweep import resolve_configs, LIVE_METRICS
+    m, t = resolve_configs("T_RODNet", "CARRADA", ["RA"])
+    assert (m["n_class"], m["in_chans"], m["win_size"], m["img_size"]) == (4, 1, 4, [2, 128, 128])
+    assert (m["embed_dim"], m["depths"], m["num_heads"]) == (64, [2, 2, 2], [2, 4, 8])
+    assert t["win_size"] == 4 and t["num_epochs"] == 100 and t["dataloader"]["train"]["batch_size"] == 8
+    assert t["transformations"] == [] and t["norm_type"] == "tvt" and t["losses"] == {"type": "mse"}
+    assert t["lr_scheduler"] == {"type": "cosine", "min_lr": 0} and t["optimizer"]["lr"] == 0.0001
+    assert "test_checkpoint" not in t and "early_stop" not in t
+    assert LIVE_METRICS["T_RODNet", "CARRADA"] == ("mIoU", "mDice")
 
 
 def test_trodnet_network_through_the_factory_and_loss_contract():
@@ -157,7 +180,7 @@ def test_trodnet_is_registered_everywhere_the_app_looks():
     assert "'T_RODNet': default_collate" in inspect.getsource(CreateDataLoaders)
     with open(os.path.join(REPO, "detection_vis_backend", "networks", "model_features.json")) as f:
         feats = json.load(f)["T_RODNet"]
-    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW"] and feats["input_size"] == [16, 128, 128]
+    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW"]
 
 
 def test_cosine_branch_reproduces_the_reference_schedule():

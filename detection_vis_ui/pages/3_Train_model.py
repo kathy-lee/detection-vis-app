@@ -204,11 +204,11 @@ def find_default_configs(dataset, feature, model):
       #   model_cfg = data[model][dataset][feature]
     else:
       model_cfg = data[model]
-  elif model == "DAROD":
+  elif model in ("DAROD", "T_RODNet"):
     with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
       config = json.load(file)
     if dataset in config.keys():
-      model_cfg = config[dataset]
+      model_cfg = {k: v for k, v in config[dataset].items() if not k.startswith('_')}
   elif model in ("RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "RadarFormer_hrformer2d"):
     with open(os.path.join('detection_vis_backend', 'networks', 'RODNet_model_config.json'), 'r') as file:
       config = json.load(file)
