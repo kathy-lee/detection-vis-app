@@ -68,6 +68,7 @@ RUNS = (
         {"model": "RADDet", "dataset": "RADDetDataset", "features": ["RAD"]},
         {"model": "TransRAD", "dataset": "RADDetDataset", "features": ["RAD"]},
         {"model": "T_RODNet", "dataset": "CRUW", "features": ["RA"]},
+        {"model": "T_RODNet", "dataset": "CARRADA", "features": ["RA"]},
         {"model": "DAROD", "dataset": "CARRADA", "features": ["RD"]},
         {"model": "DAROD", "dataset": "RADDetDataset", "features": ["RD"]},
         {"model": "RAMP_CNN", "dataset": "UWCR", "features": ["RD", "RA", "AD"]},

@@ -121,6 +121,8 @@ def test_carrada_config_is_the_papers_recipe():
     assert t["lr_scheduler"] == {"type": "cosine", "min_lr": 0} and t["optimizer"]["lr"] == 0.0001
     assert "test_checkpoint" not in t and "early_stop" not in t
     assert LIVE_METRICS["T_RODNet", "CARRADA"] == ("mIoU", "mDice")
+    from smoke_sweep import RUNS, run_id
+    assert any(run_id(r) == "T_RODNet/CARRADA" for r in RUNS)
 
 
 def test_trodnet_network_through_the_factory_and_loss_contract():
