@@ -182,20 +182,23 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 if skip_empty_label:
                     logger.debug(f"Before and After filtering samples with empty annotations: {split_type}: {counter} -> {len(valid_ids)}")  
         elif train_config['dataloader']['splitmode'] == 'random':
-            # Adapter-served datasets window their frames through a per-split adapter,
-            # which this branch never builds; refuse here rather than fail opaquely
-            # inside the first training batch.
-            migrated = sorted({f['parse'] for f in datafiles if f['parse'] in MIGRATED})
-            if migrated:
-                raise ValueError(f"random splitmode cannot serve the adapter-served dataset(s) {migrated}; "
-                                 "use the 'sequence' or 'original' splitmode")
+            def _split_source(file, split_type):
+                # One indexable sample source per file and split: a sample adapter for
+                # an adapter-served dataset, a configured request copy otherwise.
+                if file['parse'] in MIGRATED:
+                    parser = dataset_factory.get_instance(file['parse'], file['id'])
+                    return make_sample_adapter(model_config['class'], parser, features,
+                                               model_config, train_config, splittype=split_type)
+                inst = dataset_factory.get_instance(file['parse'], file['id'])
+                inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
+                return inst
+
             samples_info = []
             valid_ids = []
             counter = 0
             dataset_inst_list = []
             for file in datafiles:
-                dataset_inst = dataset_factory.get_instance(file['parse'], file['id'])
-                dataset_inst.prepare_for_train(features, train_config, model_config, splittype='train')
+                dataset_inst = _split_source(file, 'train')
                 logger.debug(f"file {file['id']} prepare for train, length: {len(dataset_inst)} data samples.")
                 dataset_inst_list.append(dataset_inst)
                 for i in range(len(dataset_inst)):
@@ -238,9 +241,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             for split_type in ('val', 'test'):
                 insts = []
                 for file in datafiles:
-                    inst = dataset_factory.get_instance(file['parse'], file['id'])
-                    inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
-                    insts.append(inst)
+                    insts.append(_split_source(file, split_type))
                 eval_concat[split_type] = ConcatDataset(insts)
                 assert len(eval_concat[split_type]) == len(dataset), \
                     f"{split_type} instances index differently from the train ones"

@@ -207,16 +207,18 @@ def test_infer_routes_trodnet_through_the_rodnet_confmap_branch():
     assert "post_process_single_frame(confmap_pred[0,:,0,:,:]" in branch
 
 
-def test_random_splitmode_refuses_a_migrated_dataset():
-    """Adapter-served datasets window through their adapters, which the random split never
-    builds; it must say so up front instead of failing opaquely mid-training."""
+def test_random_splitmode_builds_adapters_for_migrated_datasets():
+    """The random split is RadarCrossAttention's published protocol on CARRADA, so it has
+    to serve adapter-served datasets: one adapter per file and split, never a dataset
+    copy configured with prepare_for_train."""
     from detection_vis_backend.train.train import CreateDataLoaders
-    cfg = {"dataloader": {"splitmode": "random", "split_random": [0.7, 0.15, 0.15],
-                          "train": {"batch_size": 1, "num_workers": 0},
-                          "val": {"batch_size": 1, "num_workers": 0},
-                          "test": {"batch_size": 1, "num_workers": 0}}, "seed": 0}
-    with pytest.raises(ValueError, match="CRUW"):
-        CreateDataLoaders([{"parse": "CRUW", "id": 1, "name": "x"}], ["RA"], {"class": "T_RODNet"}, cfg, "/tmp")
+    src = inspect.getsource(CreateDataLoaders)
+    branch = src.split("elif train_config['dataloader']['splitmode'] == 'random':")[1]
+    branch = branch.split("        else:\n            ValueError(")[0]
+    assert "random splitmode cannot serve" not in branch
+    assert "_split_source(file, 'train')" in branch and "_split_source(file, split_type)" in branch
+    helper = src.split("def _split_source(")[1].split("\n\n")[0]
+    assert "if file['parse'] in MIGRATED:" in helper and "make_sample_adapter(" in helper
 
 
 def test_scorer_check_converts_our_rows_to_the_reference_order():
