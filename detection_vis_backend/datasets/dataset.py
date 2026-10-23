@@ -1736,7 +1736,7 @@ class CARRADA(Dataset):
         return os.path.join(self.ad_cache_dir, self.seq_name, f"{stem}.npy")
 
     def _get_ad_cached(self, idx):
-        """get_AD_map memoized on disk; see ad_cache_dir in prepare_for_train."""
+        """get_AD_map memoized on disk; see ad_cache_dir in __init__."""
         path = self._ad_cache_path(idx)
         if os.path.exists(path):
             return np.load(path)

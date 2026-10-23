@@ -48,6 +48,14 @@ def radarpillar_display_geometry(res, dataset_inst, sample_id):
     return {"image_boxes": image_boxes, "bev_boxes": bev_boxes, "viz_idx": sample_id}
 
 
+def display_frame(sample_source, sample_id):
+    """The frame a windowed model predicts for: its input window's LAST frame, while
+    /feature indexes frames directly. The window length is read from whatever builds the
+    samples (the adapter for adapter-served datasets), so the CARRADA segmentation overlay
+    lines up with the frame the mask belongs to."""
+    return sample_id + getattr(sample_source, "win_frames", 1) - 1
+
+
 def carrada_seg_readout(pred_logits, gt_mask, viz_idx):
     """Segmentation readout for CARRADA (RECORD / MVRECORD).
 
@@ -199,9 +207,9 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     else:
         dataset_inst.prepare_for_train(parameters["features"], parameters["train_config"], parameters["model_config"], split_type)
         sample_source = dataset_inst
-    # Augmentation is a training-only concern, but prepare_for_train enables it unconditionally
-    # (CARRADA sets self.transformations regardless of split type), so it leaks into
-    # inference. That breaks inference two ways:
+    # Augmentation is a training-only concern, but the sample source enables it
+    # unconditionally (the CARRADA adapters set self.transformations regardless of split
+    # type), so it leaks into inference. That breaks inference two ways:
     #   - the input gets randomly flipped relative to the un-augmented feature image the UI
     #     draws gt on, so masks/boxes land in the wrong place;
     #   - RADDet's flips used to return negative-stride views that torch.tensor() rejected.
@@ -211,11 +219,7 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     data = sample_source[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
     logger.info("Get data sample.")
-    # The model predicts for the LAST frame of the input window: __getitem__[sample_id] loads
-    # frame (sample_id + win_frames - 1), while /feature indexes frames directly. Align the
-    # display frame to the mask's frame so the CARRADA segmentation overlay lines up.
-    win_frames = getattr(dataset_inst, "win_frames", 1)
-    viz_idx = sample_id + win_frames - 1
+    viz_idx = display_frame(sample_source, sample_id)
 
     # Initialize the model
     model_config = parameters["model_config"]

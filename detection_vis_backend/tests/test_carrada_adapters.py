@@ -77,6 +77,35 @@ def test_radar_cross_attention_draws_noise_only_on_train(parser):
     assert val.noise_std == 0.0 and train.noise_std > 0
 
 
+def test_inference_overlay_frame_is_the_last_frame_of_the_adapter_window(parser):
+    # The window length lives on the adapter now, not on the parser; the overlay must
+    # still be drawn on the frame the model predicts for.
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
+    from detection_vis_backend.train.inference import display_frame
+    c = _case("RECORD", ["RA"])
+    a = make_sample_adapter("RECORD", parser, ["RA"], c["model_cfg"], c["train_cfg"], "test")
+    assert a.win_frames > 1
+    assert display_frame(a, 10) == 10 + a.win_frames - 1
+
+
+def test_ad_cache_script_lists_frames_from_the_rca_adapter(parser, monkeypatch):
+    import importlib
+    import sys
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    monkeypatch.syspath_prepend(os.path.join(repo, "scripts"))
+    from detection_vis_backend.datasets import dataset as dataset_mod
+    monkeypatch.setattr(dataset_mod.DatasetFactory, "get_shared_instance", lambda self, *a, **k: parser)
+    monkeypatch.setattr(dataset_mod.DatasetFactory, "get_instance", lambda self, *a, **k: parser)
+    sys.modules.pop("build_carrada_ad_cache", None)
+    script = importlib.import_module("build_carrada_ad_cache")
+    c = _case("RadarCrossAttention", ["RD", "RA", "AD"])
+    f = {"id": _G["file_id"], "parse": "CARRADA", "path": "/p", "name": "n", "config": "c"}
+    frames, cache_dir = script._frames(script._source(f, c["model_cfg"], c["train_cfg"]))
+    assert frames and cache_dir == parser.ad_cache_dir
+    assert all(0 <= fr < len(parser) for fr in frames)
+    sys.modules.pop("build_carrada_ad_cache", None)
+
+
 def test_rca_annotations_load_lazily_and_leave_parse_annotations_intact(parser):
     before = parser.annos
     rca = parser.rca_annotations()
