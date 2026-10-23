@@ -44,9 +44,9 @@ def test_parser_map_and_mask_views(parser):
     assert parser.dense_mask("range_doppler", 3).shape[0] == 4
 
 
-def test_registry_fans_out_the_six_carrada_consumers():
+def test_registry_fans_out_the_seven_carrada_consumers():
     from detection_vis_backend.datasets.adapters import _REGISTRY
-    for m in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "DAROD", "RadarCrossAttention"):
+    for m in ("RECORD", "RECORDNoLstm", "RECORDNoLstmMulti", "MVRECORD", "DAROD", "RadarCrossAttention", "T_RODNet"):
         assert (m, "CARRADA") in _REGISTRY, m
 
 
@@ -104,6 +104,34 @@ def test_ad_cache_script_lists_frames_from_the_rca_adapter(parser, monkeypatch):
     assert frames and cache_dir == parser.ad_cache_dir
     assert all(0 <= fr < len(parser) for fr in frames)
     sys.modules.pop("build_carrada_ad_cache", None)
+
+
+def _trodnet(parser, split):
+    import sys
+    from detection_vis_backend.datasets.adapters import make_sample_adapter
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.join(repo, "scripts"))
+    from smoke_sweep import resolve_configs
+    m, t = resolve_configs("T_RODNet", "CARRADA", ["RA"])
+    return make_sample_adapter("T_RODNet", parser, ["RA"], m, t, splittype=split)
+
+
+def test_trodnet_sample_is_a_4_frame_ra_window_with_a_mask_per_frame(parser):
+    a = _trodnet(parser, "test")
+    s = a[10]
+    assert s["RA"].shape == (1, 4, 256, 256) and s["RA"].dtype == np.float32
+    assert s["gt_mask"].shape == (4, 4, 256, 256)
+    for k, f in enumerate(range(10, 14)):
+        assert np.array_equal(s["gt_mask"][:, k], parser.dense_mask("range_angle", f)), k
+
+
+def test_trodnet_carrada_trains_without_flips(parser):
+    a = _trodnet(parser, "train")
+    np.random.seed(0)
+    s0 = a[10]
+    np.random.seed(1)
+    s1 = a[10]
+    assert np.array_equal(s0["RA"], s1["RA"]) and np.array_equal(s0["gt_mask"], s1["gt_mask"])
 
 
 def test_rca_annotations_load_lazily_and_leave_parse_annotations_intact(parser):
