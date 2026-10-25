@@ -46,5 +46,34 @@
         "max_dets": 20,
         "peak_thres": 0.3,
         "ols_thres": 0.3
+    },
+
+    "CARRADA": {
+        "_src": "Paper Sec. IV-B.2: 4 RA frames per sample, batch 8, 'all the rest of the experimental settings are the same as CRUW' (Adam 1e-4, cosine, MSE on the raw output -- what the CRUW code trains). The reference repo ships no CARRADA code, so three settings were decided by the user (2026-10-23): MSE on the one-hot RA masks; 100 epochs with the final weights tested (no checkpoint selection, the official val split is a per-epoch monitor only); no flips, since the paper says none of the compared models used data enhancement. norm_type is CARRADA's RA normalisation, as RECORD-RA uses it.",
+        "num_epochs": 100,
+        "win_size": 4,
+        "transformations": [],
+        "norm_type": "tvt",
+        "dataloader": {
+            "splitmode": "",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {
+                "batch_size": 8,
+                "num_workers": 4
+            },
+            "val": {
+                "batch_size": 1,
+                "num_workers": 1
+            },
+            "test": {
+                "batch_size": 1,
+                "num_workers": 1
+            }
+        }
     }
 }

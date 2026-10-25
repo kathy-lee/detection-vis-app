@@ -1117,6 +1117,44 @@ def RECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_di
     return  result
    
 
+def T_RODNet_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
+    """RA semantic segmentation as the T-RODNet paper reports it on CARRADA (Table II:
+    per-class IoU and Dice, their means). The body predicts every frame of the 4-frame
+    window; the window's last frame is the one scored, as for RECORD."""
+    net.eval()
+    metrics = Evaluator(net.n_class)
+    kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
+    running_loss = 0.0
+    for iter, data in enumerate(dataloader):
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+
+        inputs = data[features[0]]
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
+
+        if eval_type == "val":
+            loss = net.get_loss(outputs, data, train_config)
+            running_loss += loss.item() * inputs.shape[0]
+            kbar.update(iter, values=[("loss", loss.item())])
+        else:
+            kbar.update(iter)
+        metrics.add_batch(torch.argmax(data['gt_mask'][:, :, -1], axis=1).cpu(),
+                          torch.argmax(outputs[:, :, -1], axis=1).cpu())
+
+    metrics_dict = get_metrics(metrics)
+    result = {'mAP': metrics_dict['prec'], 'mAR': metrics_dict['recall'],
+              'mIoU': metrics_dict['miou'], 'mDice': metrics_dict['dice'],
+              'iou_by_class': metrics_dict['miou_by_class'], 'dice_by_class': metrics_dict['dice_by_class']}
+    logger.info(f"{eval_type}: mIoU {result['mIoU'] * 100:.2f} %, mDice {result['mDice'] * 100:.2f} %, "
+                f"IoU by class {[round(v * 100, 1) for v in result['iou_by_class']]}, "
+                f"Dice by class {[round(v * 100, 1) for v in result['dice_by_class']]}")
+    if eval_type == 'val':
+        result.update({'loss': running_loss / len(dataloader.dataset)})
+    return result
+
+
 def MVRECORD_CARRADA_evaluation(net, dataloader, train_config, features, output_dir, eval_type, device):
     net.eval()
     kbar = pkbar.Kbar(target=len(dataloader), width=20, always_stateful=False)
@@ -2224,6 +2262,7 @@ for i in RECORD_subtypes:
     eval_func_dict[i, "CRUW"] = RECORD_CRUW_evaluation
     eval_func_dict[i, "CARRADA"] = RECORD_CARRADA_evaluation
 eval_func_dict["MVRECORD", "CARRADA"] = MVRECORD_CARRADA_evaluation
+eval_func_dict["T_RODNet", "CARRADA"] = T_RODNet_CARRADA_evaluation
 eval_func_dict["RADDet", "RADDetDataset"] = RADDet_evaluation
 eval_func_dict["DAROD", "RADDetDataset"] = DAROD_evaluation
 eval_func_dict["TransRAD", "RADDetDataset"] = TransRAD_evaluation

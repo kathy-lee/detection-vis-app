@@ -97,7 +97,32 @@ TEST_SEQS = ("2019_04_09_BMS1001", "2019_04_30_MLMS001", "2019_05_23_PM1S013", "
 
 def _model_cfg():
     with open(os.path.join(REPO, "detection_vis_backend", "networks", "T_RODNet_model_config.json")) as f:
-        return json.load(f)
+        return json.load(f)["CRUW"]
+
+
+def test_cruw_config_resolves_unchanged():
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    from smoke_sweep import resolve_configs
+    m, t = resolve_configs("T_RODNet", "CRUW", ["RA"])
+    assert {k: v for k, v in m.items() if k != "class"} == {
+        "n_class": 3, "embed_dim": 64, "win_size": 4, "img_size": [8, 64, 64], "patch_size": [2, 2, 2],
+        "depths": [2, 2, 2], "depths_decoder": [2, 2, 2], "num_heads": [2, 4, 8], "drop_path_rate": 0.1, "ape": True}
+    assert t["win_size"] == 16 and t["dataloader"]["train"]["batch_size"] == 4
+
+
+def test_carrada_config_is_the_papers_recipe():
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    from smoke_sweep import resolve_configs, LIVE_METRICS
+    m, t = resolve_configs("T_RODNet", "CARRADA", ["RA"])
+    assert (m["n_class"], m["in_chans"], m["win_size"], m["img_size"]) == (4, 1, 4, [2, 128, 128])
+    assert (m["embed_dim"], m["depths"], m["num_heads"]) == (64, [2, 2, 2], [2, 4, 8])
+    assert t["win_size"] == 4 and t["num_epochs"] == 100 and t["dataloader"]["train"]["batch_size"] == 8
+    assert t["transformations"] == [] and t["norm_type"] == "tvt" and t["losses"] == {"type": "mse"}
+    assert t["lr_scheduler"] == {"type": "cosine", "min_lr": 0} and t["optimizer"]["lr"] == 0.0001
+    assert "test_checkpoint" not in t and "early_stop" not in t
+    assert LIVE_METRICS["T_RODNet", "CARRADA"] == ("mIoU", "mDice")
+    from smoke_sweep import RUNS, run_id
+    assert any(run_id(r) == "T_RODNet/CARRADA" for r in RUNS)
 
 
 def test_trodnet_network_through_the_factory_and_loss_contract():
@@ -109,6 +134,52 @@ def test_trodnet_network_through_the_factory_and_loss_contract():
     assert out.shape == (1, 3, 16, 128, 128)
     loss = net.get_loss(out, {"gt_mask": torch.rand(1, 3, 16, 128, 128)}, {})
     assert torch.isfinite(loss) and net.n_class == 3 and net.class_names == ["pedestrian", "cyclist", "car"]
+
+
+def test_carrada_build_maps_a_4_frame_ra_window_to_4_class_masks():
+    # CARRADA RA is 1 real channel at 256 x 256, 4 frames, 4 classes (background included):
+    # the paper's 4 x 1 x 256 x 256 input, on the same body.
+    from detection_vis_backend.networks.network import T_RODNet
+    net = T_RODNet(n_class=4, win_size=4, img_size=(2, 128, 128), in_chans=1).eval()
+    with torch.no_grad():
+        out = net(torch.zeros(1, 1, 4, 256, 256))
+    assert out.shape == (1, 4, 4, 256, 256)
+
+
+def test_carrada_scoring_reads_the_windows_last_frame(tmp_path):
+    from detection_vis_backend.train.evaluate import eval_func_dict
+
+    def one_hot(cls_map):
+        return torch.nn.functional.one_hot(cls_map, 4).permute(0, 4, 1, 2, 3).float()
+
+    g = torch.Generator().manual_seed(0)
+    batches = [torch.randint(0, 4, (2, 4, 8, 8), generator=g) for _ in range(2)]  # (B, win, H, W)
+
+    class LastFrameOnly(nn.Module):
+        n_class = 4
+
+        def forward(self, x):
+            cls = self.labels.clone()
+            cls[:, :3] = (cls[:, :3] + 1) % 4   # every frame but the last is wrong
+            return one_hot(cls)
+
+    net = LastFrameOnly()
+    loader = []
+    for b in batches:
+        loader.append({"RA": torch.zeros(2, 1, 4, 8, 8), "gt_mask": one_hot(b)})
+
+    class Loader(list):
+        dataset = range(4)
+
+        def __iter__(self):
+            for d in list.__iter__(self):
+                net.labels = d["gt_mask"].argmax(1)
+                yield d
+
+    cfg = {"dataloader": {"test": {"batch_size": 2}}}
+    res = eval_func_dict["T_RODNet", "CARRADA"](net, Loader(loader), cfg, ["RA"], str(tmp_path), "test", torch.device("cpu"))
+    assert res["mIoU"] == pytest.approx(1.0) and res["mDice"] == pytest.approx(1.0)
+    assert len(res["iou_by_class"]) == 4 and len(res["dice_by_class"]) == 4
 
 
 def test_trodnet_mse_is_mean_squared_error_not_smooth_l1():
@@ -147,7 +218,7 @@ def test_trodnet_is_registered_everywhere_the_app_looks():
     assert "'T_RODNet': default_collate" in inspect.getsource(CreateDataLoaders)
     with open(os.path.join(REPO, "detection_vis_backend", "networks", "model_features.json")) as f:
         feats = json.load(f)["T_RODNet"]
-    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW"] and feats["input_size"] == [16, 128, 128]
+    assert feats["features"] == ["RA"] and feats["datasets"] == ["CRUW", "CARRADA"]
 
 
 def test_cosine_branch_reproduces_the_reference_schedule():
@@ -205,6 +276,28 @@ def test_infer_routes_trodnet_through_the_rodnet_confmap_branch():
     branch = src.split('elif model_type in ("RODNet_CDC"')[1].split("elif model_type in")[0]
     assert '"T_RODNet"' in src.split('elif model_type in ("RODNet_CDC"')[1].split(":")[0]
     assert "post_process_single_frame(confmap_pred[0,:,0,:,:]" in branch
+
+
+def test_trodnet_carrada_readout_shows_the_windows_last_frame():
+    import numpy as np
+    from detection_vis_backend.train.inference import trodnet_carrada_readout
+    logits = np.zeros((4, 4, 3, 3))      # (class, frame, H, W)
+    logits[2, 3, 0, 0] = 5.0             # cyclist on the last frame only
+    logits[1, 0, 0, 0] = 9.0             # a pedestrian on the first frame must not show
+    gt = np.zeros((4, 4, 3, 3))
+    gt[0] = 1.0
+    gt[3, 3, 1, 1], gt[0, 3, 1, 1] = 1.0, 0.0
+    out = trodnet_carrada_readout(logits, gt, viz_idx=13)
+    assert out["viz_idx"] == 13
+    assert np.array(out["pred_mask"])[0, 0] == 2 and np.array(out["gt_mask"])[1, 1] == 3
+
+
+def test_infer_routes_trodnet_on_carrada_to_the_segmentation_readout():
+    from detection_vis_backend.train import inference
+    src = inspect.getsource(inference.infer)
+    seg = src.index('model_type == "T_RODNet" and dataset_type == "CARRADA"')
+    assert seg < src.index('elif model_type in ("RODNet_CDC"')
+    assert "trodnet_carrada_readout(" in src[seg:src.index('elif model_type in ("RODNet_CDC"')]
 
 
 def test_random_splitmode_builds_adapters_for_migrated_datasets():

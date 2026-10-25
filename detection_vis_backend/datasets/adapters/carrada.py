@@ -1,5 +1,5 @@
-"""Sample adapters for CARRADA: how the RECORD family, MVRECORD, DAROD and
-RadarCrossAttention each read a sequence.
+"""Sample adapters for CARRADA: how the RECORD family, MVRECORD, DAROD,
+RadarCrossAttention and T-RODNet each read a sequence.
 
 Moved from CARRADA.__getitem__ / prepare_for_train. The parser keeps parse, the raw
 views (processed_map, dense_mask, annotation, rca_annotations, get_RA/get_RD and the
@@ -106,6 +106,25 @@ class RECORDOnCARRADA(CARRADAWindowAdapter):
             assert t == 1
             feature_frame['matrix'] = feature_frame['matrix'].reshape(c, h, w)
         return {self.features[0]: feature_frame['matrix'], 'gt_mask': feature_frame['gt_mask']}
+
+
+@register
+class T_RODNetOnCARRADA(CARRADAWindowAdapter):
+    """RA window (1, win, H, W) normalised, with the RA dense mask of every frame in the
+    window stacked as (n_class, win, H, W): the 3D body predicts a mask per frame, and the
+    CRUW recipe it follows supervises every frame of its window."""
+    MODELS = ("T_RODNet",)
+
+    def __getitem__(self, index):
+        _, frames = self._frame_ids(index)
+        mask = np.stack([self.parser.dense_mask('range_angle', f) for f in frames], axis=1)
+        feature_frame = {'matrix': self._stack('range_angle', frames), 'gt_mask': mask}
+        # Drawn on every split like the sibling adapters, so a seeded run keeps one RNG
+        # sequence whatever the configured flips are.
+        is_vflip, is_hflip = self._draw_flips()
+        feature_frame = self.transform(feature_frame, is_vflip=is_vflip, is_hflip=is_hflip)
+        matrix = normalize(self._expand(feature_frame['matrix']), 'range_angle', norm_type=self.norm_type)
+        return {'RA': np.asarray(matrix, dtype=np.float32), 'gt_mask': feature_frame['gt_mask']}
 
 
 @register
