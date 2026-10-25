@@ -76,6 +76,7 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 16 | RadarPillar | ViewOfDelft | mAP entire / corridor | **50.7 / 70.5** (5-frame) | RadarPillars Table I, `RadarPillars (ours)` |
 | 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
 | 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
+| 19 | T_RODNet | CARRADA (RA) | mIoU / mDice | **43.5 / 53.6** (IoU bg/ped/cyc/car 99.9/25.4/9.5/39.4; Dice 99.9/40.5/17.4/56.6) | T-RODNet Table II |
 
 Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
@@ -131,6 +132,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 16 | RadarPillar / ViewOfDelft | **50.48** val mAP entire-area, final weights (best 50.72 @ epoch 75; epochs 70–79 all within 50.2–50.7) | 50.7 | 52.56 (fthbng77/RadarPillar README, its own pipeline) | **match** (−0.4% final; best at exact parity) | `RadarPillar_ViewOfDelft_Jul-21-2026_08:56:49` |
 | 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 | 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
+| 19 | T_RODNet / CARRADA / RA | **41.01 / 49.91** test mIoU/mDice (1 seed, official split, final-epoch weights; IoU bg/ped/cyc/car 99.9/21.3/5.1/37.7, Dice 99.9/35.2/9.8/54.8). Val, same weights: 46.06 / 57.02. **Recipe has three choices the paper does not state** — MSE on one-hot masks, flips off, 100 epochs testing the final weights (see the T-RODNet / CARRADA section) | 43.5 / 53.6 | not possible (no weights shipped) | **below the pass bar** (−2.5 / −3.7 points; cyclist IoU 5.1 vs 9.5) — open, a flips-on or weighted-CE+Dice variant is pending | `T_RODNet_CARRADA_Oct-23-2026_23:15:53` (epochs 1–79) + `T_RODNet_CARRADA_Oct-24-2026_22:22:55` (epochs 80–99) + `T_RODNet_CARRADA_Oct-25-2026_09:04:47` (epoch 100 + test) |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -797,6 +799,42 @@ RECORD variants moved with it. Byte-level goldens captured on the unrefactored c
 rerun through the adapters (`RODNet_CDC_CRUW_Oct-19-2026_18:28:54`) scored 39.9 / 44.8
 against the August run's 36.9 / 42.8 (final epoch) and 38.5 / 44.6 (best-val), with
 the same epoch-by-epoch val curve.
+
+### T-RODNet / CARRADA (RA): 41.01 / 49.91 test, below the paper's 43.5 / 53.6 (2026-10-25)
+
+Table II of the T-RODNet paper reports CARRADA range-angle segmentation (mIoU 43.5,
+mDice 53.6). The same Swin-UNet is built with `in_chans` 1, 4 classes and a 4-frame
+256×256 RA window (`T_RODNetOnCARRADA`); the window's last frame is scored with the
+CARRADA evaluator. The paper does not give its CARRADA training recipe, so three
+choices were made and this result holds **only for them**:
+
+1. **Loss: MSE on one-hot masks**, the CRUW recipe's loss, unchanged.
+2. **Flips off** (`transformations: []`).
+3. **100 epochs, final weights tested**; val is a monitor only, never used to pick a
+   checkpoint.
+
+Everything else is the CRUW recipe: Adam 1e-4, cosine schedule, seed 3, batch 8.
+
+| | mIoU | mDice | IoU bg / ped / cyc / car | Dice bg / ped / cyc / car |
+|---|---|---|---|---|
+| ours, **test**, epoch 100 | **41.01** | **49.91** | 99.9 / 21.3 / 5.1 / 37.7 | 99.9 / 35.2 / 9.8 / 54.8 |
+| paper, test | 43.5 | 53.6 | 99.9 / 25.4 / 9.5 / 39.4 | 99.9 / 40.5 / 17.4 / 56.6 |
+| ours, val, epoch 100 | 46.06 | 57.02 | 99.9 / 24.6 / 16.4 / 43.4 | 99.9 / 39.5 / 28.1 / 60.6 |
+
+- **Curve.** Background and car only until about epoch 15; cyclist appears around 20,
+  pedestrian around 25; val reaches about 43 mIoU by epoch 30 and stays at about
+  46 / 57 from epoch 45 to 100 (best val mIoU 46.66 at epoch 73).
+- **Gap.** Every class is below the paper on test; cyclist is the largest relative
+  loss (5.1 vs 9.5 IoU) and carries most of the val→test drop (16.4 → 5.1).
+- **Suspects**, in the order they would be tried: flips off (augmentation is the
+  usual lever on a val→test gap) and MSE on one-hot masks (CARRADA segmenters
+  normally train weighted cross-entropy + Dice, which favours rare classes).
+- **Cost.** About 11 min per epoch (≈9.5 train + 1.5 val), 75 s for the test pass;
+  peak VRAM 16–17 GB at batch 8; checkpoints 0.88 GB each.
+- **Run history.** Paused after epoch 79 and resumed from its checkpoint. At epoch
+  100 the save failed when `/data` filled up, which left the final checkpoint
+  truncated. The last epoch was re-trained from the intact epoch-99 checkpoint
+  (val 46.08 → 46.06) and that run produced the test result.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
