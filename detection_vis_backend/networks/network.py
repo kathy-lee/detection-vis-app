@@ -16,6 +16,7 @@ from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, 
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 from detection_vis_backend.networks.transrad import TransRADBody, TransRADLoss
 from detection_vis_backend.networks.trodnet import TRODNetBody
+from detection_vis_backend.networks.ssmradnet import RADFE
 
 class NetworkFactory:
     # Old: cached instances keyed by class name only, so a second model of the same
@@ -1207,3 +1208,28 @@ class T_RODNet(BaseNetwork):
     def load_state_dict(self, state_dict, strict=True):
         return super().load_state_dict({("body." + k if not k.startswith("body.") else k): v
                                         for k, v in state_dict.items()}, strict=strict)
+
+
+class SSMRadNet(BaseNetwork):
+    """SSMRadNet (Sen et al., WACV 2026): Mamba SSMs on raw RADIal ADC (B, 512, 256, 32),
+    with FFTRadNet's output dict, so its label encoder and scorer apply unchanged.
+    Everything model-shaped lives in networks/ssmradnet.py; this class is the app contract."""
+
+    def __init__(self, detection_head=True, segmentation_head=True, **radfe_kwargs):
+        super().__init__()
+        self.detection_head = detection_head
+        self.segmentation_head = segmentation_head
+        # Named RADFe as in the authors' wrapper, so checkpoint keys interchange.
+        self.RADFe = RADFE(**radfe_kwargs)
+
+    def forward(self, x):
+        if not x.is_cuda:
+            raise RuntimeError("SSMRadNet needs a CUDA device: its Mamba kernels have no CPU implementation")
+        out = {'Detection': [], 'Segmentation': []}
+        det, seg = self.RADFe(x)
+        if self.detection_head:
+            out['Detection'] = det
+        if self.segmentation_head:
+            # The decoder ends at 128x128; RADIal's freespace label is 256x224.
+            out['Segmentation'] = F.interpolate(seg, (256, 224), mode='bilinear', align_corners=False)
+        return out
