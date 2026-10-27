@@ -70,6 +70,46 @@ def test_batch_of_one():
     assert out['Segmentation'].shape == (1, 1, 256, 224)
 
 
+def test_jaccard_is_zero_for_a_perfect_prediction():
+    from detection_vis_backend.networks.ssmradnet import JaccardLoss
+
+    mask = torch.rand(2, 256, 224) > 0.5
+    logits = torch.where(mask, 20.0, -20.0).unsqueeze(1)
+    assert JaccardLoss()(logits, mask) < 1e-3
+
+
+def test_jaccard_is_near_one_for_the_inverse_prediction():
+    from detection_vis_backend.networks.ssmradnet import JaccardLoss
+
+    mask = torch.rand(2, 256, 224) > 0.5
+    logits = torch.where(mask, -20.0, 20.0).unsqueeze(1)
+    assert JaccardLoss()(logits, mask) > 0.99
+
+
+def test_get_loss_classification_and_regression_match_fftradnet():
+    import json
+
+    from detection_vis_backend.networks.network import FFTRadNet, SSMRadNet
+
+    config = {'losses': {'classification': 'FocalLoss', 'regression': 'SmoothL1Loss',
+                         'segmentation': 'JaccardLoss', 'weight': [1, 1, 0]}}
+    torch.manual_seed(0)
+    encoded = torch.zeros(2, 3, 128, 224)
+    encoded[:, 0, 40:44, 100:104] = 1
+    encoded[:, 1:] = torch.randn(2, 2, 128, 224)
+    # Float, as the training loop hands every label to get_loss.
+    target = {'encoded_label': encoded, 'seg_label': (torch.rand(2, 256, 224) > 0.5).float()}
+    det = torch.cat([torch.rand(2, 1, 128, 224), torch.randn(2, 2, 128, 224)], dim=1)
+    pred = {'Detection': det, 'Segmentation': torch.randn(2, 1, 256, 224)}
+
+    ssm = SSMRadNet()
+    ssm.init_lossfunc(config, 'cpu')
+    with open("detection_vis_backend/networks/FFTRadNet_model_config.json") as f:
+        fft = FFTRadNet(**json.load(f))
+    fft.init_lossfunc(dict(config, losses=dict(config['losses'], segmentation='BCEWithLogitsLoss')), 'cpu')
+    assert torch.isclose(ssm.get_loss(pred, target, config), fft.get_loss(pred, target, config), atol=1e-6)
+
+
 def test_cpu_input_raises_a_clear_error():
     from detection_vis_backend.networks.network import SSMRadNet
 

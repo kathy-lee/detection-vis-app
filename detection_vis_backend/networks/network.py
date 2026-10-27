@@ -16,7 +16,7 @@ from detection_vis_backend.networks.ramp_cnn import RODEncode_RA, RODDecode_RA, 
 from detection_vis_backend.networks.radarcrossattention import CrossAttention, Encode, Decode, FocalLoss_weight, CenterLoss, L2Loss
 from detection_vis_backend.networks.transrad import TransRADBody, TransRADLoss
 from detection_vis_backend.networks.trodnet import TRODNetBody
-from detection_vis_backend.networks.ssmradnet import RADFE
+from detection_vis_backend.networks.ssmradnet import RADFE, JaccardLoss
 
 class NetworkFactory:
     # Old: cached instances keyed by class name only, so a second model of the same
@@ -1233,3 +1233,41 @@ class SSMRadNet(BaseNetwork):
             # The decoder ends at 128x128; RADIal's freespace label is 256x224.
             out['Segmentation'] = F.interpolate(seg, (256, 224), mode='bilinear', align_corners=False)
         return out
+
+    def init_lossfunc(self, config, device):
+        if config['losses']['segmentation'] == 'JaccardLoss':
+            self.criterion_seg = JaccardLoss()
+        else:
+            self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean')
+        if config['losses']['classification'] == 'FocalLoss':
+            self.criterion_classif = FocalLoss(gamma=2)
+        else:
+            self.criterion_classif = nn.BCELoss(reduction='sum')
+        if config['losses']['regression'] == 'SmoothL1Loss':
+            self.criterion_reg = nn.SmoothL1Loss(reduction='sum')
+        else:
+            self.criterion_reg = nn.L1Loss(reduction='sum')
+
+    def get_loss(self, pred, target, config):
+        # Classification and regression as FFTRadNet: the cls channel is already a sigmoid.
+        classif_pred = pred['Detection'][:, 0].contiguous().flatten()
+        classif_label = target['encoded_label'][:, 0].contiguous().flatten()
+        loss_classif = self.criterion_classif(classif_pred, classif_label)
+
+        T = target['encoded_label'][:, 1:]
+        P = pred['Detection'][:, 1:]
+        M = target['encoded_label'][:, 0].unsqueeze(1)
+        loss_reg = self.criterion_reg(P * M, T)
+        NbPts = M.sum()
+        if NbPts > 0:
+            loss_reg /= NbPts
+
+        if isinstance(self.criterion_seg, JaccardLoss):
+            loss_seg = self.criterion_seg(pred['Segmentation'], target['seg_label'])
+        else:
+            # FFTRadNet's BCE term, scaled by the batch size as there.
+            loss_seg = self.criterion_seg(pred['Segmentation'].flatten(), target['seg_label'].float().flatten())
+            loss_seg *= pred['Segmentation'].size(0)
+
+        losses = [loss_classif, loss_reg, loss_seg]
+        return sum(w * l for l, w in zip(losses, config['losses']['weight']))

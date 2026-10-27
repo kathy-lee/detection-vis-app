@@ -12,6 +12,19 @@ import torch.nn.functional as F
 from mamba_ssm import Mamba
 
 
+class JaccardLoss(nn.Module):
+    """Soft IoU loss on the freespace logits, the paper's segmentation loss:
+    1 - (sum p*t + 1) / (sum p + sum t - sum p*t + 1) per sample, p = sigmoid(logits),
+    averaged over the batch."""
+
+    def forward(self, logits, target):
+        p = torch.sigmoid(logits).flatten(1)
+        t = target.float().flatten(1)
+        inter = (p * t).sum(1)
+        union = p.sum(1) + t.sum(1) - inter
+        return (1 - (inter + 1) / (union + 1)).mean()
+
+
 class MambaSSMBlock(nn.Module):
     """Mamba SSM followed by a projection back to d_model."""
 
