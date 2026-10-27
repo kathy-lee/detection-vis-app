@@ -1,4 +1,5 @@
-"""Sample adapters for RADIal (the ready-to-use release): how FFTRadNet reads it.
+"""Sample adapters for RADIal (the ready-to-use release): how FFTRadNet (RD spectrum) and
+SSMRadNet (raw ADC) read it.
 
 Moved from RADIal.__getitem__ / encode. The parser keeps the file lists, labels.csv
 (labels, label_dict, sample_keys), get_RD and the freespace crop/resize; everything
@@ -7,6 +8,7 @@ model-shaped is here.
 import os
 
 import numpy as np
+from loguru import logger
 from PIL import Image
 
 from detection_vis_backend.datasets.adapters import SampleAdapter, register
@@ -158,4 +160,48 @@ class FFTRadNetOnRADIal(SampleAdapter):
 
         if self.segmentation_head:
             data_dict.update({'seg_label': radial_freespace(self.parser, index)})
+        return data_dict
+
+
+def decode_radial_adc(raw):
+    """(1048576, 4) int16 chip streams -> float32 (512 samples, 256 chirps, 32): the 16 Rx
+    (chips 3, 0, 1, 2, each I/Q interleaved) real parts, then imaginary parts. As the
+    SSMRadNet authors' convert_radar_cube: no DC removal, no window, no scaling."""
+    frames = [np.reshape(raw[0::2, c] + 1j * raw[1::2, c], (512, 4, 256), order='F').transpose((0, 2, 1))
+              for c in range(4)]
+    cube = np.concatenate([frames[3], frames[0], frames[1], frames[2]], axis=2)
+    return np.concatenate([cube.real, cube.imag], axis=2).astype(np.float32)
+
+
+@register
+class SSMRadNetOnRADIal(SampleAdapter):
+    """Raw ADC (512, 256, 32), with FFTRadNet's encoded detection map, box labels and
+    freespace map. Serves only the frames whose radar_ADC/adc_{numSample:06d}.npy exists:
+    the ADC is extracted from the raw recordings separately and may cover part of the set."""
+    MODELS, DATASET = ("SSMRadNet",), "RADIal"
+
+    def __init__(self, parser, features, model_cfg, train_cfg, splittype=None):
+        super().__init__(parser, features, model_cfg, train_cfg, splittype)
+        self.segmentation_head = True if model_cfg['segmentation_head'] else False
+        self.adc_dir = os.path.join(parser.root_dir, 'radar_ADC')
+        if not os.path.isdir(self.adc_dir):
+            raise FileNotFoundError(f"{self.adc_dir} not found: SSMRadNet reads RADIal's raw ADC "
+                                    "(written by scripts/extract_radial_adc.py)")
+        present = set(os.listdir(self.adc_dir))
+        self.frames = [i for i, key in enumerate(parser.sample_keys) if f"adc_{key:06d}.npy" in present]
+        if not self.frames:
+            raise FileNotFoundError(f"{self.adc_dir} holds no adc file of the {len(parser)} labelled frames")
+        logger.info(f"RADIal ADC: kept {len(self.frames)} of {len(parser)} frames")
+
+    def __len__(self):
+        return len(self.frames)
+
+    def __getitem__(self, index):
+        i = self.frames[index]
+        box_labels = radial_box_labels(self.parser.annotation(i))
+        encoded_label = encode_radial_label(box_labels).copy()
+        adc = decode_radial_adc(np.load(os.path.join(self.adc_dir, f"adc_{self.parser.sample_keys[i]:06d}.npy")))
+        data_dict = {'ADC': adc, 'encoded_label': encoded_label, 'box_label': box_labels}
+        if self.segmentation_head:
+            data_dict.update({'seg_label': radial_freespace(self.parser, i)})
         return data_dict

@@ -118,7 +118,7 @@ def main():
             failed.append((record, f"{len(mismatched)} mismatched"))
             continue
         shutil.rmtree(unpack_dir)
-        print(f"    {record}: {written} benchmark frames extracted", flush=True)
+        print(f"    {record}: {written} benchmark frames extracted\n", flush=True)
 
     print(f"\nradar_ADC holds {count_adc_files(out_dir)} .npy files "
           f"of {labels.numSample.nunique()} benchmark frames")
