@@ -47,11 +47,13 @@ def FFTRadNet_val_evaluation(net, loader, train_config, check_perf=True, device=
             if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
 
-        inputs = data['RD']
+        # 'ADC' for SSMRadNet, 'RD' for FFTRadNet: the scorer is shared.
+        input_key = 'ADC' if 'ADC' in data else 'RD'
+        inputs = data[input_key]
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
-    
-        data.pop('RD')
+
+        data.pop(input_key)
         loss = net.get_loss(outputs, data, train_config)
         running_loss += loss.item() * inputs.size(0)
 
@@ -96,7 +98,7 @@ def FFTRadNet_full_evaluation(net, loader, train_config, features, output_path, 
             if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device).float()
         
-        inputs = data['RD'].to(device).float()
+        inputs = data['ADC' if 'ADC' in data else 'RD'].to(device).float()
         with torch.set_grad_enabled(False):
             outputs = net(inputs)
 
@@ -2252,10 +2254,11 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
 
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "T_RODNet"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFTRadNet", "MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
+network_types = ["FFTRadNet", "SSMRadNet", "MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
 eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
+eval_func_dict["SSMRadNet", "RADIal"] = FFTRadNet_evaluation
 for i in RODNet_subtypes:
     eval_func_dict[i, "CRUW"] = RODNet_evaluation
 for i in RECORD_subtypes:

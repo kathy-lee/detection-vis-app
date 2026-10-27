@@ -98,7 +98,7 @@ def main():
                   f"need {MIN_FREE_GIB}; stopping", flush=True)
             failed.append((record, "disk full"))
             break
-        print(f"[{k}/{len(todo)}] {record}: downloading for {len(frames)} benchmark frames", flush=True)
+        print(f"\n[{k}/{len(todo)}] {record}: downloading for {len(frames)} benchmark frames", flush=True)
         zip_path = os.path.join(args.raw_root, f"{record}.zip")
         unpack_dir = os.path.join(args.raw_root, f".unpack_{record}")
         try:
@@ -120,8 +120,8 @@ def main():
         shutil.rmtree(unpack_dir)
         print(f"    {record}: {written} benchmark frames extracted\n", flush=True)
 
-    print(f"\nradar_ADC holds {count_adc_files(out_dir)} .npy files "
-          f"of {labels.numSample.nunique()} benchmark frames")
+    print(f"===== radar_ADC holds {count_adc_files(out_dir)} .npy files "
+          f"of {labels.numSample.nunique()} benchmark frames =====")
     for record, why in failed:
         print(f"  not finished: {record} ({why})")
     return 1 if failed else 0

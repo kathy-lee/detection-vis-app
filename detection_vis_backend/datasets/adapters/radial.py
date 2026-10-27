@@ -192,9 +192,24 @@ class SSMRadNetOnRADIal(SampleAdapter):
         if not self.frames:
             raise FileNotFoundError(f"{self.adc_dir} holds no adc file of the {len(parser)} labelled frames")
         logger.info(f"RADIal ADC: kept {len(self.frames)} of {len(parser)} frames")
+        self._sample_of = {frame: i for i, frame in enumerate(self.frames)}
 
     def __len__(self):
         return len(self.frames)
+
+    # Training records, and inference asks for, dataset frames (what the UI's camera image
+    # and labels are indexed by); these translate to and from this adapter's samples.
+    def dataset_frame(self, i):
+        return self.frames[i]
+
+    def has_frame(self, frame):
+        return frame in self._sample_of
+
+    def sample_of_frame(self, frame):
+        if frame not in self._sample_of:
+            raise ValueError(f"RADIal frame {frame} (numSample {self.parser.sample_keys[frame]}) "
+                             f"has no raw ADC file in {self.adc_dir}")
+        return self._sample_of[frame]
 
     def __getitem__(self, index):
         i = self.frames[index]

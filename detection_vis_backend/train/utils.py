@@ -30,7 +30,10 @@ from loguru import logger
 #     return torch.stack(FFTs), torch.stack(encoded_label),torch.stack(segmaps),labels
 
 def FFTRadNet_collate(batch):
-    rd = [torch.tensor(item['RD']) for item in batch]
+    # Shared by the two RADIal networks, which differ only in their input: FFTRadNet's
+    # samples carry 'RD', SSMRadNet's 'ADC' (each adapter builds one or the other).
+    key = 'ADC' if 'ADC' in batch[0] else 'RD'
+    rd = [torch.tensor(item[key]) for item in batch]
     rd = torch.stack(rd, 0)
     encoded_label = [torch.tensor(item['encoded_label']) for item in batch]
     encoded_label = torch.stack(encoded_label, 0)
@@ -38,9 +41,9 @@ def FFTRadNet_collate(batch):
     if 'seg_label' in batch[0]:
         seg_label = [torch.tensor(item['seg_label']) for item in batch]
         seg_label = torch.stack(seg_label, 0)
-        return {'RD': rd, 'encoded_label': encoded_label, 'box_label': box_label, 'seg_label': seg_label}
+        return {key: rd, 'encoded_label': encoded_label, 'box_label': box_label, 'seg_label': seg_label}
     else:
-        return {'RD': rd, 'encoded_label': encoded_label, 'box_label': box_label}
+        return {key: rd, 'encoded_label': encoded_label, 'box_label': box_label}
 
 
 def DAROD_collate(batch):

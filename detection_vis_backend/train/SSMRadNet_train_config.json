@@ -1,0 +1,41 @@
+{
+    "_about": "SSMRadNet (Sen et al., WACV 2026, arXiv 2511.08769v2) on RADIal. Paper Table 2: Adam lr 1e-4, L2 weight decay 5e-6, batch 8, 200 epochs; detection focal + smooth-L1, freespace Jaccard; random 0.8 / 0.2 train / validation split (Sec. 3.1.2), result reported on validation. From the authors' code (AnuvabSen1/SSMRadNet 39b982b, FFTRadNet/config/ADC_config.json and loss/loss.py): seed 3, loss weights [2, 100, 100], StepLR 10 / 0.9, and regression 'smoothL1Loss', which its loss code (like ours) does not match against 'SmoothL1Loss' and so runs plain L1 -- kept as the code that produced the numbers has it. In the app, the Train page's split choice replaces splitmode and split_random.",
+    "seed": 3,
+    "losses": {
+        "classification": "FocalLoss",
+        "regression": "smoothL1Loss",
+        "segmentation": "JaccardLoss",
+        "weight": [2, 100, 100]
+    },
+    "lr_scheduler": {
+        "type": "step",
+        "step_size": 10,
+        "gamma": 0.9
+    },
+    "optimizer": {
+        "lr": 1e-4,
+        "weight_decay": 5e-6
+    },
+    "num_epochs": 200,
+    "dataloader": {
+        "splitmode": "random",
+        "split_sequence": {
+            "train": [],
+            "val": [],
+            "test": []
+        },
+        "split_random": [0.8, 0.2, 0.0],
+        "train": {
+            "batch_size": 8,
+            "num_workers": 4
+        },
+        "val": {
+            "batch_size": 8,
+            "num_workers": 4
+        },
+        "test": {
+            "batch_size": 1,
+            "num_workers": 1
+        }
+    }
+}
