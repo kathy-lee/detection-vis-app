@@ -25,6 +25,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATED
+from detection_vis_backend.datasets.adapters.radial import radial_sequence_split
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
@@ -256,33 +257,14 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             ValueError("Split type not supported. Please choose following: 'sequence', 'random', 'original(some of the datasets has a built-in split).")        
     else:
         if dataset_type == "RADIal":
-            # RADIal dataset is partly labeled
-            Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
-                                       'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
-                        'test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
-                                'RECORD@2020-11-22_12.03.47','RECORD@2020-11-22_12.54.38']}
-            dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-            dataset.prepare_for_train(features, train_config, model_config)
-            labels = dataset.labels
-            dict_index_to_keys = {s:i for i,s in enumerate(dataset.sample_keys)}
-            Val_indexes = []
-            for seq in Sequences['val']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Val_indexes.append(labels[idx,0])
-            Val_indexes = np.unique(np.concatenate(Val_indexes))
-
-            Test_indexes = []
-            for seq in Sequences['test']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Test_indexes.append(labels[idx,0])
-            Test_indexes = np.unique(np.concatenate(Test_indexes))
-
-            split_samples_info['val'] = [dict_index_to_keys[k] for k in Val_indexes]
-            split_samples_info['test'] = [dict_index_to_keys[k] for k in Test_indexes]
-            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
-            datasets["train"] = Subset(dataset, split_samples_info['train'])
-            datasets["val"] = Subset(dataset, split_samples_info['val'])
-            datasets["test"] = Subset(dataset, split_samples_info['test'])
+            # valeo's sequence split over ONE parser; a per-split adapter builds the samples
+            # (datasets/adapters/radial.py), as for RADDetDataset.
+            parser = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+            split_samples_info.update(radial_sequence_split(parser))
+            for split_type in ('train', 'val', 'test'):
+                adapter = make_sample_adapter(model_config['class'], parser, features,
+                                              model_config, train_config, splittype=split_type)
+                datasets[split_type] = Subset(adapter, split_samples_info[split_type])
         elif dataset_type == "CARRADA":
             Sequences = {'train': ['2019-09-16-12-52-12', '2019-09-16-12-55-51', '2019-09-16-12-58-42', '2019-09-16-13-03-38', 
                                    '2019-09-16-13-11-12', '2019-09-16-13-14-29', '2019-09-16-13-20-20', '2019-09-16-13-25-35', 

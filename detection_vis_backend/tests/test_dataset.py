@@ -35,6 +35,13 @@ def set_env_vars():
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
 
 
+def test_RADIal_is_a_parser_without_model_code():
+    # Samples are built by datasets/adapters/radial.py; the parser serves frames and labels.
+    assert "annotation" in vars(RADIal)
+    for name in ("__getitem__", "encode", "prepare_for_train"):
+        assert name not in vars(RADIal), name
+
+
 def test_CARRADA_keeps_only_its_own_sequence_annotations(db_session: Session):
     """annotations_frame_oriented.json holds ALL 30 sequences (37.7MB on disk, 331MB as
     Python objects), but an instance only ever reads its own sequence. parse() must keep

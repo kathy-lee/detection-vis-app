@@ -703,137 +703,18 @@ class RADIal(Dataset):
                 label[9] *= 512/103 # 512 range bins for 103m
                 gt.append(label[[9,11]].tolist())
         return gt
-    
-    def prepare_for_train(self, features, train_cfg, model_cfg, splittype=None):
-        require_request_scope(self)
-        self.segmentation_head = True if model_cfg['segmentation_head'] else False
-        return
 
     def __len__(self):
         return len(self.label_dict)
 
-    def __getitem__(self, index):
-        
-        # Get the sample id
-        sample_id = self.sample_keys[index] 
+    def annotation(self, i):
+        """labels.csv rows of frame i (all its objects; a single -1 row when it has none).
+        Samples are built from these by the adapters in datasets/adapters/radial.py."""
+        return self.labels[self.label_dict[self.sample_keys[i]]]
 
-        # From the sample id, retrieve all the labels ids
-        entries_indexes = self.label_dict[sample_id]
-
-        # Get the objects labels
-        box_labels = self.labels[entries_indexes]
-
-        # Labels (labels.csv columns, in order):
-        # 0:numSample 1:x1_pix 2:y1_pix 3:x2_pix 4:y2_pix 5:laser_X_m 6:laser_Y_m 7:laser_Z_m
-        # 8:radar_X_m 9:radar_Y_m 10:radar_R_m 11:radar_A_deg 12:radar_D_mps 13:radar_P_db
-        # 14:dataset 15:index 16:Difficult
-        # Select and format as following: [Range,Angle,Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix,y2_pix]
-        box_labels = box_labels[:,[10,11,12,5,6,7,1,2,3,4]].astype(np.float32) 
-
-        encoded_label = self.encode(box_labels).copy()      
-
-        # Read the Radar FFT data
-        # radar_name = os.path.join(self.root_dir,'radar_FFT',"fft_{:06d}.npy".format(sample_id))
-        # input = np.load(radar_name,allow_pickle=True)
-        # radar_FFT = np.concatenate([input.real,input.imag],axis=2)
-        radar_FFT = self.get_RD(index)
-        if(self.statistics is not None):
-            for i in range(len(self.statistics['input_mean'])):
-                radar_FFT[...,i] -= self.statistics['input_mean'][i]
-                radar_FFT[...,i] /= self.statistics['input_std'][i]
-        radar_FFT = np.transpose(radar_FFT, axes=(2,0,1))
-        data_dict = {'RD': radar_FFT, 'encoded_label': encoded_label, 'box_label': box_labels}
-        
-        # Read the segmentation map
-        if self.segmentation_head:
-            segmap_name = os.path.join(self.root_dir,'radar_Freespace',"freespace_{:06d}.png".format(sample_id))
-            segmap = Image.open(segmap_name) # [512,900]
-            # 512 pix for the range and 900 pix for the horizontal FOV (180deg)
-            # We crop the fov to 89.6deg
-            segmap = self.crop(segmap)
-            # and we resize to half of its size
-            segmap = np.asarray(self.resize(segmap))==255
-            data_dict.update({'seg_label': segmap})
-   
-        return data_dict # radar_FFT, segmap, encoded_label, box_labels
-    
     def set_features(self, features):
         self.features = features
 
-    def encode(self,labels):
-        geometry = {
-            "ranges": [512,896,1],
-            "resolution": [0.201171875,0.2],
-            "size": 3
-        }
-        self.statistics = {
-            "input_mean":[-2.6244e-03, -2.1335e-01,  1.8789e-02, -1.4427e+00, -3.7618e-01,
-                1.3594e+00, -2.2987e-01,  1.2244e-01,  1.7359e+00, -6.5345e-01,
-                3.7976e-01,  5.5521e+00,  7.7462e-01, -1.5589e+00, -7.2473e-01,
-                1.5182e+00, -3.7189e-01, -8.8332e-02, -1.6194e-01,  1.0984e+00,
-                9.9929e-01, -1.0495e+00,  1.9972e+00,  9.2869e-01,  1.8991e+00,
-               -2.3772e-01,  2.0000e+00,  7.7737e-01,  1.3239e+00,  1.1817e+00,
-               -6.9696e-01,  4.4288e-01],
-            "input_std":[20775.3809, 23085.5000, 23017.6387, 14548.6357, 32133.5547, 28838.8047,
-                27195.8945, 33103.7148, 32181.5273, 35022.1797, 31259.1895, 36684.6133,
-                33552.9258, 25958.7539, 29532.6230, 32646.8984, 20728.3320, 23160.8828,
-                23069.0449, 14915.9053, 32149.6172, 28958.5840, 27210.8652, 33005.6602,
-                31905.9336, 35124.9180, 31258.4316, 31086.0273, 33628.5352, 25950.2363,
-                29445.2598, 32885.7422],
-            "reg_mean":[0.4048094369863972,0.3997392847799934],
-            "reg_std":[0.6968599580482511,0.6942950877813826]
-        }
-        regression_layer = 2
-
-        INPUT_DIM = (geometry['ranges'][0],geometry['ranges'][1],geometry['ranges'][2])
-        OUTPUT_DIM = (regression_layer + 1, INPUT_DIM[0] // 4 , INPUT_DIM[1] // 4 )
-
-        map = np.zeros(OUTPUT_DIM )
-
-        for lab in labels:
-            # [Range, Angle, Doppler,laser_X_m,laser_Y_m,laser_Z_m,x1_pix,y1_pix,x2_pix	,y2_pix]
-
-            if(lab[0]==-1):
-                continue
-
-            range_bin = int(np.clip(lab[0]/geometry['resolution'][0]/4,0,OUTPUT_DIM[1]))
-            range_mod = lab[0] - range_bin*geometry['resolution'][0]*4
-
-            # ANgle and deg
-            angle_bin = int(np.clip(np.floor(lab[1]/geometry['resolution'][1]/4 + OUTPUT_DIM[2]/2),0,OUTPUT_DIM[2]))
-            angle_mod = lab[1] - (angle_bin- OUTPUT_DIM[2]/2)*geometry['resolution'][1]*4 
-
-            if(geometry['size']==1):
-                map[0,range_bin,angle_bin] = 1
-                map[1,range_bin,angle_bin] = (range_mod - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
-                map[2,range_bin,angle_bin] = (angle_mod - self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
-            else:
-
-                s = int((geometry['size']-1)/2)
-                r_lin = np.linspace(geometry['resolution'][0]*s, -geometry['resolution'][0]*s,
-                                    geometry['size'])*4
-                a_lin = np.linspace(geometry['resolution'][1]*s, -geometry['resolution'][1]*s,
-                                    geometry['size'])*4
-                
-                px_a, px_r = np.meshgrid(a_lin, r_lin)
-
-                if(angle_bin>=s and angle_bin<(OUTPUT_DIM[2]-s)):
-                    map[0,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = 1
-                    map[1,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = ((px_r+range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
-                    map[2,range_bin-s:range_bin+(s+1),angle_bin-s:angle_bin+(s+1)] = ((px_a + angle_mod) - self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1] 
-                elif(angle_bin<s):
-                    map[0,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = 1
-                    map[1,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = ((px_r[:,s-angle_bin:] + range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
-                    map[2,range_bin-s:range_bin+(s+1),0:angle_bin+(s+1)] = ((px_a[:,s-angle_bin:] + angle_mod)- self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
-                    
-                elif(angle_bin>=OUTPUT_DIM[2]):
-                    end = s+(OUTPUT_DIM[2]-angle_bin)
-                    map[0,range_bin-s:range_bin+(s+1),angle_bin-s:] = 1
-                    map[1,range_bin-s:range_bin+(s+1),angle_bin-s:] = ((px_r[:,:end] + range_mod) - self.statistics['reg_mean'][0]) / self.statistics['reg_std'][0]
-                    map[2,range_bin-s:range_bin+(s+1),angle_bin-s:] = ((px_a[:,:end] + angle_mod)- self.statistics['reg_mean'][1]) / self.statistics['reg_std'][1]
-
-        return map
-    
 
 
 class RADIalRaw(Dataset):
