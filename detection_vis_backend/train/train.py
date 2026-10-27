@@ -254,7 +254,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             split_samples_info['val'] = [samples_info[id] for id in val_ids]
             split_samples_info['test'] = [samples_info[id] for id in test_ids]           
         else:
-            ValueError("Split type not supported. Please choose following: 'sequence', 'random', 'original(some of the datasets has a built-in split).")        
+            raise ValueError(f"splitmode {train_config['dataloader']['splitmode']!r} not supported. Please choose "
+                             "'sequence', 'random' or 'original' (some of the datasets have a built-in split).")
     else:
         if dataset_type == "RADIal":
             # valeo's sequence split over ONE parser; a per-split adapter builds the samples

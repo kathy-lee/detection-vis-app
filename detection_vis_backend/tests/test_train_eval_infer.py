@@ -250,6 +250,16 @@ def test_sequence_split_requires_train_and_val(tmp_path):
         CreateDataLoaders([f50, f22], ["RA"], {"class": "RECORD"}, train_config, str(tmp_path))
 
 
+@pytest.mark.parametrize("mode", ["", "sequential"])
+def test_unknown_splitmode_raises(tmp_path, mode):
+    """The shipped train configs leave splitmode "" for the caller to fill in. A caller
+    that does not must get an error naming the split mode, not an empty train loader."""
+    datafile = {"id": 1, "parse": "CARRADA", "name": "x"}
+    train_config = {"dataloader": {"splitmode": mode}}
+    with pytest.raises(ValueError, match="splitmode"):
+        CreateDataLoaders([datafile], ["RA"], {"class": "RECORD"}, train_config, str(tmp_path))
+
+
 def test_train_accepts_progress_cb():
     params = inspect.signature(train).parameters
     assert "progress_cb" in params
