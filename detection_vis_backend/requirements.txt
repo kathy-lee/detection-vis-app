@@ -13,7 +13,11 @@ bagpy
 openradar
 scipy
 scikit-learn
-torchvision
+# The CUDA 12.1 builds the project runs (PyPI's torch 2.1.2 is the CUDA 11.8 build); the
+# mamba-ssm and causal-conv1d wheels below are compiled against exactly this torch.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.1.2
+torchvision==0.16.2
 pkbar
 rq
 redis
