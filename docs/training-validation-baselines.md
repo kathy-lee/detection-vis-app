@@ -77,6 +77,7 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
 | 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
 | 19 | T_RODNet | CARRADA (RA) | mIoU / mDice | **43.5 / 53.6** (IoU bg/ped/cyc/car 99.9/25.4/9.5/39.4; Dice 99.9/40.5/17.4/56.6) | T-RODNet Table II |
+| 20 | SSMRadNet | RADIal (raw ADC) | freespace mIoU; detection F1 / mAP / mAR | **0.79; 0.77 / 0.83 / 0.71** (RE 0.14 m, AE 0.15°; 0.31 M params, 1.67 GMACs), on a random 0.8 / 0.2 frame split; detection IoU threshold not stated | SSMRadNet Table 4 |
 
 Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
@@ -133,6 +134,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 | 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
 | 19 | T_RODNet / CARRADA / RA | **41.01 / 49.91** test mIoU/mDice (1 seed, official split, final-epoch weights; IoU bg/ped/cyc/car 99.9/21.3/5.1/37.7, Dice 99.9/35.2/9.8/54.8). Val, same weights: 46.06 / 57.02. **Recipe has three choices the paper does not state** — MSE on one-hot masks, flips off, 100 epochs testing the final weights (see the T-RODNet / CARRADA section) | 43.5 / 53.6 | not possible (no weights shipped) | **below the pass bar** (−2.5 / −3.7 points; cyclist IoU 5.1 vs 9.5) — open, a flips-on or weighted-CE+Dice variant is pending | `T_RODNet_CARRADA_Oct-23-2026_23:15:53` (epochs 1–79) + `T_RODNet_CARRADA_Oct-24-2026_22:22:55` (epochs 80–99) + `T_RODNet_CARRADA_Oct-25-2026_09:04:47` (epoch 100 + test) |
+| 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE/AE not computed) | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -166,7 +168,9 @@ validation — real elapsed time, not GPU-busy time).
 | 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
 | 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
 | 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
-| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | 0.82 G | 100 | **23.9 h** (+ a 1.5 h kill/resume gap) | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
+| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | 0.82 G | 100 | **23.9 h** | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
+| 19 | T_RODNet / CARRADA RA | 156.8 M | 0.84 G | 100 | **18.8 h** | 11 m (≈9.5 train + 1.5 val; 75 s test pass once) |
+| 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -835,6 +839,56 @@ Everything else is the CRUW recipe: Adam 1e-4, cosine schedule, seed 3, batch 8.
   100 the save failed when `/data` filled up, which left the final checkpoint
   truncated. The last epoch was re-trained from the intact epoch-99 checkpoint
   (val 46.08 → 46.06) and that run produced the test result.
+
+### SSMRadNet / RADIal (raw ADC): 70.4 mIoU, 58.2 / 53.7 mAP / mAR — not reproduced (2026-11-03)
+
+`SSMRadNet_RADIal_Nov-02-2026_09:47:10`, 200 epochs, 2026-11-02 09:47 → 2026-11-03
+00:58. The network is a port of the authors' `FFTRadNet/model/SSMRadNet.py` (upstream
+commit 39b982b), 306,832 parameters against the paper's 0.31 M. All 8252 labelled frames
+have their ADC file; the random 0.8 / 0.2 split gives 6601 train / 1651 val frames, and
+val is also the reported set, so the final (epoch-200) weights are scored, with no
+checkpoint selection.
+
+| metric | paper Table 4 | ours, det. IoU 0.5 | ours, det. IoU 0.1 |
+|---|---|---|---|
+| freespace mIoU (0–50 m, rows [:124]) | 0.79 | **0.704** | (same) |
+| detection mAP | 0.83 | **0.582** | 0.691 |
+| detection mAR | 0.71 | **0.537** | 0.650 |
+| detection F1 | 0.77 | **0.559** | 0.670 |
+| range / azimuth error | 0.14 m / 0.15° | not computed (the app's full scorer has no RE/AE) | |
+
+Scored with the app's FFTRadNet full evaluation: decode at 0.05, `GetFullMetrics`
+sweeping 0.1–0.9, range 5–100 m. The paper does not give its detection IoU threshold,
+and the authors' scripts disagree (`run_FullEvaluation` defaults to 0.1,
+`3-Evaluation_RADFE.py` uses 0.5, `3-Evaluation.py` 0.001), so both 0.5 (this app and
+FFTRadNet) and 0.1 are reported.
+
+- **Verdict.** Below the pass bar (mIoU, mAP and mAR each within about 2 points) on every
+  metric, even at the lenient IoU 0.1.
+- **Freespace is close to a fixed shape.** A single mean-label mask, the same for every
+  frame, scores 0.690 on 0–50 m; the network gets 0.704. An epoch-30 check found each
+  prediction overlapping the mean prediction at IoU 0.887, while range- and angle-flipped
+  predictions scored far lower, so the output is aligned but barely frame-specific.
+- **Overfitting.** Val loss bottomed at 306 at epoch 30 and rose to 586 by epoch 200,
+  while the per-epoch val mAP (single 0.2 threshold) kept rising, 0.354 → 0.504. A
+  different checkpoint could score differently; choosing one on val would inflate it.
+- **Split.** Random frame split, as the paper; neighbouring frames of one sequence sit
+  on both sides, so this is not comparable to row 1's sequence split.
+- **Settings the paper does not give, and where ours came from:**
+  - loss weights [2, 100, 100] and step LR ×0.9 every 10 epochs, seed 3, from the
+    authors' `ADC_config.json` (an unrelated config); Adam 1e-4, weight decay 5e-6,
+    batch 8, 200 epochs and the Jaccard freespace loss are the paper's Table 2;
+  - regression loss is plain L1: the config's `"smoothL1Loss"` spelling falls back to
+    L1 in the authors' code, against the paper's smooth-L1;
+  - detection and freespace trained jointly, on FFTRadNet's label geometry;
+  - positional encodings off.
+- **The authors' only training loop differs.** `task_01_experiment_SSMRadNet.ipynb`
+  trains freespace alone with Jaccard only (122,677 parameters), on a 512×512 crop
+  resized to 128×128, lr 5e-4, batch 4, positional encodings on, input ÷2^12. No
+  released code trains or scores the detection head, so how Table 4's detection numbers
+  were produced cannot be checked. A freespace-only run in the notebook setup was
+  considered and not run: it could not speak to the detection gap.
+- **Cost.** 4.6 min per epoch including val, 15.2 h in all; checkpoints 3.4 MB.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
