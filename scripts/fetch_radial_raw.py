@@ -120,10 +120,10 @@ def main():
         shutil.rmtree(unpack_dir)
         print(f"    {record}: {written} benchmark frames extracted\n", flush=True)
 
-    print(f"===== radar_ADC holds {count_adc_files(out_dir)} .npy files "
+    print(f"\n===== radar_ADC holds {count_adc_files(out_dir)} .npy files "
           f"of {labels.numSample.nunique()} benchmark frames =====")
-    for record, why in failed:
-        print(f"  not finished: {record} ({why})")
+    # for record, why in failed:
+    #     print(f"  not finished: {record} ({why})")
     return 1 if failed else 0
 
 

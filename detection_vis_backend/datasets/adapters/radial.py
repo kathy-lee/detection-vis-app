@@ -166,7 +166,9 @@ class FFTRadNetOnRADIal(SampleAdapter):
 def decode_radial_adc(raw):
     """(1048576, 4) int16 chip streams -> float32 (512 samples, 256 chirps, 32): the 16 Rx
     (chips 3, 0, 1, 2, each I/Q interleaved) real parts, then imaginary parts. As the
-    SSMRadNet authors' convert_radar_cube: no DC removal, no window, no scaling."""
+    SSMRadNet authors' convert_radar_cube in FFTRadNet/dataset/dataset.py: no DC removal,
+    no window, no scaling. Their freespace notebook's copy divides by 2**12; the network's
+    per-sample input LayerNorm cancels that scale almost entirely."""
     frames = [np.reshape(raw[0::2, c] + 1j * raw[1::2, c], (512, 4, 256), order='F').transpose((0, 2, 1))
               for c in range(4)]
     cube = np.concatenate([frames[3], frames[0], frames[1], frames[2]], axis=2)

@@ -865,6 +865,13 @@ FFTRadNet) and 0.1 are reported.
 
 - **Verdict.** Below the pass bar (mIoU, mAP and mAR each within about 2 points) on every
   metric, even at the lenient IoU 0.1.
+- **Port and input checked identical to the authors' code (2026-11-03).** The final
+  weights loaded into the authors' `SSMRadNet.py` and into our port give outputs that
+  differ by exactly 0 on 4 val frames, at every encoder stage and at both decoder outputs
+  (freespace compared at the decoder's 128×128, before our resize). Our input tensor
+  equals their `FFTRadNet/dataset/dataset.py` `convert_radar_cube` output exactly; their
+  notebook's ÷2^12 changes 0.02% of freespace pixels on our weights. The gap therefore
+  lies in what was not released, not in the port.
 - **Freespace is close to a fixed shape.** A single mean-label mask, the same for every
   frame, scores 0.690 on 0–50 m; the network gets 0.704. An epoch-30 check found each
   prediction overlapping the mean prediction at IoU 0.887, while range- and angle-flipped
