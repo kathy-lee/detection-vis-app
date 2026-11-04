@@ -70,6 +70,51 @@ def test_batch_of_one():
     assert out['Segmentation'].shape == (1, 1, 256, 224)
 
 
+def test_default_ssm_is_mamba():
+    from mamba_ssm import Mamba
+
+    from detection_vis_backend.networks.network import SSMRadNet
+
+    radfe = SSMRadNet().RADFe
+    assert type(radfe.fast_ssm_layers[0].ssm) is Mamba
+    assert type(radfe.slow_ssm_layers[0].ssm) is Mamba
+
+
+def test_mamba2_is_selected_through_the_model_config():
+    from mamba_ssm import Mamba2
+
+    from detection_vis_backend.networks.network import NetworkFactory
+
+    net = NetworkFactory().get_instance(
+        "SSMRadNet", {"detection_head": True, "segmentation_head": True, "ssm": "mamba2"})
+    fast, slow = net.RADFe.fast_ssm_layers[0].ssm, net.RADFe.slow_ssm_layers[0].ssm
+    assert type(fast) is Mamba2 and type(slow) is Mamba2
+    # 8 heads each: Mamba2's fused causal conv needs its in-projection width to be a multiple of 8.
+    assert (fast.nheads, fast.headdim) == (8, 8)
+    assert (slow.nheads, slow.headdim) == (8, 16)
+
+
+def test_unknown_ssm_raises():
+    from detection_vis_backend.networks.network import SSMRadNet
+
+    with pytest.raises(ValueError, match="mamba3"):
+        SSMRadNet(ssm="mamba3")
+
+
+@cuda_only
+def test_mamba2_forward_and_backward():
+    from detection_vis_backend.networks.network import SSMRadNet
+
+    net = SSMRadNet(ssm="mamba2").cuda()
+    out = net(torch.randn(2, 512, 256, 32, device="cuda"))
+    assert out['Detection'].shape == (2, 3, 128, 224)
+    assert out['Segmentation'].shape == (2, 1, 256, 224)
+    (out['Detection'].sum() + out['Segmentation'].sum()).backward()
+    # The positional encodings are never added (as upstream), so they get no gradient.
+    grads = [p.grad for n, p in net.named_parameters() if "positional_encoding" not in n]
+    assert all(g is not None and torch.isfinite(g).all() for g in grads)
+
+
 def test_jaccard_is_zero_for_a_perfect_prediction():
     from detection_vis_backend.networks.ssmradnet import JaccardLoss
 

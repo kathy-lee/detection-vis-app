@@ -104,6 +104,51 @@ def test_original_split_without_val_frames_raises(radial_root, tmp_path):  # noq
                           train_config, str(tmp_path))
 
 
+def test_mamba2_loader_workers_start_fresh():
+    from detection_vis_backend.train.train import loader_multiprocessing_context
+    mamba2 = {"class": "SSMRadNet", "ssm": "mamba2"}
+    assert loader_multiprocessing_context(mamba2, 4) == "forkserver"
+    # DataLoader refuses a context without workers.
+    assert loader_multiprocessing_context(mamba2, 0) is None
+    assert loader_multiprocessing_context({"class": "SSMRadNet"}, 4) is None
+    assert loader_multiprocessing_context({"class": "SSMRadNet", "ssm": "mamba"}, 4) is None
+    assert loader_multiprocessing_context({"class": "FFTRadNet"}, 4) is None
+
+
+def test_radial_parser_pickles_without_its_parse_lock(radial_root):  # noqa: F811
+    import pickle
+    from detection_vis_backend.datasets.dataset import DatasetFactory
+    parser = DatasetFactory().get_shared_instance(
+        "RADIal", 9103, parse_args=(9103, str(radial_root.parent), radial_root.name, ""))
+    assert hasattr(parser, "_parse_lock")
+    copy = pickle.loads(pickle.dumps(parser))
+    assert not hasattr(copy, "_parse_lock")
+    assert hasattr(parser, "_parse_lock")
+    assert copy.sample_keys == parser.sample_keys
+
+
+def test_mamba2_loaders_use_forkserver_workers(radial_root, tmp_path):  # noqa: F811
+    # Forked workers inherit Triton's LLVM state from a process that already ran Mamba2 and
+    # abort ("LLVM ERROR: pthread_join failed"); forkserver workers start clean. Iterating
+    # also proves the adapter pickles, which forkserver needs.
+    from detection_vis_backend.datasets.dataset import DatasetFactory
+    from detection_vis_backend.train.train import CreateDataLoaders
+    with open(os.path.join(BACKEND, "train", "SSMRadNet_train_config.json")) as f:
+        train_config = json.load(f)
+    for split in ("train", "val"):
+        train_config["dataloader"][split]["num_workers"] = 1
+        train_config["dataloader"][split]["batch_size"] = 1
+    datafile = {"id": 9102, "parse": "RADIal", "name": radial_root.name, "path": str(radial_root.parent), "config": ""}
+    DatasetFactory().get_shared_instance("RADIal", 9102, parse_args=(9102, datafile["path"], datafile["name"], ""))
+    train_loader, val_loader, _ = CreateDataLoaders(
+        [datafile], ["ADC"], {"class": "SSMRadNet", "segmentation_head": True, "ssm": "mamba2"},
+        train_config, str(tmp_path))
+    for loader in (train_loader, val_loader):
+        assert loader.multiprocessing_context.get_start_method() == "forkserver"
+        batch = next(iter(loader))
+        assert batch["ADC"].shape[1:] == (512, 256, 32)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Mamba kernels need CUDA")
 def test_val_evaluation_reads_adc(parser):  # noqa: F811
     from torch.utils.data import DataLoader

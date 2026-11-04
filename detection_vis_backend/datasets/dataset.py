@@ -597,7 +597,15 @@ class RADIal(Dataset):
 
         self.frame_sync = 8252
         self.features = ['image', 'lidarPC', 'adc', 'radarPC']
-        
+
+    def __getstate__(self):
+        # DataLoader workers started fresh (forkserver, needed for SSMRadNet with Mamba2)
+        # receive the dataset pickled; DatasetFactory's per-instance parse lock is not
+        # picklable and means nothing outside the app process.
+        state = self.__dict__.copy()
+        state.pop('_parse_lock', None)
+        return state
+
     def parse(self, file_id, file_path, file_name, config, difficult=True):
         require_shared_instance(self)
         def get_sorted_filenames(directory):

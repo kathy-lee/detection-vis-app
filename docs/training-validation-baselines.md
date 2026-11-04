@@ -77,7 +77,7 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
 | 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
 | 19 | T_RODNet | CARRADA (RA) | mIoU / mDice | **43.5 / 53.6** (IoU bg/ped/cyc/car 99.9/25.4/9.5/39.4; Dice 99.9/40.5/17.4/56.6) | T-RODNet Table II |
-| 20 | SSMRadNet | RADIal (raw ADC) | freespace mIoU; detection F1 / mAP / mAR | **0.79; 0.77 / 0.83 / 0.71** (RE 0.14 m, AE 0.15°; 0.31 M params, 1.67 GMACs), on a random 0.8 / 0.2 frame split; detection IoU threshold not stated | SSMRadNet Table 4 |
+| 20 | SSMRadNet | RADIal (raw ADC) | freespace mIoU; detection F1 / mAP / mAR | **0.79; 0.77 / 0.83 / 0.71** (range error (RE) 0.14 m, azimuth angle error (AE) 0.15°; 0.31 M params, 1.67 GMACs), on a random 0.8 / 0.2 frame split; detection IoU threshold not stated | SSMRadNet Table 4 |
 
 Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
@@ -134,7 +134,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 | 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
 | 19 | T_RODNet / CARRADA / RA | **41.01 / 49.91** test mIoU/mDice (1 seed, official split, final-epoch weights; IoU bg/ped/cyc/car 99.9/21.3/5.1/37.7, Dice 99.9/35.2/9.8/54.8). Val, same weights: 46.06 / 57.02. **Recipe has three choices the paper does not state** — MSE on one-hot masks, flips off, 100 epochs testing the final weights (see the T-RODNet / CARRADA section) | 43.5 / 53.6 | not possible (no weights shipped) | **below the pass bar** (−2.5 / −3.7 points; cyclist IoU 5.1 vs 9.5) — open, a flips-on or weighted-CE+Dice variant is pending | `T_RODNet_CARRADA_Oct-23-2026_23:15:53` (epochs 1–79) + `T_RODNet_CARRADA_Oct-24-2026_22:22:55` (epochs 80–99) + `T_RODNet_CARRADA_Oct-25-2026_09:04:47` (epoch 100 + test) |
-| 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE/AE not computed) | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
+| 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE / AE 0.162 m / 0.249° @ IoU 0.5). Mamba-2 variant: within 1–3 points, see the section | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -855,7 +855,10 @@ checkpoint selection.
 | detection mAP | 0.83 | **0.582** | 0.691 |
 | detection mAR | 0.71 | **0.537** | 0.650 |
 | detection F1 | 0.77 | **0.559** | 0.670 |
-| range / azimuth error | 0.14 m / 0.15° | not computed (the app's full scorer has no RE/AE) | |
+| range error (RE) / azimuth angle error (AE) | 0.14 m / 0.15° | **0.162 m / 0.249°** | 0.224 m / 0.385° |
+
+RE and AE are mean absolute errors over the matched detections only (a looser IoU
+threshold admits looser matches, hence the larger errors at 0.1).
 
 Scored with the app's FFTRadNet full evaluation: decode at 0.05, `GetFullMetrics`
 sweeping 0.1–0.9, range 5–100 m. The paper does not give its detection IoU threshold,
@@ -896,6 +899,32 @@ FFTRadNet) and 0.1 are reported.
   were produced cannot be checked. A freespace-only run in the notebook setup was
   considered and not run: it could not speak to the detection gap.
 - **Cost.** 4.6 min per epoch including val, 15.2 h in all; checkpoints 3.4 MB.
+
+#### Variant: Mamba-2 layers (2026-11-04) — no change
+
+`SSMRadNet_RADIal_Nov-03-2026_22:00:22`: the run above repeated unchanged (same configs,
+seed 3, and byte-identical train / val split files) except `"ssm": "mamba2"` in the model
+config, which swaps both Mamba layers for Mamba-2 (8 heads each). Not the paper's model.
+Final weights, same scorer:
+
+| metric | paper | Mamba (above) | Mamba-2 |
+|---|---|---|---|
+| freespace mIoU (0–50 m) | 0.79 | 0.704 | 0.704 |
+| mAP / mAR / F1 @ IoU 0.5 | 0.83 / 0.71 / 0.77 | 0.582 / 0.537 / 0.559 | 0.574 / 0.553 / 0.563 |
+| RE / AE @ IoU 0.5 | 0.14 m / 0.15° | 0.162 m / 0.249° | 0.160 m / 0.251° |
+| mAP / mAR / F1 @ IoU 0.1 | — | 0.691 / 0.650 / 0.670 | 0.698 / 0.680 / 0.689 |
+| val loss, min → final | — | 306 (epoch 30) → 586 | 307 (about epoch 30) → 705 |
+
+- **Freespace is identical** and detection moves by 1–3 points, within what one seed per
+  run can resolve; the layer type is not what holds the result below the paper.
+- **Data loading needed fresh worker processes.** Mamba-2's kernels are Triton-compiled,
+  and DataLoader workers forked after the first training step inherit LLVM's thread
+  state and abort (`LLVM ERROR: pthread_join failed`; two launches died in epoch 1). The
+  loaders now start forkserver workers for Mamba-2 (`loader_multiprocessing_context`
+  in `train/train.py`), and the RADIal parser pickles without its parse lock.
+- **Cost.** 15.5 h for 200 epochs, about the same as Mamba: the faster Mamba-2 layer
+  does not shorten an epoch dominated by data loading and validation. Checkpoints 3.3 MB
+  (Mamba-2 has fewer parameters: 9,176 / 30,296 per layer against 12,992 / 38,784).
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 

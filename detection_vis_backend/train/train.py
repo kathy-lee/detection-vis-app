@@ -98,6 +98,17 @@ class WeightEMA:
                     v += (1 - d) * msd[k].detach()
 
 
+def loader_multiprocessing_context(model_config, num_workers):
+    """How DataLoader workers start. SSMRadNet with Mamba2 needs fresh processes: Mamba2's
+    kernels are Triton-compiled, and a worker forked from a process that already ran them
+    inherits LLVM's thread state without its threads and aborts ("LLVM ERROR: pthread_join
+    failed"). None keeps the default fork, which DataLoader also requires when there are no
+    workers."""
+    if num_workers > 0 and model_config.get('class') == 'SSMRadNet' and model_config.get('ssm') == 'mamba2':
+        return 'forkserver'
+    return None
+
+
 def random_split_sizes(n_samples, split):
     """(n_train, n_val, n_test) for split_random fractions. Each size is floored; the
     frames that rounding leaves over go to test, except when test was asked to be empty
@@ -393,6 +404,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['train']['batch_size'],
                         shuffle=True,
                         num_workers=train_config['dataloader']['train']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['train']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['train'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
@@ -400,6 +413,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['val']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['val']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['val']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['val'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
@@ -413,6 +428,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['test']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['test']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['test'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
