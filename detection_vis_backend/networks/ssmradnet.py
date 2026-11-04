@@ -9,7 +9,7 @@ and the pooled chirp features squeeze only their last axis.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mamba_ssm import Mamba
+from mamba_ssm import Mamba, Mamba2
 
 
 class JaccardLoss(nn.Module):
@@ -26,11 +26,21 @@ class JaccardLoss(nn.Module):
 
 
 class MambaSSMBlock(nn.Module):
-    """Mamba SSM followed by a projection back to d_model."""
+    """Mamba SSM followed by a projection back to d_model. ssm="mamba" is the authors' layer;
+    "mamba2" swaps in Mamba-2, a variant that is not in the paper."""
 
-    def __init__(self, d_model, d_state=16, d_conv=4, expand=2):
+    def __init__(self, d_model, d_state=16, d_conv=4, expand=2, ssm="mamba"):
         super().__init__()
-        self.ssm = Mamba(d_model, d_state, d_conv=d_conv, expand=expand)
+        if ssm == "mamba":
+            self.ssm = Mamba(d_model, d_state, d_conv=d_conv, expand=expand)
+        elif ssm == "mamba2":
+            # 8 heads: Mamba2's fused causal conv needs its in-projection width
+            # (2*inner + 2*d_state + heads) to be a multiple of 8, which at these narrow
+            # widths (32 and 64) only 8 heads give.
+            self.ssm = Mamba2(d_model, d_state=d_state, d_conv=d_conv, expand=expand,
+                              headdim=expand * d_model // 8)
+        else:
+            raise ValueError(f"unknown ssm {ssm!r}: expected 'mamba' or 'mamba2'")
         self.out_proj = nn.Linear(d_model, d_model)
 
     def forward(self, x):
@@ -43,7 +53,7 @@ class RADFE(nn.Module):
 
     def __init__(self, fast_time_len=512, fast_time_layers=1, fast_time_linear_dims=(32,),
                  slow_time_len=256, slow_time_layers=1, slow_time_linear_dims=(64,),
-                 conv_channels=8, radar_channels=32, dropout_prob=0.3):
+                 conv_channels=8, radar_channels=32, dropout_prob=0.3, ssm="mamba"):
         super().__init__()
         self.channels = radar_channels
         # Stored but never applied, as upstream.
@@ -62,7 +72,8 @@ class RADFE(nn.Module):
         # Unused upstream too (the addition is commented out); kept so checkpoint keys match.
         self.fast_time_positional_encoding = nn.Parameter(torch.zeros(1, self.fast_time_len, self.fast_time_dim))
         self.fast_ssm_layers = nn.ModuleList([
-            MambaSSMBlock(self.fast_time_dim, d_state=32, d_conv=4, expand=2) for _ in range(fast_time_layers)])
+            MambaSSMBlock(self.fast_time_dim, d_state=32, d_conv=4, expand=2, ssm=ssm)
+            for _ in range(fast_time_layers)])
 
         self.slow_linears = nn.ModuleList()
         self.slow_norms = nn.ModuleList()
@@ -76,7 +87,8 @@ class RADFE(nn.Module):
         self.slow_time_len = slow_time_len
         self.slow_time_positional_encoding = nn.Parameter(torch.zeros(1, self.slow_time_len, self.slow_time_dim))
         self.slow_ssm_layers = nn.ModuleList([
-            MambaSSMBlock(self.slow_time_dim, d_state=32, d_conv=4, expand=2) for _ in range(slow_time_layers)])
+            MambaSSMBlock(self.slow_time_dim, d_state=32, d_conv=4, expand=2, ssm=ssm)
+            for _ in range(slow_time_layers)])
 
         self.dim2D = [32, 32]
         self.project = nn.Conv1d(2 * self.slow_time_dim, self.dim2D[0] * self.dim2D[1], kernel_size=1)
