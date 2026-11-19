@@ -186,6 +186,68 @@ reference training code only RadarCrossAttention's uses AMP (`train.py:61,151`);
 an `fp16` switch that defaults to off, and the others train in FP32. RadarPillars has no
 official code to check.
 
+**Inference cost.** Measured 2026-11-19 with `scripts/measure_inference_cost.py` from each
+row's last checkpoint, on the RTX 3090 with nothing else running: compute in giga
+floating-point operations (GFLOPs), latency of each pipeline stage in milliseconds, and peak
+GPU memory in mebibytes (MiB). No retraining was involved.
+
+| row | pair | split | samples | GFLOPs | preprocess ms | inference ms | post-process ms | peak MiB |
+|---|------|:---:|-------:|-------:|-------:|-------:|-------:|-------:|
+| 1 | FFTRadNet / RADIal | test | 985 | 143.91 | 41.68 | 16.76 | 0.50 | 325 |
+| 2a | RODNet_CDC / CRUW § | test | 604 | 174.40 | 24.98 | 15.76 | **1172.16** | 279 |
+| 3 | RECORD / CRUW | test | 1000 | 5.02 | 18.47 | 52.72 | 626.65 | 146 |
+| 4b | RECORD / CARRADA RD | test | 1000 | 6.07 | 2.42 | 44.51 | 0.07 | 147 |
+| 4a | RECORD / CARRADA RA | test | 1000 | 8.17 | 4.70 | 100.70 | 0.12 | 160 |
+| 9 | MVRECORD / CARRADA | test | 1000 | 19.69 | 14.62 | **185.84** | 0.17 | 175 |
+| 10 | RADDet / RADDetDataset | test | 1000 | 24.30 | 60.08 | 9.52 | 0.57 | 206 |
+| 11 | DAROD / CARRADA | test | 1000 | 6.27 | 1.09 | 2.83 | 1.37 | 152 |
+| 12 | DAROD / RADDetDataset | test | 1000 | 5.71 | **0.79** | **2.57** | 1.90 | 152 |
+| 13 | RAMP_CNN / UWCR § | test | 505 | **1024.17** | 238.07 | 92.63 | **1183.34** | **971** |
+| 14 | RadarCrossAttention / CARRADA | test | 906 | 21.49 | 3.87 | 3.64 | 1.14 | **95** |
+| 15 | PointPillar / ViewOfDelft | val | 1000 | 16.34 | 17.36 | 3.19 | 11.70 | 145 |
+| 16 | RadarPillar / ViewOfDelft | val | 1000 | **1.65** | 20.58 | 2.67 | 16.30 | 180 |
+| 17 | TransRAD / RADDetDataset | test | 1000 | 2.15 | **255.92** | 16.28 | 0.71 | 226 |
+| 18 | T_RODNet / CRUW § | test | 494 | 176.95 | 20.95 | 33.84 | **1189.26** | 875 |
+| 19 | T_RODNet / CARRADA RA | test | 1000 | 172.03 | 5.22 | 30.43 | 0.12 | 870 |
+| 20 | SSMRadNet / RADIal (ADC) | val | 1000 | 4.55 | 36.66 | 5.23 | 0.53 | 304 |
+
+§ A sample is a window of frames, not one frame: each forward pass takes 16 frames, and the
+post-processing decodes the 8 frames the window advances by. GFLOPs and inference time are
+therefore per 16-frame window, and the post-processing time covers 8 frames (about 147 ms per
+frame). Row 3 also takes a window (12 frames) but decodes only its last frame, so its
+post-processing time is for one frame.
+
+How it was measured:
+
+- **Samples.** Batch size 1, FP32, real frames from the test split, or the validation split
+  where a run has no test split (rows 15, 16, 20). The first 50 samples are warm-up and
+  discarded; up to 1,000 are then timed, fewer where the split runs out. Where a row lists two
+  or three run directories, the latest one was measured.
+- **GFLOPs.** `torch.utils.flop_counter.FlopCounterMode` on one real sample at the model's
+  native input size, with one fused multiply-add counted as one FLOP (so the figure equals
+  giga multiply-accumulate operations, GMACs). No operation went uncounted in any row. Row
+  20's 4.55 is 2.11 profiled plus 2.44 added from a formula for Mamba's selective scan, which
+  the profiler cannot see; that formula follows VMamba's convention and has not been checked
+  against VMamba's source.
+- **Latency.** Median per sample, as wall-clock time with `torch.cuda.synchronize()` at each
+  stage boundary. Preprocessing is the dataset's loading and transforms, timed in the
+  measuring process without DataLoader workers; inference is the forward pass; post-processing
+  is what the row's evaluation function does to turn outputs into detections or masks. DAROD
+  decodes boxes and runs non-maximum suppression (NMS) inside `forward()`; that time is moved
+  to post-processing.
+- **Peak memory.** `torch.cuda.max_memory_allocated()` over the forward passes only, after
+  `torch.cuda.reset_peak_memory_stats()`, in a fresh process per model. It counts tensors
+  PyTorch allocated, weights included, not what `nvidia-smi` shows.
+
+Row 1's 143.91 agrees within 2% with the 146.58 GMACs the SSMRadNet paper (Table 4) measured
+for FFT-RadNet. The FFTRadNet paper's own Table 4 gives 584 GFLOPS, about four times that;
+neither the paper nor its code says how it was counted.
+
+**Post-processing dominates on CRUW and UWCR** (rows 2a, 3, 13, 18): picking peaks and
+suppressing them by location is a Python loop on the CPU, and takes 147 ms to 627 ms per frame
+against 16 ms to 93 ms for the forward pass. Preprocessing is the largest stage for rows 1,
+10, 15, 16, 17 and 20, and at 256 ms row 17's is sixteen times its forward pass.
+
 **Parameter counts double as a free implementation check.** Three match their papers closely
 enough to be evidence: FFTRadNet **3.790 M** against Table 4's 3.79 M (exact); RadarPillar
 **0.184 M** against 0.27 M with PointPillar at **4.835 M**, reproducing the paper's ~26×
