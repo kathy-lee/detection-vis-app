@@ -152,30 +152,39 @@ Measured 2026-09-09 from the runs above: parameter count built from each run's o
 timestamped line of its `train_log.log` (so it includes dataset parse and per-epoch
 validation — real elapsed time, not GPU-busy time).
 
-| row | pair | params | ckpt | epochs | wall | per-epoch |
-|---|------|-------:|-----:|-------:|-----:|----------:|
-| 1 | FFTRadNet / RADIal | 3.79 M | 44 M | 100 | 11.4 h | 6.8 m |
-| 2a | RODNet_CDC / CRUW | 34.52 M | 395 M | 6 † | 3.3 h | 32.6 m |
-| 3 | RECORD / CRUW | 0.70 M | 8 M | 5 † | 5.3 h | **63.6 m** |
-| 4b | RECORD / CARRADA RD | 0.70 M | 8 M | 72 ‡ | 6.2 h | 5.2 m |
-| 4a | RECORD / CARRADA RA | 0.70 M | 8 M | 100 | 16.7 h | 10.0 m |
-| 9 | MVRECORD / CARRADA | 1.97 M | 23 M | 45 † | 14.2 h | 18.9 m |
-| 10 | RADDet / RADDetDataset | 10.75 M | 103 M | 100 | 7.7 h | 4.6 m |
-| 11 | DAROD / CARRADA | 3.45 M | 40 M | 50 | **0.6 h** | **0.7 m** |
-| 12 | DAROD / RADDetDataset | 3.46 M | 40 M | 75 | 0.9 h | 0.7 m |
-| 13 | RAMP_CNN / UWCR | **104.22 M** | **1,193 M** | 22 †‡ | 5.1 h | 13.8 m |
-| 14 | RadarCrossAttention / CARRADA | 11.62 M | 134 M | 80 | 1.1 h | 0.8 m |
-| 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
-| 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
-| 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
-| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | 0.82 G | 100 | **23.9 h** | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
-| 19 | T_RODNet / CARRADA RA | 156.8 M | 0.84 G | 100 | **18.8 h** | 11 m (≈9.5 train + 1.5 val; 75 s test pass once) |
-| 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
+| row | pair | params | precision | ckpt | epochs | wall | per-epoch |
+|---|------|-------:|:---:|-----:|-------:|-----:|----------:|
+| 1 | FFTRadNet / RADIal | 3.79 M | FP32 | 44 M | 100 | 11.4 h | 6.8 m |
+| 2a | RODNet_CDC / CRUW | 34.52 M | FP32 | 395 M | 6 † | 3.3 h | 32.6 m |
+| 3 | RECORD / CRUW | 0.70 M | FP32 | 8 M | 5 † | 5.3 h | **63.6 m** |
+| 4b | RECORD / CARRADA RD | 0.70 M | FP32 | 8 M | 72 ‡ | 6.2 h | 5.2 m |
+| 4a | RECORD / CARRADA RA | 0.70 M | FP32 | 8 M | 100 | 16.7 h | 10.0 m |
+| 9 | MVRECORD / CARRADA | 1.97 M | FP32 | 23 M | 45 † | 14.2 h | 18.9 m |
+| 10 | RADDet / RADDetDataset | 10.75 M | FP32 | 103 M | 100 | 7.7 h | 4.6 m |
+| 11 | DAROD / CARRADA | 3.45 M | FP32 | 40 M | 50 | **0.6 h** | **0.7 m** |
+| 12 | DAROD / RADDetDataset | 3.46 M | FP32 | 40 M | 75 | 0.9 h | 0.7 m |
+| 13 | RAMP_CNN / UWCR | **104.22 M** | FP32 | **1,193 M** | 22 †‡ | 5.1 h | 13.8 m |
+| 14 | RadarCrossAttention / CARRADA | 11.62 M | **train FP16/FP32 (AMP), eval FP32** | 134 M | 80 | 1.1 h | 0.8 m |
+| 15 | PointPillar / ViewOfDelft | 4.84 M | FP32 | 55 M | 80 | 6.2 h | 4.7 m |
+| 16 | RadarPillar / ViewOfDelft | **0.18 M** | FP32 | 2 M | 80 | 9.6 h | 7.2 m |
+| 17 | TransRAD / RADDetDataset | 5.79 M | FP32 | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
+| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | FP32 | 0.82 G | 100 | **23.9 h** | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
+| 19 | T_RODNet / CARRADA RA | 156.8 M | FP32 | 0.84 G | 100 | **18.8 h** | 11 m (≈9.5 train + 1.5 val; 75 s test pass once) |
+| 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | FP32 | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
 Rows 15/16 have no test phase at all: VoD ships no public test split, and `train()` logs
 "No files assigned to the test split".
+
+Precision: FP32 is 32-bit floating point, FP16 16-bit. Every checkpoint stores FP32 weights,
+and evaluation always runs in FP32 (`train/evaluate.py` never enables autocast). Row 14 alone
+trains under automatic mixed precision (AMP: `torch.autocast` with a `GradScaler`, `"amp": true`
+in its train config), which computes most layers in FP16 while keeping FP32 master weights. This
+follows the references: none of the papers in `docs/papers/` states a precision, and of the
+reference training code only RadarCrossAttention's uses AMP (`train.py:61,151`); TransRAD's has
+an `fp16` switch that defaults to off, and the others train in FP32. RadarPillars has no
+official code to check.
 
 **Parameter counts double as a free implementation check.** Three match their papers closely
 enough to be evidence: FFTRadNet **3.790 M** against Table 4's 3.79 M (exact); RadarPillar
