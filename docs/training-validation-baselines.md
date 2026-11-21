@@ -77,6 +77,7 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 17 | TransRAD | RADDetDataset | mAP@0.3 / @0.5 (3D RAD) | **60.16 / 37.77** (authors' checkpoint through their own Test.py; paper Table I 61.90 / 38.76) | TransRAD Table I; `Test_results/AP_Results.txt` in the reference repo |
 | 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
 | 19 | T_RODNet | CARRADA (RA) | mIoU / mDice | **43.5 / 53.6** (IoU bg/ped/cyc/car 99.9/25.4/9.5/39.4; Dice 99.9/40.5/17.4/56.6) | T-RODNet Table II |
+| 20 | SSMRadNet | RADIal (raw ADC) | freespace mIoU; detection F1 / mAP / mAR | **0.79; 0.77 / 0.83 / 0.71** (range error (RE) 0.14 m, azimuth angle error (AE) 0.15°; 0.31 M params, 1.67 GMACs), on a random 0.8 / 0.2 frame split; detection IoU threshold not stated | SSMRadNet Table 4 |
 
 Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
@@ -133,6 +134,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 17 | TransRAD / RADDetDataset | **53.69 / 31.40** test mAP@0.3 / @0.5 (1 seed, official split, best-val-loss EMA weights = epoch 28 of 100; @0.1 67.38 / @0.4 43.81 / @0.6 20.22 / @0.7 10.07) | 61.90 / 38.76 (paper); **60.16 / 37.77** (authors' checkpoint, their Test.py) | **60.11 / 37.73** (authors' checkpoint through OUR adapter, decoder, NMS and evaluator, all 2032 frames; see the TransRAD section) | **within the pass rule, not at parity** (−10.8% / −16.9% vs the authors' checkpoint); port proven at parity, so the gap is the recipe — most likely the missing first training round, see the section | `TransRAD_RADDetDataset_Oct-16-2026_15:10:07` |
 | 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
 | 19 | T_RODNet / CARRADA / RA | **41.01 / 49.91** test mIoU/mDice (1 seed, official split, final-epoch weights; IoU bg/ped/cyc/car 99.9/21.3/5.1/37.7, Dice 99.9/35.2/9.8/54.8). Val, same weights: 46.06 / 57.02. **Recipe has three choices the paper does not state** — MSE on one-hot masks, flips off, 100 epochs testing the final weights (see the T-RODNet / CARRADA section) | 43.5 / 53.6 | not possible (no weights shipped) | **below the pass bar** (−2.5 / −3.7 points; cyclist IoU 5.1 vs 9.5) — open, a flips-on or weighted-CE+Dice variant is pending | `T_RODNet_CARRADA_Oct-23-2026_23:15:53` (epochs 1–79) + `T_RODNet_CARRADA_Oct-24-2026_22:22:55` (epochs 80–99) + `T_RODNet_CARRADA_Oct-25-2026_09:04:47` (epoch 100 + test) |
+| 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE / AE 0.162 m / 0.249° @ IoU 0.5). Mamba-2 variant: within 1–3 points, see the section | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -150,28 +152,101 @@ Measured 2026-09-09 from the runs above: parameter count built from each run's o
 timestamped line of its `train_log.log` (so it includes dataset parse and per-epoch
 validation — real elapsed time, not GPU-busy time).
 
-| row | pair | params | ckpt | epochs | wall | per-epoch |
-|---|------|-------:|-----:|-------:|-----:|----------:|
-| 1 | FFTRadNet / RADIal | 3.79 M | 44 M | 100 | 11.4 h | 6.8 m |
-| 2a | RODNet_CDC / CRUW | 34.52 M | 395 M | 6 † | 3.3 h | 32.6 m |
-| 3 | RECORD / CRUW | 0.70 M | 8 M | 5 † | 5.3 h | **63.6 m** |
-| 4b | RECORD / CARRADA RD | 0.70 M | 8 M | 72 ‡ | 6.2 h | 5.2 m |
-| 4a | RECORD / CARRADA RA | 0.70 M | 8 M | 100 | 16.7 h | 10.0 m |
-| 9 | MVRECORD / CARRADA | 1.97 M | 23 M | 45 † | 14.2 h | 18.9 m |
-| 10 | RADDet / RADDetDataset | 10.75 M | 103 M | 100 | 7.7 h | 4.6 m |
-| 11 | DAROD / CARRADA | 3.45 M | 40 M | 50 | **0.6 h** | **0.7 m** |
-| 12 | DAROD / RADDetDataset | 3.46 M | 40 M | 75 | 0.9 h | 0.7 m |
-| 13 | RAMP_CNN / UWCR | **104.22 M** | **1,193 M** | 22 †‡ | 5.1 h | 13.8 m |
-| 14 | RadarCrossAttention / CARRADA | 11.62 M | 134 M | 80 | 1.1 h | 0.8 m |
-| 15 | PointPillar / ViewOfDelft | 4.84 M | 55 M | 80 | 6.2 h | 4.7 m |
-| 16 | RadarPillar / ViewOfDelft | **0.18 M** | 2 M | 80 | 9.6 h | 7.2 m |
-| 17 | TransRAD / RADDetDataset | 5.79 M | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
-| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | 0.82 G | 100 | **23.9 h** (+ a 1.5 h kill/resume gap) | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
+| row | pair | params | precision | ckpt | epochs | wall | per-epoch |
+|---|------|-------:|:---:|-----:|-------:|-----:|----------:|
+| 1 | FFTRadNet / RADIal | 3.79 M | FP32 | 44 M | 100 | 11.4 h | 6.8 m |
+| 2a | RODNet_CDC / CRUW | 34.52 M | FP32 | 395 M | 6 † | 3.3 h | 32.6 m |
+| 3 | RECORD / CRUW | 0.70 M | FP32 | 8 M | 5 † | 5.3 h | **63.6 m** |
+| 4b | RECORD / CARRADA RD | 0.70 M | FP32 | 8 M | 72 ‡ | 6.2 h | 5.2 m |
+| 4a | RECORD / CARRADA RA | 0.70 M | FP32 | 8 M | 100 | 16.7 h | 10.0 m |
+| 9 | MVRECORD / CARRADA | 1.97 M | FP32 | 23 M | 45 † | 14.2 h | 18.9 m |
+| 10 | RADDet / RADDetDataset | 10.75 M | FP32 | 103 M | 100 | 7.7 h | 4.6 m |
+| 11 | DAROD / CARRADA | 3.45 M | FP32 | 40 M | 50 | **0.6 h** | **0.7 m** |
+| 12 | DAROD / RADDetDataset | 3.46 M | FP32 | 40 M | 75 | 0.9 h | 0.7 m |
+| 13 | RAMP_CNN / UWCR | **104.22 M** | FP32 | **1,193 M** | 22 †‡ | 5.1 h | 13.8 m |
+| 14 | RadarCrossAttention / CARRADA | 11.62 M | **train FP16/FP32 (AMP), eval FP32** | 134 M | 80 | 1.1 h | 0.8 m |
+| 15 | PointPillar / ViewOfDelft | 4.84 M | FP32 | 55 M | 80 | 6.2 h | 4.7 m |
+| 16 | RadarPillar / ViewOfDelft | **0.18 M** | FP32 | 2 M | 80 | 9.6 h | 7.2 m |
+| 17 | TransRAD / RADDetDataset | 5.79 M | FP32 | 2.16 G (paper Table I) | 100 | **23.5 h** | 14.0 m (11.5 train + 2.4 val) |
+| 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | FP32 | 0.82 G | 100 | **23.9 h** | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
+| 19 | T_RODNet / CARRADA RA | 156.8 M | FP32 | 0.84 G | 100 | **18.8 h** | 11 m (≈9.5 train + 1.5 val; 75 s test pass once) |
+| 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | FP32 | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
 Rows 15/16 have no test phase at all: VoD ships no public test split, and `train()` logs
 "No files assigned to the test split".
+
+Precision: FP32 is 32-bit floating point, FP16 16-bit. Every checkpoint stores FP32 weights,
+and evaluation always runs in FP32 (`train/evaluate.py` never enables autocast). Row 14 alone
+trains under automatic mixed precision (AMP: `torch.autocast` with a `GradScaler`, `"amp": true`
+in its train config), which computes most layers in FP16 while keeping FP32 master weights. This
+follows the references: none of the papers in `docs/papers/` states a precision, and of the
+reference training code only RadarCrossAttention's uses AMP (`train.py:61,151`); TransRAD's has
+an `fp16` switch that defaults to off, and the others train in FP32. RadarPillars has no
+official code to check.
+
+**Inference cost.** Measured 2026-11-19 with `scripts/measure_inference_cost.py` from each
+row's last checkpoint, on the RTX 3090 with nothing else running: compute in giga
+floating-point operations (GFLOPs), latency of each pipeline stage in milliseconds, and peak
+GPU memory in mebibytes (MiB). No retraining was involved.
+
+| row | pair | split | samples | GFLOPs | preprocess ms | inference ms | post-process ms | peak MiB |
+|---|------|:---:|-------:|-------:|-------:|-------:|-------:|-------:|
+| 1 | FFTRadNet / RADIal | test | 985 | 143.91 | 41.68 | 16.76 | 0.50 | 325 |
+| 2a | RODNet_CDC / CRUW § | test | 604 | 174.40 | 24.98 | 15.76 | **1172.16** | 279 |
+| 3 | RECORD / CRUW | test | 1000 | 5.02 | 18.47 | 52.72 | 626.65 | 146 |
+| 4b | RECORD / CARRADA RD | test | 1000 | 6.07 | 2.42 | 44.51 | 0.07 | 147 |
+| 4a | RECORD / CARRADA RA | test | 1000 | 8.17 | 4.70 | 100.70 | 0.12 | 160 |
+| 9 | MVRECORD / CARRADA | test | 1000 | 19.69 | 14.62 | **185.84** | 0.17 | 175 |
+| 10 | RADDet / RADDetDataset | test | 1000 | 24.30 | 60.08 | 9.52 | 0.57 | 206 |
+| 11 | DAROD / CARRADA | test | 1000 | 6.27 | 1.09 | 2.83 | 1.37 | 152 |
+| 12 | DAROD / RADDetDataset | test | 1000 | 5.71 | **0.79** | **2.57** | 1.90 | 152 |
+| 13 | RAMP_CNN / UWCR § | test | 505 | **1024.17** | 238.07 | 92.63 | **1183.34** | **971** |
+| 14 | RadarCrossAttention / CARRADA | test | 906 | 21.49 | 3.87 | 3.64 | 1.14 | **95** |
+| 15 | PointPillar / ViewOfDelft | val | 1000 | 16.34 | 17.36 | 3.19 | 11.70 | 145 |
+| 16 | RadarPillar / ViewOfDelft | val | 1000 | **1.65** | 20.58 | 2.67 | 16.30 | 180 |
+| 17 | TransRAD / RADDetDataset | test | 1000 | 2.15 | **255.92** | 16.28 | 0.71 | 226 |
+| 18 | T_RODNet / CRUW § | test | 494 | 176.95 | 20.95 | 33.84 | **1189.26** | 875 |
+| 19 | T_RODNet / CARRADA RA | test | 1000 | 172.03 | 5.22 | 30.43 | 0.12 | 870 |
+| 20 | SSMRadNet / RADIal (ADC) | val | 1000 | 4.55 | 36.66 | 5.23 | 0.53 | 304 |
+
+§ A sample is a window of frames, not one frame: each forward pass takes 16 frames, and the
+post-processing decodes the 8 frames the window advances by. GFLOPs and inference time are
+therefore per 16-frame window, and the post-processing time covers 8 frames (about 147 ms per
+frame). Row 3 also takes a window (12 frames) but decodes only its last frame, so its
+post-processing time is for one frame.
+
+How it was measured:
+
+- **Samples.** Batch size 1, FP32, real frames from the test split, or the validation split
+  where a run has no test split (rows 15, 16, 20). The first 50 samples are warm-up and
+  discarded; up to 1,000 are then timed, fewer where the split runs out. Where a row lists two
+  or three run directories, the latest one was measured.
+- **GFLOPs.** `torch.utils.flop_counter.FlopCounterMode` on one real sample at the model's
+  native input size, with one fused multiply-add counted as one FLOP (so the figure equals
+  giga multiply-accumulate operations, GMACs). No operation went uncounted in any row. Row
+  20's 4.55 is 2.11 profiled plus 2.44 added from a formula for Mamba's selective scan, which
+  the profiler cannot see; that formula follows VMamba's convention and has not been checked
+  against VMamba's source.
+- **Latency.** Median per sample, as wall-clock time with `torch.cuda.synchronize()` at each
+  stage boundary. Preprocessing is the dataset's loading and transforms, timed in the
+  measuring process without DataLoader workers; inference is the forward pass; post-processing
+  is what the row's evaluation function does to turn outputs into detections or masks. DAROD
+  decodes boxes and runs non-maximum suppression (NMS) inside `forward()`; that time is moved
+  to post-processing.
+- **Peak memory.** `torch.cuda.max_memory_allocated()` over the forward passes only, after
+  `torch.cuda.reset_peak_memory_stats()`, in a fresh process per model. It counts tensors
+  PyTorch allocated, weights included, not what `nvidia-smi` shows.
+
+Row 1's 143.91 agrees within 2% with the 146.58 GMACs the SSMRadNet paper (Table 4) measured
+for FFT-RadNet. The FFTRadNet paper's own Table 4 gives 584 GFLOPS, about four times that;
+neither the paper nor its code says how it was counted.
+
+**Post-processing dominates on CRUW and UWCR** (rows 2a, 3, 13, 18): picking peaks and
+suppressing them by location is a Python loop on the CPU, and takes 147 ms to 627 ms per frame
+against 16 ms to 93 ms for the forward pass. Preprocessing is the largest stage for rows 1,
+10, 15, 16, 17 and 20, and at 256 ms row 17's is sixteen times its forward pass.
 
 **Parameter counts double as a free implementation check.** Three match their papers closely
 enough to be evidence: FFTRadNet **3.790 M** against Table 4's 3.79 M (exact); RadarPillar
@@ -835,6 +910,92 @@ Everything else is the CRUW recipe: Adam 1e-4, cosine schedule, seed 3, batch 8.
   100 the save failed when `/data` filled up, which left the final checkpoint
   truncated. The last epoch was re-trained from the intact epoch-99 checkpoint
   (val 46.08 → 46.06) and that run produced the test result.
+
+### SSMRadNet / RADIal (raw ADC): 70.4 mIoU, 58.2 / 53.7 mAP / mAR — not reproduced (2026-11-03)
+
+`SSMRadNet_RADIal_Nov-02-2026_09:47:10`, 200 epochs, 2026-11-02 09:47 → 2026-11-03
+00:58. The network is a port of the authors' `FFTRadNet/model/SSMRadNet.py` (upstream
+commit 39b982b), 306,832 parameters against the paper's 0.31 M. All 8252 labelled frames
+have their ADC file; the random 0.8 / 0.2 split gives 6601 train / 1651 val frames, and
+val is also the reported set, so the final (epoch-200) weights are scored, with no
+checkpoint selection.
+
+| metric | paper Table 4 | ours, det. IoU 0.5 | ours, det. IoU 0.1 |
+|---|---|---|---|
+| freespace mIoU (0–50 m, rows [:124]) | 0.79 | **0.704** | (same) |
+| detection mAP | 0.83 | **0.582** | 0.691 |
+| detection mAR | 0.71 | **0.537** | 0.650 |
+| detection F1 | 0.77 | **0.559** | 0.670 |
+| range error (RE) / azimuth angle error (AE) | 0.14 m / 0.15° | **0.162 m / 0.249°** | 0.224 m / 0.385° |
+
+RE and AE are mean absolute errors over the matched detections only (a looser IoU
+threshold admits looser matches, hence the larger errors at 0.1).
+
+Scored with the app's FFTRadNet full evaluation: decode at 0.05, `GetFullMetrics`
+sweeping 0.1–0.9, range 5–100 m. The paper does not give its detection IoU threshold,
+and the authors' scripts disagree (`run_FullEvaluation` defaults to 0.1,
+`3-Evaluation_RADFE.py` uses 0.5, `3-Evaluation.py` 0.001), so both 0.5 (this app and
+FFTRadNet) and 0.1 are reported.
+
+- **Verdict.** Below the pass bar (mIoU, mAP and mAR each within about 2 points) on every
+  metric, even at the lenient IoU 0.1.
+- **Port and input checked identical to the authors' code (2026-11-03).** The final
+  weights loaded into the authors' `SSMRadNet.py` and into our port give outputs that
+  differ by exactly 0 on 4 val frames, at every encoder stage and at both decoder outputs
+  (freespace compared at the decoder's 128×128, before our resize). Our input tensor
+  equals their `FFTRadNet/dataset/dataset.py` `convert_radar_cube` output exactly; their
+  notebook's ÷2^12 changes 0.02% of freespace pixels on our weights. The gap therefore
+  lies in what was not released, not in the port.
+- **Freespace is close to a fixed shape.** A single mean-label mask, the same for every
+  frame, scores 0.690 on 0–50 m; the network gets 0.704. An epoch-30 check found each
+  prediction overlapping the mean prediction at IoU 0.887, while range- and angle-flipped
+  predictions scored far lower, so the output is aligned but barely frame-specific.
+- **Overfitting.** Val loss bottomed at 306 at epoch 30 and rose to 586 by epoch 200,
+  while the per-epoch val mAP (single 0.2 threshold) kept rising, 0.354 → 0.504. A
+  different checkpoint could score differently; choosing one on val would inflate it.
+- **Split.** Random frame split, as the paper; neighbouring frames of one sequence sit
+  on both sides, so this is not comparable to row 1's sequence split.
+- **Settings the paper does not give, and where ours came from:**
+  - loss weights [2, 100, 100] and step LR ×0.9 every 10 epochs, seed 3, from the
+    authors' `ADC_config.json` (an unrelated config); Adam 1e-4, weight decay 5e-6,
+    batch 8, 200 epochs and the Jaccard freespace loss are the paper's Table 2;
+  - regression loss is plain L1: the config's `"smoothL1Loss"` spelling falls back to
+    L1 in the authors' code, against the paper's smooth-L1;
+  - detection and freespace trained jointly, on FFTRadNet's label geometry;
+  - positional encodings off.
+- **The authors' only training loop differs.** `task_01_experiment_SSMRadNet.ipynb`
+  trains freespace alone with Jaccard only (122,677 parameters), on a 512×512 crop
+  resized to 128×128, lr 5e-4, batch 4, positional encodings on, input ÷2^12. No
+  released code trains or scores the detection head, so how Table 4's detection numbers
+  were produced cannot be checked. A freespace-only run in the notebook setup was
+  considered and not run: it could not speak to the detection gap.
+- **Cost.** 4.6 min per epoch including val, 15.2 h in all; checkpoints 3.4 MB.
+
+#### Variant: Mamba-2 layers (2026-11-04) — no change
+
+`SSMRadNet_RADIal_Nov-03-2026_22:00:22`: the run above repeated unchanged (same configs,
+seed 3, and byte-identical train / val split files) except `"ssm": "mamba2"` in the model
+config, which swaps both Mamba layers for Mamba-2 (8 heads each). Not the paper's model.
+Final weights, same scorer:
+
+| metric | paper | Mamba (above) | Mamba-2 |
+|---|---|---|---|
+| freespace mIoU (0–50 m) | 0.79 | 0.704 | 0.704 |
+| mAP / mAR / F1 @ IoU 0.5 | 0.83 / 0.71 / 0.77 | 0.582 / 0.537 / 0.559 | 0.574 / 0.553 / 0.563 |
+| RE / AE @ IoU 0.5 | 0.14 m / 0.15° | 0.162 m / 0.249° | 0.160 m / 0.251° |
+| mAP / mAR / F1 @ IoU 0.1 | — | 0.691 / 0.650 / 0.670 | 0.698 / 0.680 / 0.689 |
+| val loss, min → final | — | 306 (epoch 30) → 586 | 307 (about epoch 30) → 705 |
+
+- **Freespace is identical** and detection moves by 1–3 points, within what one seed per
+  run can resolve; the layer type is not what holds the result below the paper.
+- **Data loading needed fresh worker processes.** Mamba-2's kernels are Triton-compiled,
+  and DataLoader workers forked after the first training step inherit LLVM's thread
+  state and abort (`LLVM ERROR: pthread_join failed`; two launches died in epoch 1). The
+  loaders now start forkserver workers for Mamba-2 (`loader_multiprocessing_context`
+  in `train/train.py`), and the RADIal parser pickles without its parse lock.
+- **Cost.** 15.5 h for 200 epochs, about the same as Mamba: the faster Mamba-2 layer
+  does not shorten an epoch dominated by data loading and validation. Checkpoints 3.3 MB
+  (Mamba-2 has fewer parameters: 9,176 / 30,296 per layer against 12,992 / 38,784).
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 

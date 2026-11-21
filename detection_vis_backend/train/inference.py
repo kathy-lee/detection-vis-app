@@ -222,7 +222,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     # Disable augmentation for every dataset and adapter that supports it. Classes that
     # never flip simply ignore the attribute.
     sample_source.transformations = None
-    data = sample_source[sample_id]
+    # sample_id is a dataset frame; an adapter serving a subset of the frames (SSMRadNet
+    # on RADIal: those with raw ADC) numbers its samples differently.
+    if hasattr(sample_source, 'sample_of_frame'):
+        data = sample_source[sample_source.sample_of_frame(sample_id)]
+    else:
+        data = sample_source[sample_id]
     gt_labels = dataset_inst.get_label(parameters["features"], sample_id)
     logger.info("Get data sample.")
     viz_idx = display_frame(sample_source, sample_id)
@@ -259,9 +264,9 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     # Prediction
     net.eval()
     with torch.set_grad_enabled(False):
-        if model_type == "FFTRadNet":
-            # input_data: [radar_FFT, segmap,out_label,box_labels,image]
-            input = torch.tensor(data["RD"]).unsqueeze(0).to(device).float()
+        if model_type in ("FFTRadNet", "SSMRadNet"):
+            # Same detection map and display; the input is the RD spectrum or the raw ADC.
+            input = torch.tensor(data["ADC" if model_type == "SSMRadNet" else "RD"]).unsqueeze(0).to(device).float()
             output = net(input)
             pred_obj = output['Detection'].detach().cpu().numpy().copy()[0]
             pred_obj = decode(pred_obj,0.05)

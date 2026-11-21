@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from loguru import logger
 from fakeredis import FakeStrictRedis
@@ -5,7 +7,9 @@ from rq import Queue
 
 
 def pytest_configure(config):
-    logger.add("./detection_vis_backend/tests/test_logs.log",
+    # Next to this file, wherever pytest is started from (a relative path made a nested
+    # detection_vis_backend/detection_vis_backend/tests/ when run from the backend folder).
+    logger.add(os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_logs.log"),
                format="{time} {level} {message}", level="INFO")
 
 

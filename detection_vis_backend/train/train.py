@@ -25,6 +25,7 @@ sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATED
+from detection_vis_backend.datasets.adapters.radial import radial_sequence_split
 from detection_vis_backend.networks.network import NetworkFactory
 from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
@@ -97,13 +98,54 @@ class WeightEMA:
                     v += (1 - d) * msd[k].detach()
 
 
+def loader_multiprocessing_context(model_config, num_workers):
+    """How DataLoader workers start. SSMRadNet with Mamba2 needs fresh processes: Mamba2's
+    kernels are Triton-compiled, and a worker forked from a process that already ran them
+    inherits LLVM's thread state without its threads and aborts ("LLVM ERROR: pthread_join
+    failed"). None keeps the default fork, which DataLoader also requires when there are no
+    workers."""
+    if num_workers > 0 and model_config.get('class') == 'SSMRadNet' and model_config.get('ssm') == 'mamba2':
+        return 'forkserver'
+    return None
+
+
+def random_split_sizes(n_samples, split):
+    """(n_train, n_val, n_test) for split_random fractions. Each size is floored; the
+    frames that rounding leaves over go to test, except when test was asked to be empty
+    (e.g. SSMRadNet's paper split 0.8 / 0.2): then they go to val."""
+    n_train, n_val = int(split[0] * n_samples), int(split[1] * n_samples)
+    if split[2] == 0:
+        n_val = n_samples - n_train
+    return n_train, n_val, n_samples - n_train - n_val
+
+
+def build_optimizer(net, train_config):
+    lr = float(train_config['optimizer']['lr'])
+    params = filter(lambda p: p.requires_grad, net.parameters())
+    if train_config['optimizer'].get('type') == 'AdamW':
+        return optim.AdamW(params, lr=lr, weight_decay=float(train_config['optimizer'].get('weight_decay', 0.01)))
+    # betas from config when given (the TransRAD reference passes momentum 0.937 as
+    # beta1, Train.py:256); every existing config omits the key and keeps torch's default.
+    # weight_decay likewise (SSMRadNet's L2 5e-6); torch's default 0 otherwise.
+    return optim.Adam(params, lr=lr,
+                      betas=tuple(train_config['optimizer'].get('betas', (0.9, 0.999))),
+                      weight_decay=float(train_config['optimizer'].get('weight_decay', 0)))
+
+
+def _dataset_frame(source, i):
+    """Dataset frame index of sample i: the same number, except for an adapter that serves
+    a subset of the frames (SSMRadNet on RADIal: only those with raw ADC)."""
+    return source.dataset_frame(i) if hasattr(source, 'dataset_frame') else i
+
+
 def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train_config: dict, output_path: str):
     """
-        Filter out data items with empty annotations when the network demands(for example when use CARRADA dataset 
+        Filter out data items with empty annotations when the network demands(for example when use CARRADA dataset
         to train DAROD model).
     """
     collate_func = {
         'FFTRadNet': FFTRadNet_collate,
+        'SSMRadNet': FFTRadNet_collate,
         'RODNet_CDC': default_collate,
         'RODNet_CDCv2': default_collate,
         'RODNet_HG': default_collate,
@@ -170,7 +212,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         dataset_inst.prepare_for_train(features, train_config, model_config, splittype=split_type)
                     dataset_inst_list.append(dataset_inst)
                     for i in range(len(dataset_inst)):
-                        samples_info.append([file['parse'], file['name'], file['id'], i])
+                        samples_info.append([file['parse'], file['name'], file['id'], _dataset_frame(dataset_inst, i)])
                         counter += 1
                         if skip_empty_label and len(dataset_inst[i]['label']) == 0:
                             continue
@@ -204,9 +246,9 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                 for i in range(len(dataset_inst)):
                     logger.debug(i)
                     if len(datafiles) == 1:
-                        samples_info.append(i)
+                        samples_info.append(_dataset_frame(dataset_inst, i))
                     else:
-                        samples_info.append([file['parse'], file['name'], file['id'], i])
+                        samples_info.append([file['parse'], file['name'], file['id'], _dataset_frame(dataset_inst, i)])
                     counter += 1
                     if skip_empty_label and len(dataset_inst[i]['label']) == 0:
                         continue
@@ -215,8 +257,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
             dataset = ConcatDataset(dataset_inst_list)
             split = np.array(train_config['dataloader']['split_random'])
             n_samples = len(dataset)
-            n_train, n_val = int(split[0] * n_samples), int(split[1] * n_samples)
-            n_test = n_samples - n_train - n_val
+            n_train, n_val, n_test = random_split_sizes(n_samples, split)
             train_dataset, val_dataset, test_dataset = random_split(dataset, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(train_config['seed']))
             train_ids = train_dataset.indices
             val_ids = val_dataset.indices
@@ -247,42 +288,38 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                     f"{split_type} instances index differently from the train ones"
             datasets['train'] = Subset(dataset, train_ids)
             datasets['val'] = Subset(eval_concat['val'], val_ids)
-            datasets['test'] = Subset(eval_concat['test'], test_ids)
+            # No test frames (a split with test fraction 0) means no test loader, and train()
+            # skips the test evaluation, as for a sequence split without test files.
+            datasets['test'] = Subset(eval_concat['test'], test_ids) if len(test_ids) else None
 
             split_samples_info['train'] = [samples_info[id] for id in train_ids]
             split_samples_info['val'] = [samples_info[id] for id in val_ids]
             split_samples_info['test'] = [samples_info[id] for id in test_ids]           
         else:
-            ValueError("Split type not supported. Please choose following: 'sequence', 'random', 'original(some of the datasets has a built-in split).")        
+            raise ValueError(f"splitmode {train_config['dataloader']['splitmode']!r} not supported. Please choose "
+                             "'sequence', 'random' or 'original' (some of the datasets have a built-in split).")
     else:
         if dataset_type == "RADIal":
-            # RADIal dataset is partly labeled
-            Sequences = {'val':['RECORD@2020-11-22_12.49.56', 'RECORD@2020-11-22_12.11.49',
-                                       'RECORD@2020-11-22_12.28.47','RECORD@2020-11-21_14.25.06'],
-                        'test':['RECORD@2020-11-22_12.45.05','RECORD@2020-11-22_12.25.47',
-                                'RECORD@2020-11-22_12.03.47','RECORD@2020-11-22_12.54.38']}
-            dataset = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
-            dataset.prepare_for_train(features, train_config, model_config)
-            labels = dataset.labels
-            dict_index_to_keys = {s:i for i,s in enumerate(dataset.sample_keys)}
-            Val_indexes = []
-            for seq in Sequences['val']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Val_indexes.append(labels[idx,0])
-            Val_indexes = np.unique(np.concatenate(Val_indexes))
-
-            Test_indexes = []
-            for seq in Sequences['test']:
-                idx = np.where(labels[:,14]==seq)[0]
-                Test_indexes.append(labels[idx,0])
-            Test_indexes = np.unique(np.concatenate(Test_indexes))
-
-            split_samples_info['val'] = [dict_index_to_keys[k] for k in Val_indexes]
-            split_samples_info['test'] = [dict_index_to_keys[k] for k in Test_indexes]
-            split_samples_info['train'] = np.setdiff1d(np.arange(len(dataset)), np.concatenate([split_samples_info['val'], split_samples_info['test']]))  
-            datasets["train"] = Subset(dataset, split_samples_info['train'])
-            datasets["val"] = Subset(dataset, split_samples_info['val'])
-            datasets["test"] = Subset(dataset, split_samples_info['test'])
+            # valeo's sequence split over ONE parser; a per-split adapter builds the samples
+            # (datasets/adapters/radial.py), as for RADDetDataset.
+            parser = dataset_factory.get_instance(dataset_type, datafiles[0]['id'])
+            frames = radial_sequence_split(parser)
+            for split_type in ('train', 'val', 'test'):
+                adapter = make_sample_adapter(model_config['class'], parser, features,
+                                              model_config, train_config, splittype=split_type)
+                if hasattr(adapter, 'sample_of_frame'):
+                    # The adapter serves a subset of the frames (SSMRadNet: those with raw
+                    # ADC): keep the split's frames it has, indexed as its samples.
+                    frames[split_type] = [f for f in frames[split_type] if adapter.has_frame(f)]
+                    if not frames[split_type] and split_type in ('train', 'val'):
+                        raise ValueError(
+                            f"Original split: none of the '{split_type}' recordings' frames has raw ADC "
+                            f"in {adapter.adc_dir}. Choose the random split, or extract those recordings.")
+                    ids = [adapter.sample_of_frame(f) for f in frames[split_type]]
+                else:
+                    ids = frames[split_type]
+                split_samples_info[split_type] = frames[split_type]
+                datasets[split_type] = Subset(adapter, ids)
         elif dataset_type == "CARRADA":
             Sequences = {'train': ['2019-09-16-12-52-12', '2019-09-16-12-55-51', '2019-09-16-12-58-42', '2019-09-16-13-03-38', 
                                    '2019-09-16-13-11-12', '2019-09-16-13-14-29', '2019-09-16-13-20-20', '2019-09-16-13-25-35', 
@@ -367,6 +404,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['train']['batch_size'],
                         shuffle=True,
                         num_workers=train_config['dataloader']['train']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['train']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['train'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
@@ -374,6 +413,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['val']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['val']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['val']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['val'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
@@ -387,6 +428,8 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
                         batch_size=train_config['dataloader']['test']['batch_size'],
                         shuffle=False,
                         num_workers=train_config['dataloader']['test']['num_workers'],
+                        multiprocessing_context=loader_multiprocessing_context(
+                            model_config, train_config['dataloader']['test']['num_workers']),
                         pin_memory=True,
                         drop_last=bool(train_config['dataloader']['test'].get('drop_last', False)),
                         collate_fn=collate_func[model_config['class']])
@@ -466,14 +509,7 @@ def train(datafiles: list, features: list, model_config: dict, train_config: dic
         num_epochs = int(train_config['num_epochs'])
         # gamma = float(train_config['lr_scheduler']['gamma'])  # moved into the branches:
         # the RadarPillar config has no 'lr_scheduler' key (it uses 'scheduler'/OneCycleLR)
-        if train_config['optimizer'].get('type') == 'AdamW':
-            optimizer = optim.AdamW(filter(lambda p: p.requires_grad, net.parameters()),
-                                    lr=lr, weight_decay=float(train_config['optimizer'].get('weight_decay', 0.01)))
-        else:
-            # betas from config when given (the TransRAD reference passes momentum 0.937 as
-            # beta1, Train.py:256); every existing config omits the key and keeps torch's default.
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr,
-                                   betas=tuple(train_config['optimizer'].get('betas', (0.9, 0.999))))
+        optimizer = build_optimizer(net, train_config)
 
         # RadarPillar reference recipe (fthbng77/RadarPillar kitti_pointpillar.yaml:145-164,
         # adam_onecycle): OneCycleLR stepped per iteration, MOMS [0.95, 0.85] -> torch

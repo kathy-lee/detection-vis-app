@@ -261,5 +261,20 @@
     "win_size": null,
     "input_size": null,
     "notes": "Dataset-determined. CRUW: 16-frame window of complex (real+imag) RA maps (2 channels, 16x128x128), one chirp per window (random in training, chirp 0 at test, as the reference's CRDataset/test.py), built by TRODNetOnCRUW; output RODNet-style per-class confidence maps (3, 16, 128, 128), peak-picked by the RODNet post-processing and scored with the OLS evaluator. CARRADA: 4-frame window of real RA maps (1 channel, 4x256x256), built by T_RODNetOnCARRADA; output 4-class segmentation (4, 4, 256, 256), the window's last frame scored for mIoU / mDice. The Swin patch embedding fixes each dataset's window and map size."
+  },
+  "SSMRadNet": {
+    "features": [
+      "ADC"
+    ],
+    "datasets": [
+      "RADIal"
+    ],
+    "in_channels": 32,
+    "win_size": 1,
+    "input_size": [
+      512,
+      256
+    ],
+    "notes": "Raw ADC: 512 fast-time samples x 256 chirps x 32 (real, then imag, of the 16 Rx). Needs RADIal's radar_ADC (scripts/extract_radial_adc.py); frames without an adc file are left out. Output and scoring as FFTRadNet: 128x224 detection map, freespace upsampled to 256x224. Mamba kernels: CUDA only."
   }
 }
