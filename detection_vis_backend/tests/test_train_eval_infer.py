@@ -588,8 +588,13 @@ def test_model_features_datasets_match_wired_eval_pairs():
 
 # --- relocate_datafile: train_info.txt paths are a snapshot, the files table is live ---
 
-SNAPSHOT = {"id": 110, "name": "ViewOfDelft", "parse": "ViewOfDelft",
-            "path": "/gone/wd_disk_radar_data/ViewOfDelft", "config": "/gone/cfg.json"}
+@pytest.fixture
+def stale_train_info_record():
+    """One datafile record of train_info.txt, written at training time; its paths point
+    where the dataset no longer is. A fresh dict per test, so a function that modified
+    its input could not leak the change into another test."""
+    return {"id": 110, "name": "ViewOfDelft", "parse": "ViewOfDelft",
+            "path": "/gone/old_dataset_location/ViewOfDelft", "config": "/gone/cfg.json"}
 
 
 class _Row:
@@ -611,7 +616,7 @@ def _patch_db(monkeypatch, row=None, raises=None):
     monkeypatch.setattr(crud, "get_datafile", lambda db, file_id: row)
 
 
-def test_relocate_datafile_takes_live_path_and_keeps_identity(monkeypatch):
+def test_relocate_datafile_takes_live_path_and_keeps_identity(monkeypatch, stale_train_info_record):
     """A moved dataset must be picked up from the files table.
 
     /predict used to die on a bare ENOENT for every model trained before the dataset
@@ -624,28 +629,31 @@ def test_relocate_datafile_takes_live_path_and_keeps_identity(monkeypatch):
                                     path="/home/kangle/dataset/ViewOfDelft",
                                     config="/home/kangle/dataset/cfg.json"))
 
-    out = relocate_datafile(SNAPSHOT, 110)
+    record = stale_train_info_record
+    original = dict(record)
+
+    out = relocate_datafile(record, 110)
 
     assert out["path"] == "/home/kangle/dataset/ViewOfDelft"
     assert out["config"] == "/home/kangle/dataset/cfg.json"
     assert out["name"] == "ViewOfDelft" and out["parse"] == "ViewOfDelft"
-    assert SNAPSHOT["path"] == "/gone/wd_disk_radar_data/ViewOfDelft", "input was mutated"
+    assert record == original, "input was mutated"
 
 
-def test_relocate_datafile_falls_back_when_row_is_gone(monkeypatch):
+def test_relocate_datafile_falls_back_when_row_is_gone(monkeypatch, stale_train_info_record):
     """A deleted registration must not make a stored model un-inferable."""
     from detection_vis_backend.train.inference import relocate_datafile
     _patch_db(monkeypatch, row=None)
 
-    assert relocate_datafile(SNAPSHOT, 110) == SNAPSHOT
+    assert relocate_datafile(stale_train_info_record, 110) == stale_train_info_record
 
 
-def test_relocate_datafile_falls_back_when_db_is_unreachable(monkeypatch):
+def test_relocate_datafile_falls_back_when_db_is_unreachable(monkeypatch, stale_train_info_record):
     """No DATABASE_URL (scripts, offline use) must degrade to the old behaviour."""
     from detection_vis_backend.train.inference import relocate_datafile
     _patch_db(monkeypatch, raises=ValueError("No DATABASE_URL environment variable found."))
 
-    assert relocate_datafile(SNAPSHOT, 110) == SNAPSHOT
+    assert relocate_datafile(stale_train_info_record, 110) == stale_train_info_record
 
 
 def test_raddet_loader_branch_builds_adapters_not_prepare_for_train():

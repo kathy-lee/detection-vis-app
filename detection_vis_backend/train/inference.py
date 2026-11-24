@@ -135,8 +135,7 @@ def relocate_datafile(file_info, file_id):
     train_info.txt is a SNAPSHOT written when the model was trained, so the absolute
     paths in it are frozen. When the dataset directory moved, every model trained
     before the move kept pointing at the old location and /predict died on a bare
-    ENOENT with nothing naming the cause -- 22 datafile references across 16 models
-    (July 2026, `/home/kangle/Downloads/wd_disk_radar_data/...`).
+    ENOENT with nothing naming the cause -- 22 datafile references across 16 models.
 
     The files table is the live source of truth and already held the new paths, so
     resolve by id and take `path`/`config` from there. Only those two: `name` and
