@@ -1,6 +1,6 @@
 """scripts/tfftradnet_input_statistics.py: per-channel input statistics of the T-FFTRadNet
-modes that upstream's configs leave without them, computed as upstream's
-print_dataset_statistics.py computes them."""
+modes that the configs of the reference repo (jgiroux8/T_FFTRadNet 68bc041) leave without
+them, computed as the reference's print_dataset_statistics.py computes them."""
 import importlib
 import json
 import os
@@ -46,12 +46,12 @@ def test_raddet_train_frames_follow_the_official_list(script, tmp_path):
 
 
 @pytest.mark.skipif(not os.path.isdir(os.path.join(REAL_RADDET, "ADC")), reason="RADDet ADC absent")
-def test_upstream_statistics_are_reproduced_on_raddet_rd(script):
-    # Measured 2026-11-24: 50 frames are 4-9 % off upstream, 500 within 2 %, 2000 within 1 %.
+def test_reference_statistics_are_reproduced_on_raddet_rd(script):
+    # Measured 2026-11-24: 50 frames are 4-9 % off the reference, 500 within 2 %, 2000 within 1 %.
     from detection_vis_backend.datasets.adapters.tfftradnet_common import load_tfftradnet_statistics
     mean, std = script.compute("RADDetDataset", "RD", n_frames=500)
-    upstream = np.array(load_tfftradnet_statistics("RADDetDataset", "RD")["input_std"])
-    assert np.abs(np.array(std) / upstream - 1).max() < 0.03
+    reference = np.array(load_tfftradnet_statistics("RADDetDataset", "RD")["input_std"])
+    assert np.abs(np.array(std) / reference - 1).max() < 0.03
 
 
 def test_statistics_json_has_no_null_entry():

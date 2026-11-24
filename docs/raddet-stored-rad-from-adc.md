@@ -19,9 +19,10 @@ transform); DC (the constant offset of a signal); tx / rx (transmit / receive an
 Every frame that has a stored RAD cube also has a label file and an ADC file of the same
 number. The 135 extra ADC frames have no labels.
 
-Our RADDet, DAROD and TransRAD runs read the stored cubes. T-FFTRadNet
-(github.com/jgiroux8/T_FFTRadNet, `RADDet/dataset/dataset.py`) reads only `ADC/` and runs
-its own FFTs, in all three input modes (ADC, RD and RAD). Its paper and README don't say
+Our RADDet, DAROD and TransRAD runs read the stored cubes. T-FFTRadNet's reference repo
+([jgiroux8/T_FFTRadNet](https://github.com/jgiroux8/T_FFTRadNet) at commit 68bc041,
+`RADDet/dataset/dataset.py`; "the reference repo" below) reads only `ADC/` and runs its
+own FFTs, in all three input modes (ADC, RD and RAD). Its paper and README don't say
 why it ignores `RAD/`.
 
 ## What the sources say
@@ -36,7 +37,7 @@ why it ignores `RAD/`.
 
 So the recipe had to be recovered from the data.
 
-## First comparison: upstream's cube against the stored one
+## First comparison: the reference repo's cube against the stored one
 
 T-FFTRadNet's RAD mode builds the cube as follows (`dataset.py:107-121`):
 1. Reshape the (256, 64, 4, 2) ADC directly to (256, 64, 8).
@@ -48,8 +49,8 @@ T-FFTRadNet's RAD mode builds the cube as follows (`dataset.py:107-121`):
 On frames 26, 2103 and 5111, this cube correlated with the magnitude of the stored cube
 at 0.10–0.20 as is. Under the best combination of axis flips (range and angle), the
 correlation reached 0.48–0.52, and the worst element was still off by about 94 % of the
-peak. So taking the magnitude of the stored cube and flipping it does not give
-upstream's input.
+peak. So taking the magnitude of the stored cube and flipping it does not give the
+reference repo's input.
 
 An earlier check compared RD maps summed over the angle axis and found a correlation of
 about 0.8. That summing hid the difference, which turned out to lie mostly in the angle
@@ -62,7 +63,7 @@ combination of:
 
 | choice | options |
 |---|---|
-| antenna order | `reshape` of (rx, tx) as upstream does (rx0tx0, rx0tx1, rx1tx0, …), or tx-major (tx0 rx0–3, then tx1 rx0–3) |
+| antenna order | `reshape` of (rx, tx) as the reference repo does (rx0tx0, rx0tx1, rx1tx0, …), or tx-major (tx0 rx0–3, then tx1 rx0–3) |
 | window on range | none, Hann, Hamming |
 | window on Doppler | none, Hann, Hamming |
 | window on angle | none, Hann, Hamming |
@@ -70,7 +71,7 @@ combination of:
 | axis flips | range, angle, Doppler, each reversed or not |
 
 That makes 216 pipelines, each tried with all 8 flip patterns. The FFT steps (Doppler
-`fftshift`, angle zero-padding to 256 and `fftshift`) follow the paper and upstream.
+`fftshift`, angle zero-padding to 256 and `fftshift`) follow the paper and the reference repo.
 
 Each candidate is scored against the stored complex cube by normalised complex
 correlation, |⟨a, b⟩| / (‖a‖ ‖b‖). This is 1.0 exactly when the two are equal up to a
@@ -86,7 +87,7 @@ Result on frame 26:
 | 0.84774 | tx-major | Hann | Hamming | none | yes | range, angle |
 | 0.80492 | tx-major | Hamming | none | none | no | range, angle |
 
-Every top candidate uses the tx-major order. Upstream's order did not come close.
+Every top candidate uses the tx-major order. The reference repo's order did not come close.
 
 ## Refinement
 
@@ -155,16 +156,16 @@ rad = x.transpose(0, 2, 1)[::-1, ::-1] / 64                         # (range, az
 | values | complex | magnitude |
 
 The antenna order matters most. The angle FFT assumes the 8 channels are in array order.
-Upstream's interleaving puts them out of order, so its azimuth spectrum is scrambled. That
-is why upstream's cube correlates with the stored one at only about 0.5 even after the
-best flips.
+The reference repo's interleaving puts them out of order, so its azimuth spectrum is
+scrambled. That is why the reference repo's cube correlates with the stored one at only
+about 0.5 even after the best flips.
 
 Neither source says whether the T-FFTRadNet authors knew this. Their code reshapes the
 ADC the same way in all modes. In ADC mode the order matters less, because Fourier-Net
 learns its own transform weights from that input.
 
 What follows for this project (see the T-FFTRadNet design):
-- The T-FFTRadNet reproduction keeps upstream's processing, interleaved order included,
+- The T-FFTRadNet reproduction keeps the reference repo's processing, interleaved order included,
   because the published weights and the paper's Table 3 were obtained on it.
 - An optional "RAD stored" input mode takes the magnitude of the stored cube, which is
   the same physically ordered cube our RADDet, DAROD and TransRAD runs see. It is trained

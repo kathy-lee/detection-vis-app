@@ -1,5 +1,6 @@
-"""T-FFTRadNet's RADIal adapter: each input mode built as upstream's RadIal/dataset/dataset.py
-builds it, with FFTRadNet's labels and freespace map."""
+"""T-FFTRadNet's RADIal adapter: each input mode built as the reference repo
+(jgiroux8/T_FFTRadNet 68bc041) RadIal/dataset/dataset.py builds it, with FFTRadNet's labels
+and freespace map."""
 import os
 
 import numpy as np
@@ -63,8 +64,8 @@ def _stats(mode):
     return np.array(s["input_mean"])[:, None, None], np.array(s["input_std"])[:, None, None]
 
 
-def _upstream_rd(raw, window=True, shift=False):
-    """Upstream Custom_RD from its decoded ADC: DC removal, Hamming windows, range then
+def _reference_rd(raw, window=True, shift=False):
+    """The reference's Custom_RD from its decoded ADC: DC removal, Hamming windows, range then
     Doppler FFT, real || imag (with the Doppler fftshift only when asked)."""
     from detection_vis_backend.datasets.adapters.radial import radial_complex_adc
     adc = radial_complex_adc(raw).astype(np.complex128)
@@ -102,13 +103,13 @@ def test_complex_adc_is_decoded_and_dc_free():
 def test_rd_shift_as_published_equals_unshifted_rd_from_adc(parser):
     mean, std = _stats("RD_shift_as_published")
     got = _adapter(parser, "RD_shift_as_published")[0]["RD"]
-    np.testing.assert_allclose(got, (_upstream_rd(_raw(10)) - mean) / std, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(got, (_reference_rd(_raw(10)) - mean) / std, rtol=1e-4, atol=1e-5)
 
 
 def test_rd_shift_applies_the_doppler_shift(parser):
     mean, std = _stats("RD_shift")
     got = _adapter(parser, "RD_shift")[0]["RD"]
-    np.testing.assert_allclose(got, (_upstream_rd(_raw(10), shift=True) - mean) / std, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(got, (_reference_rd(_raw(10), shift=True) - mean) / std, rtol=1e-4, atol=1e-5)
 
 
 def test_adc_mode_is_dc_free_complex_stacked(parser):
@@ -155,7 +156,7 @@ def test_feature_mode_mismatch_raises(parser):
 def test_rd_no_window_drops_the_windows(parser):
     mean, std = _stats("RD_no_window")
     got = _adapter(parser, "RD_no_window")[0]["RD"]
-    np.testing.assert_allclose(got, (_upstream_rd(_raw(10), window=False) - mean) / std, rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(got, (_reference_rd(_raw(10), window=False) - mean) / std, rtol=1e-4, atol=1e-5)
 
 
 def test_missing_statistics_raise_naming_the_script(monkeypatch, tmp_path):

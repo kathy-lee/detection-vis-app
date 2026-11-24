@@ -228,17 +228,17 @@ class SSMRadNetOnRADIal(SampleAdapter):
 
 def radial_complex_adc(raw):
     """(1048576, 4) int16 chip streams -> complex64 (512 samples, 256 chirps, 16 Rx) with
-    the DC offset (mean over samples and chirps, per receiver) removed: what upstream
-    T-FFTRadNet's ADCProcessing/rpl.py stores with method='ADC'."""
+    the DC offset (mean over samples and chirps, per receiver) removed: what the
+    T-FFTRadNet reference repo (jgiroux8/T_FFTRadNet 68bc041) ADCProcessing/rpl.py stores with method='ADC'."""
     decoded = decode_radial_adc(raw)
     cube = decoded[..., :16].astype(np.float64) + 1j * decoded[..., 16:]
     return (cube - cube.mean(axis=(0, 1))).astype(np.complex64)
 
 
 def radial_rd_from_adc(adc, window, shift):
-    """Upstream T-FFTRadNet Custom_RD (RadIal/dataset/dataset.py): Hamming windows on range
-    and Doppler when window, range then Doppler FFT, Doppler fftshift when shift; real
-    parts then imaginary parts, float32 (512, 256, 32). Upstream computes the shift and
+    """The T-FFTRadNet reference's Custom_RD (RadIal/dataset/dataset.py): Hamming windows on
+    range and Doppler when window, range then Doppler FFT, Doppler fftshift when shift; real
+    parts then imaginary parts, float32 (512, 256, 32). The reference computes the shift and
     then discards it, so its published RD-shift mode is shift=False here."""
     n_s, n_c = adc.shape[0], adc.shape[1]
     w_r, w_d = np.ones(n_s), np.ones(n_c)
@@ -257,7 +257,7 @@ class TFFTRadNetOnRADIal(SampleAdapter):
     """T-FFTRadNet's input for the model config's input_mode, with FFTRadNet's encoded
     detection map, box labels and freespace map:
       RD                     stored radar_FFT, normalized (32, 512, 256)
-      RD_shift_as_published  RD from ADC, Doppler shift discarded as upstream, normalized
+      RD_shift_as_published  RD from ADC, Doppler shift discarded as the reference, normalized
       RD_shift               RD from ADC with the Doppler shift, normalized
       RD_no_window           RD from ADC without windows, normalized
       ADC                    DC-free complex ADC, real then imaginary parts (32, 512, 256)

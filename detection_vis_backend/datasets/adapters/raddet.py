@@ -306,13 +306,13 @@ class TransRADOnRADDet(SampleAdapter):
 
 
 # ---------------------------------------------------------------------------------------
-# T-FFTRadNet on RADDet (upstream jgiroux8/T_FFTRadNet 68bc041, RADDet/dataset/). The model
-# detects points, not boxes: each box becomes its centre's range, angle and class.
+# T-FFTRadNet on RADDet (the reference repo (jgiroux8/T_FFTRadNet 68bc041), RADDet/dataset/).
+# The model detects points, not boxes: each box becomes its centre's range, angle and class.
 
-# Upstream encodes class names with sklearn's LabelEncoder, which sorts them.
+# The reference code encodes class names with sklearn's LabelEncoder, which sorts them.
 RADDET_CLASSES = ["bicycle", "bus", "car", "motorcycle", "person", "truck"]
 
-# Upstream RADDet/config/*.json "geometry" and "statistics" (reg_mean/reg_std).
+# The reference's RADDet/config/*.json "geometry" and "statistics" (reg_mean/reg_std).
 RADDET_RA_GEOMETRY = {"ranges": [256, 256, 1], "resolution": [0.1953125, 0.703125], "size": 3}
 RADDET_REG_MEAN = [0.38584477, 0.69962384]
 RADDET_REG_STD = [0.67642669, 1.21764073]
@@ -322,9 +322,9 @@ HAMMING_DOPPLER = 0.54 - 0.46 * np.cos(2 * np.pi * np.arange(64) / 63)
 
 
 def raddet_point_labels(gt):
-    """Ground truth -> float32 (N, 3) [range m, angle deg, class], upstream dataset.py:53-65:
-    the cart_boxes centre (pixels of a 512 x 256 bird's-eye grid spanning 100 m x 50 m)
-    converted to polar. Like upstream, at most 31 objects per frame (`if i > 30: break`)."""
+    """Ground truth -> float32 (N, 3) [range m, angle deg, class], the reference's
+    dataset.py:53-65: the cart_boxes centre (pixels of a 512 x 256 bird's-eye grid spanning
+    100 m x 50 m) converted to polar. Like the reference, at most 31 objects per frame (`if i > 30: break`)."""
     points = []
     for i in range(len(gt["cart_boxes"])):
         if i > 30:
@@ -338,9 +338,9 @@ def raddet_point_labels(gt):
 
 def encode_raddet_label(points):
     """Points (N, 3) -> (9, 64, 128): [detection, range offset, angle offset, 6 class maps],
-    a 3 x 3 patch per point. Port of upstream RADDet/dataset/encoder.py ra_encoder.encode,
-    quirks included: a point in the last angle bin (127) or the first range bin gets no
-    target, as upstream's branches skip them."""
+    a 3 x 3 patch per point. Port of the reference's RADDet/dataset/encoder.py
+    ra_encoder.encode, quirks included: a point in the last angle bin (127) or the first
+    range bin gets no target, as the reference's branches skip them."""
     geometry, size = RADDET_RA_GEOMETRY, RADDET_RA_GEOMETRY["size"]
     res = geometry["resolution"]
     out = (2 + 1 + 6, geometry["ranges"][0] // 4, geometry["ranges"][1] // 2)
@@ -381,7 +381,7 @@ def encode_raddet_label(points):
 
 def decode_raddet_map(det_and_class, threshold):
     """(9, 64, 128) network output or encoded label -> [[range, angle, confidence, class]]
-    for every cell whose detection channel reaches threshold; upstream ra_encoder.decode."""
+    for every cell whose detection channel reaches threshold; the reference's ra_encoder.decode."""
     res = RADDET_RA_GEOMETRY["resolution"]
     n_angle = det_and_class.shape[2]
     range_bins, angle_bins = np.where(det_and_class[0] >= threshold)
@@ -395,7 +395,7 @@ def decode_raddet_map(det_and_class, threshold):
 
 
 def _raddet_rd_complex(adc, window, remove_dc):
-    """Upstream's range then Doppler FFT of (256, 64, 8) ADC, zero Doppler centred."""
+    """The reference's range then Doppler FFT of (256, 64, 8) ADC, zero Doppler centred."""
     if remove_dc:
         adc = adc - np.mean(adc, axis=(0, 1))
     w_r, w_d = (HAMMING_RANGE, HAMMING_DOPPLER) if window else (np.ones(256), np.ones(64))
@@ -403,19 +403,19 @@ def _raddet_rd_complex(adc, window, remove_dc):
     return np.fft.fftshift(np.fft.fft(rd * w_d[None, :, None], 64, axis=1), axes=1)
 
 
-def raddet_rd_upstream(adc, window=True):
-    """Upstream RD mode (dataset.py:85-100): DC removal, Hamming windows when window, range
-    and Doppler FFT, real || imag -> float32 (16, 256, 64), before normalization. The
-    antennas are in upstream's order, a direct reshape of (256, 64, 4, 2)."""
+def raddet_rd_reference(adc, window=True):
+    """The reference's RD mode (dataset.py:85-100): DC removal, Hamming windows when window,
+    range and Doppler FFT, real || imag -> float32 (16, 256, 64), before normalization. The
+    antennas are in the reference's order, a direct reshape of (256, 64, 4, 2)."""
     rd = _raddet_rd_complex(adc.reshape(256, 64, 8), window, remove_dc=True)
     return np.concatenate([rd.real, rd.imag], axis=2).transpose(2, 0, 1).astype(np.float32)
 
 
-def raddet_rad_upstream(adc):
-    """Upstream RAD mode (dataset.py:107-121): Hamming windows, range and Doppler FFT, the
+def raddet_rad_reference(adc):
+    """The reference's RAD mode (dataset.py:107-121): Hamming windows, range and Doppler FFT, the
     8 antennas zero-padded to 256 for the angle FFT, magnitude -> float32 (64, 256, 256)
     (Doppler, range, angle), before normalization. No DC removal, and the antennas in a
-    direct reshape's order, as upstream; the stored RAD/ cubes differ in both
+    direct reshape's order, as in the reference; the stored RAD/ cubes differ in both
     (docs/raddet-stored-rad-from-adc.md)."""
     rd = _raddet_rd_complex(adc.reshape(256, 64, 8), window=True, remove_dc=False)
     rad = np.concatenate([rd, np.zeros((256, 64, 248), np.complex64)], axis=2)
@@ -424,17 +424,17 @@ def raddet_rad_upstream(adc):
 
 
 def raddet_rad_stored(rad):
-    """Magnitude of a stored RAD/ cube, range and angle reversed into upstream's
-    directions -> float32 (64, 256, 256) (Doppler, range, angle), before normalization."""
+    """Magnitude of a stored RAD/ cube, range and angle reversed into the
+    reference's directions -> float32 (64, 256, 256) (Doppler, range, angle), before normalization."""
     return np.abs(rad[::-1, ::-1]).transpose(2, 0, 1).astype(np.float32)
 
 
 @register
 class TFFTRadNetOnRADDet(SampleAdapter):
     """T-FFTRadNet's input for the model config's input_mode, with point labels:
-      RAD          cube from ADC as upstream, magnitude, normalized (64, 256, 256)
+      RAD          cube from ADC as the reference, magnitude, normalized (64, 256, 256)
       RAD_stored   magnitude of the stored RAD cube, normalized (64, 256, 256)
-      RD           RD from ADC as upstream, normalized (16, 256, 64)
+      RD           RD from ADC as the reference, normalized (16, 256, 64)
       RD_no_window the same without windows, normalized
       ADC          raw ADC, real then imaginary parts (16, 256, 64)
     plus 'encoded_label' (3, 64, 128), 'class_map' (6, 64, 128) and 'box_label' (N, 3)."""
@@ -447,7 +447,7 @@ class TFFTRadNetOnRADDet(SampleAdapter):
         self.mode = model_cfg.get('input_mode', 'RAD')
         self.key = feature_of_mode("T_FFTRadNet", "RADDetDataset", self.mode, features)
         stats = load_tfftradnet_statistics("RADDetDataset", self.mode)
-        # Upstream normalizes channels last; the inputs here are built channels first.
+        # The reference normalizes channels last; the inputs here are built channels first.
         self.mean = None if stats is None else np.asarray(stats["input_mean"], np.float32)[:, None, None]
         self.std = None if stats is None else np.asarray(stats["input_std"], np.float32)[:, None, None]
 
@@ -457,12 +457,12 @@ class TFFTRadNetOnRADDet(SampleAdapter):
         else:
             adc = self.parser.get_ADC(index)
             if self.mode == 'RAD':
-                x = raddet_rad_upstream(adc)
+                x = raddet_rad_reference(adc)
             elif self.mode == 'ADC':
                 flat = adc.reshape(256, 64, 8)
                 return np.concatenate([flat.real, flat.imag], axis=2).transpose(2, 0, 1).astype(np.float32)
             else:
-                x = raddet_rd_upstream(adc, window=self.mode == 'RD')
+                x = raddet_rd_reference(adc, window=self.mode == 'RD')
         return ((x - self.mean) / self.std).astype(np.float32)
 
     def __getitem__(self, index):

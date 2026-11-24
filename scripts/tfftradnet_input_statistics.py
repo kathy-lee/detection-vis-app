@@ -1,14 +1,14 @@
-"""Per-channel input statistics of the T-FFTRadNet modes upstream never measured.
+"""Per-channel input statistics of the T-FFTRadNet modes the reference repo never measured.
 
-T-FFTRadNet normalizes each input channel with a mean and std from its config. Upstream
-(jgiroux8/T_FFTRadNet 68bc041) ships them for RADIal RD and RD-shift and RADDet RD and RAD;
+T-FFTRadNet normalizes each input channel with a mean and std from its config. The reference
+repo (jgiroux8/T_FFTRadNet 68bc041) ships them for RADIal RD and RD-shift and RADDet RD and RAD;
 detection_vis_backend/datasets/adapters/tfftradnet_statistics.json holds those, and null
 for the modes it lacks: RADIal RD_no_window, RADDet RD_no_window (the paper's
 no-windowing rows) and RADDet RAD_stored (this project's variant reading the stored cubes).
 
-The formula is upstream's dataset/print_dataset_statistics.py: for every frame, each
+The formula is the reference's dataset/print_dataset_statistics.py: for every frame, each
 channel's mean and std over its range x Doppler (or range x angle) cells; then the mean of
-those per-frame values over the frames. Upstream runs it over all frames, test ones
+those per-frame values over the frames. The reference runs it over all frames, test ones
 included; here only the train split is used (decided 2026-11-24), so no test frame shapes
 the input:
   RADIal         valeo's sequence split, train recordings, frames with a radar_ADC file
@@ -95,14 +95,14 @@ def frames_of(dataset, mode, parser, indices):
             yield np.transpose(rd, (2, 0, 1))
     else:
         from detection_vis_backend.datasets.adapters.raddet import (
-            raddet_rad_stored, raddet_rad_upstream, raddet_rd_upstream)
+            raddet_rad_reference, raddet_rad_stored, raddet_rd_reference)
         for i in indices:
             if mode == "RAD_stored":
                 yield raddet_rad_stored(parser.get_RAD(i))
             elif mode == "RAD":
-                yield raddet_rad_upstream(parser.get_ADC(i))
+                yield raddet_rad_reference(parser.get_ADC(i))
             else:
-                yield raddet_rd_upstream(parser.get_ADC(i), window=mode == "RD")
+                yield raddet_rd_reference(parser.get_ADC(i), window=mode == "RD")
 
 
 def compute(dataset, mode, n_frames=None):

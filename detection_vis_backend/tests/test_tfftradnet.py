@@ -1,5 +1,6 @@
-"""T-FFTRadNet (Giroux et al., ICCV 2023 BRAVO workshop) ported from jgiroux8/T_FFTRadNet
-68bc041: Fourier-Net, the Swin backbone, decoders and heads, and the network class."""
+"""T-FFTRadNet (Giroux et al., ICCV 2023 BRAVO workshop) ported from the reference repo
+(jgiroux8/T_FFTRadNet 68bc041): Fourier-Net, the Swin backbone, decoders and heads, and the
+network class."""
 import importlib.util
 import os
 import sys
@@ -10,8 +11,8 @@ import torch
 
 from detection_vis_backend.paths import dataset_path
 
-UP = dataset_path("tfftradnet_reference", "T_FFTRadNet")
-needs_upstream = pytest.mark.skipif(not os.path.isdir(UP), reason=f"reference clone not at {UP}")
+REF = dataset_path("tfftradnet_reference", "T_FFTRadNet")
+needs_reference = pytest.mark.skipif(not os.path.isdir(REF), reason=f"reference clone not at {REF}")
 
 
 def _complex_input(shape, seed=0):
@@ -20,7 +21,7 @@ def _complex_input(shape, seed=0):
 
 
 def _timm_stand_in():
-    """Upstream's Swin.py imports DropPath, to_2tuple and trunc_normal_ from timm, which the
+    """The reference's Swin.py imports DropPath, to_2tuple and trunc_normal_ from timm, which the
     project does not install; the same helpers come from our vendored copies."""
     import types
     from detection_vis_backend.networks import tfftradnet, transrad
@@ -31,14 +32,14 @@ def _timm_stand_in():
     return {"timm": timm, "timm.models": models, "timm.models.layers": layers}
 
 
-def _load_upstream(folder, module):
-    """An upstream module loaded by path; its files import each other as `model.<name>`."""
-    root = os.path.join(UP, folder)
+def _load_reference(folder, module):
+    """A reference repo module loaded by path; its files import each other as `model.<name>`."""
+    root = os.path.join(REF, folder)
     sys.path.insert(0, root)
     stand_in = {k: v for k, v in _timm_stand_in().items() if k not in sys.modules}
     sys.modules.update(stand_in)
     try:
-        spec = importlib.util.spec_from_file_location(f"upstream_{folder}_{module}",
+        spec = importlib.util.spec_from_file_location(f"reference_{folder}_{module}",
                                                       os.path.join(root, "model", f"{module}.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -153,13 +154,13 @@ def test_detection_channel_is_a_probability():
     assert det[:, 0].min() >= 0 and det[:, 0].max() <= 1
 
 
-@needs_upstream
-def test_swin_matches_upstream_output_for_the_same_weights():
+@needs_reference
+def test_swin_matches_reference_output_for_the_same_weights():
     torch.manual_seed(0)
-    theirs = _load_upstream("RadIal", "Swin").SwinTransformer(
+    theirs = _load_reference("RadIal", "Swin").SwinTransformer(
         pretrain_img_size=None, patch_size=2, in_chans=16, embed_dim=48, depths=[2, 2, 6, 2],
         num_heads=[3, 6, 12, 24], window_size=7, out_indices=(0, 1, 2, 3))
-    theirs.eval()   # upstream's train() returns None, so eval() cannot be chained
+    theirs.eval()   # the reference's train() returns None, so eval() cannot be chained
     ours = _swin(16)
     ours.load_state_dict(theirs.state_dict(), strict=True)
     x = torch.randn(1, 16, 256, 64)
@@ -168,11 +169,11 @@ def test_swin_matches_upstream_output_for_the_same_weights():
             assert torch.equal(a, b)
 
 
-@needs_upstream
+@needs_reference
 @pytest.mark.parametrize("folder,sizes", [("RadIal", (512, 256, 16)), ("RADDet", (256, 64, 8))])
-def test_fourier_net_keys_match_upstream(folder, sizes):
+def test_fourier_net_keys_match_reference(folder, sizes):
     from detection_vis_backend.networks.tfftradnet import FourierNet
-    theirs = _load_upstream(folder, "fourier_net").FFT_Net().state_dict()
+    theirs = _load_reference(folder, "fourier_net").FFT_Net().state_dict()
     ours = FourierNet(*sizes).state_dict()
     assert set(ours) == set(theirs)
     assert all(ours[k].shape == theirs[k].shape for k in ours)
@@ -266,22 +267,22 @@ def test_raddet_has_no_freespace_head():
     assert not hasattr(_net("RADDetDataset", "RD", segmentation_head=True), "freespace")
 
 
-UPSTREAM_MODEL_BLOCK = dict(patch_size=2, channels=[32, 40, 48, 56], embed_dim=48, depths=[2, 2, 6, 2],
-                            num_heads=[3, 6, 12, 24], drop_rates=[0.0, 0.0, 0.0], regression_layer=2)
+REFERENCE_MODEL_BLOCK = dict(patch_size=2, channels=[32, 40, 48, 56], embed_dim=48, depths=[2, 2, 6, 2],
+                             num_heads=[3, 6, 12, 24], drop_rates=[0.0, 0.0, 0.0], regression_layer=2)
 
 
-@needs_upstream
+@needs_reference
 @pytest.mark.parametrize("folder,cls,in_chans,dataset,mode", [
     ("RadIal", "FFTRadNet_ViT", 32, "RADIal", "RD"), ("RadIal", "FFTRadNet_ViT_ADC", 32, "RADIal", "ADC"),
     ("RADDet", "FFTRadNet_ViT", 16, "RADDetDataset", "RD"),
     ("RADDet", "FFTRadNet_ViT_ADC", 16, "RADDetDataset", "ADC"),
     ("RADDet", "FFTRadNet_ViT_RAD", 64, "RADDetDataset", "RAD")])
-def test_state_dict_keys_and_shapes_match_upstream(folder, cls, in_chans, dataset, mode):
+def test_state_dict_keys_and_shapes_match_reference(folder, cls, in_chans, dataset, mode):
     # RadIal's committed FFT_Net is the no-shift one; the keys are the same either way.
-    upstream = _load_upstream(folder, "FFTRadNet_ViT")
+    reference = _load_reference(folder, "FFTRadNet_ViT")
     seg = folder == "RadIal"
-    theirs = getattr(upstream, cls)(in_chans=in_chans, detection_head=True, segmentation_head=seg,
-                                    **UPSTREAM_MODEL_BLOCK).state_dict()
+    theirs = getattr(reference, cls)(in_chans=in_chans, detection_head=True, segmentation_head=seg,
+                                     **REFERENCE_MODEL_BLOCK).state_dict()
     ours = _net(dataset, mode).state_dict()
     assert set(ours) == set(theirs)
     assert all(ours[k].shape == theirs[k].shape for k in ours)

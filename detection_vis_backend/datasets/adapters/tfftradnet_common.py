@@ -1,5 +1,6 @@
 """Shared by T-FFTRadNet's RADIal and RADDet adapters: the input statistics and which
-sample key (feature) each input mode is served under."""
+sample key (feature) each input mode is served under. "The reference repo" is
+jgiroux8/T_FFTRadNet 68bc041, the code these adapters reproduce."""
 import json
 import os
 
@@ -16,8 +17,8 @@ MODE_FEATURE = {
 
 
 def load_tfftradnet_statistics(dataset, mode):
-    """{'input_mean', 'input_std'} of one mode; None for the ADC modes, which upstream does
-    not normalize. A mode whose statistics are not computed yet raises, naming the script."""
+    """{'input_mean', 'input_std'} of one mode; None for the ADC modes, which the reference
+    repo does not normalize. A mode whose statistics are not computed yet raises, naming the script."""
     if mode == "ADC":
         return None
     with open(STATISTICS_FILE) as f:
@@ -30,7 +31,7 @@ def load_tfftradnet_statistics(dataset, mode):
 
 def normalize_channels_last(x, stats):
     """Subtract each channel's mean and divide by its std, channels on the last axis, as
-    upstream's loaders do."""
+    the reference's loaders do."""
     if stats is None:
         return x
     return ((x - np.asarray(stats["input_mean"])) / np.asarray(stats["input_std"])).astype(np.float32)

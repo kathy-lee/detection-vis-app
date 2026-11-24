@@ -1282,9 +1282,10 @@ class T_FFTRadNet(BaseNetwork):
     heads, on RADIal or RADDet, fed the input the model config's input_mode names.
     Everything model-shaped lives in networks/tfftradnet.py; this class is the app contract.
 
-    Submodule names are upstream's model objects' (vit, RA_decoder, detection_header,
-    freespace, DFT), so its checkpoints load. RADIal gives FFTRadNet's output dict and is
-    scored by its scorer; RADDet adds 'class', the 6-class logits of upstream's class head.
+    Submodule names are those of the model objects in the reference repo
+    (jgiroux8/T_FFTRadNet 68bc041): vit, RA_decoder, detection_header, freespace, DFT, so
+    its checkpoints load. RADIal gives FFTRadNet's output dict and is scored by its scorer;
+    RADDet adds 'class', the 6-class logits of the reference's class head.
     ADC arrives with real and imaginary parts stacked as channels (the loaders cast every
     tensor with .float()) and is made complex here, before Fourier-Net."""
 
@@ -1306,7 +1307,7 @@ class T_FFTRadNet(BaseNetwork):
             raise ValueError(f"T_FFTRadNet on {dataset}: input_mode {input_mode!r} not in {self.MODES[dataset]}")
         self.dataset, self.input_mode = dataset, input_mode
         self.detection_head = detection_head
-        # RADDet has no freespace label; upstream's RADDet configs set SegmentationHead False.
+        # RADDet has no freespace label; the reference repo's RADDet configs set SegmentationHead False.
         self.segmentation_head = segmentation_head and dataset == "RADIal"
         is_rad = input_mode.startswith("RAD")
 
@@ -1352,8 +1353,8 @@ class T_FFTRadNet(BaseNetwork):
         return out
 
     def init_lossfunc(self, config, device):
-        # As FFTRadNet's, which upstream's pixor_loss and freespace BCE equal. Regression:
-        # upstream configs say "smoothL1Loss", which this match (like upstream's) does not
+        # As FFTRadNet's, which the reference's pixor_loss and freespace BCE equal. Regression:
+        # the reference configs say "smoothL1Loss", which this match (like the reference's) does not
         # recognise, so they run plain L1 -- kept, as it produced the published numbers.
         self.criterion_classif = FocalLoss(gamma=2) if config['losses']['classification'] == 'FocalLoss' \
             else nn.BCELoss(reduction='sum')
@@ -1363,7 +1364,7 @@ class T_FFTRadNet(BaseNetwork):
             self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') \
                 if config['losses'].get('segmentation') == 'BCEWithLogitsLoss' else nn.BCELoss()
         if self.dataset == "RADDetDataset":
-            # Upstream RADDet/Train.py: mean cross-entropy against the soft class map.
+            # The reference's RADDet/Train.py: mean cross-entropy against the soft class map.
             self.criterion_class = nn.CrossEntropyLoss(reduction='mean')
 
     def get_loss(self, pred, target, config):

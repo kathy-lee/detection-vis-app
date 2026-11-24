@@ -1,5 +1,6 @@
 """T-FFTRadNet's RADDet adapter: point labels on a range-angle grid and each input mode
-built as upstream's RADDet/dataset/dataset.py builds it (plus the stored-RAD variant)."""
+built as the reference repo (jgiroux8/T_FFTRadNet 68bc041) RADDet/dataset/dataset.py builds
+it (plus the stored-RAD variant)."""
 import os
 import pickle
 
@@ -65,7 +66,7 @@ def _gt(cart_centres, classes):
             "cart_boxes": [np.array([r, c, 10, 10]) for r, c in cart_centres]}
 
 
-def test_point_labels_follow_upstream_geometry():
+def test_point_labels_follow_reference_geometry():
     from detection_vis_backend.datasets.adapters.raddet import raddet_point_labels
     pts = raddet_point_labels(_gt([(128.0, 256.0), (0.0, 356.0)], ["car", "person"]))
     # (128, 256): y = 50 - 25 = 25 m ahead, x = 0 -> R 25, phi 0. (0, 356): y 50, x 19.53125.
@@ -74,7 +75,7 @@ def test_point_labels_follow_upstream_geometry():
     assert pts.dtype == np.float32
 
 
-def test_classes_are_upstreams_alphabetical_order():
+def test_classes_are_the_references_alphabetical_order():
     from detection_vis_backend.datasets.adapters.raddet import RADDET_CLASSES
     assert RADDET_CLASSES == ["bicycle", "bus", "car", "motorcycle", "person", "truck"]
 
@@ -106,8 +107,8 @@ def test_encoder_clips_at_the_first_azimuth_bin():
     assert np.nonzero(m[0])[1].tolist() == [0, 1] * 3
 
 
-def test_encoder_drops_a_point_in_the_last_azimuth_bin_as_upstream():
-    # Upstream's encoder has no branch for angle bin 127 (it tests >= 128), so such a
+def test_encoder_drops_a_point_in_the_last_azimuth_bin_as_the_reference():
+    # The reference's encoder has no branch for angle bin 127 (it tests >= 128), so such a
     # point gets no target; kept, as the published weights were trained on it.
     from detection_vis_backend.datasets.adapters.raddet import encode_raddet_label
     assert not encode_raddet_label(np.array([[20.0, 89.9, 0]], dtype=np.float32)).any()
@@ -125,8 +126,8 @@ def test_decode_inverts_encode():
 
 # ---- input modes --------------------------------------------------------------------
 
-def _upstream_rad(adc):
-    """Inline copy of upstream RADDet/dataset/dataset.py:109-121, numpy.fft for mkl_fft."""
+def _reference_rad(adc):
+    """Inline copy of the reference's RADDet/dataset/dataset.py:109-121, numpy.fft for mkl_fft."""
     adc = adc.reshape(256, 64, 8)
     rf = np.fft.fft(adc * HAMMING_R[:, None, None], 256, axis=0)
     rd = np.fft.fftshift(np.fft.fft(rf * HAMMING_D[None, :, None], 64, axis=1), axes=1)
@@ -135,8 +136,8 @@ def _upstream_rad(adc):
     return np.abs(np.transpose(rad, axes=[0, 2, 1]))
 
 
-def _upstream_rd(adc, window=True):
-    """Inline copy of upstream RADDet/dataset/dataset.py:86-100."""
+def _reference_rd(adc, window=True):
+    """Inline copy of the reference's RADDet/dataset/dataset.py:86-100."""
     adc = adc.reshape(256, 64, 8)
     adc = adc - np.mean(adc, axis=(0, 1))
     w_r, w_d = (HAMMING_R, HAMMING_D) if window else (np.ones(256), np.ones(64))
@@ -145,30 +146,30 @@ def _upstream_rd(adc, window=True):
     return np.concatenate([rd.real, rd.imag], axis=2)
 
 
-def test_rad_mode_matches_upstream_formula():
+def test_rad_mode_matches_reference_formula():
     parser = FakeRADDet()
     mean, std = _stats("RAD")
     got = _adapter("RAD", parser=parser)[0]
     assert set(got) == {"RAD", "encoded_label", "class_map", "box_label"}
     assert got["RAD"].shape == (64, 256, 256) and got["RAD"].dtype == np.float32
-    np.testing.assert_allclose(got["RAD"], ((_upstream_rad(parser.adc[0]) - mean) / std).transpose(2, 0, 1),
+    np.testing.assert_allclose(got["RAD"], ((_reference_rad(parser.adc[0]) - mean) / std).transpose(2, 0, 1),
                                rtol=1e-4, atol=1e-5)
 
 
-def test_rd_mode_matches_upstream_formula():
+def test_rd_mode_matches_reference_formula():
     parser = FakeRADDet()
     mean, std = _stats("RD")
     got = _adapter("RD", parser=parser)[0]["RD"]
     assert got.shape == (16, 256, 64)
-    np.testing.assert_allclose(got, ((_upstream_rd(parser.adc[0]) - mean) / std).transpose(2, 0, 1),
+    np.testing.assert_allclose(got, ((_reference_rd(parser.adc[0]) - mean) / std).transpose(2, 0, 1),
                                rtol=1e-4, atol=1e-5)
 
 
 def test_raddet_rd_no_window_drops_the_windows():
-    from detection_vis_backend.datasets.adapters.raddet import raddet_rd_upstream
+    from detection_vis_backend.datasets.adapters.raddet import raddet_rd_reference
     adc = _adc(3)
-    np.testing.assert_allclose(raddet_rd_upstream(adc, window=False), _upstream_rd(adc, window=False).transpose(2, 0, 1),
-                               rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(raddet_rd_reference(adc, window=False),
+                               _reference_rd(adc, window=False).transpose(2, 0, 1), rtol=1e-4, atol=1e-4)
 
 
 def test_adc_mode_is_raw_reshape_stacked():

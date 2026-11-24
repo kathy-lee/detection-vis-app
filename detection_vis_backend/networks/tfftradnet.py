@@ -4,15 +4,16 @@ freespace) heads, optionally fed raw ADC through a learnable Fourier transform.
 Port of https://github.com/jgiroux8/T_FFTRadNet (commit 68bc041; Giroux, Bouchard and
 Laganiere, ICCV 2023 BRAVO workshop, arXiv 2303.16940). A pristine clone is kept at
 $DATASET_ROOTDIR/tfftradnet_reference/T_FFTRadNet. Module and attribute names follow the
-upstream files, so their state dicts load into these modules unchanged.
+files of the reference repo (jgiroux8/T_FFTRadNet 68bc041), so their state dicts load into
+these modules unchanged.
 
-Fourier-Net (upstream model/fourier_net.py, one copy per sensor): complex-valued linear
+Fourier-Net (the reference's model/fourier_net.py, one copy per sensor): complex-valued linear
 layers initialized to the DFT matrices, a range transform over the ADC samples and then a
-Doppler transform over the chirps. Upstream sizes them 512 x 256 for RADIal and 256 x 64
+Doppler transform over the chirps. The reference sizes them 512 x 256 for RADIal and 256 x 64
 for RADDet; here the sizes are arguments. The Doppler layer either centres the zero
-Doppler bin through an offset in its weights (upstream Doppler_Fourier_Net, the paper's
+Doppler bin through an offset in its weights (the reference's Doppler_Fourier_Net, the paper's
 default ADC rows) or is the plain DFT (NoShift_Doppler_Fourier_Net, the paper's
-"no shift" row). Note that the RADIal FFT_Net as committed upstream builds the no-shift
+"no shift" row). Note that the RADIal FFT_Net as committed in the reference repo builds the no-shift
 layer; the shift is the default here because it is what the paper's RADIal ADC row uses.
 """
 import numpy as np
@@ -23,7 +24,7 @@ import torch.utils.checkpoint as checkpoint
 from cplxmodule.nn import CplxAngle, CplxLinear, CplxModulus, CplxParameter, CplxToCplx
 from cplxmodule.nn.modules.casting import TensorToCplx
 
-# Upstream imports these from timm; the repo already vendors both (TransRAD needs them).
+# The reference code imports these from timm; the repo already vendors both (TransRAD needs them).
 from detection_vis_backend.networks.transrad import DropPath, trunc_normal_
 
 
@@ -65,7 +66,7 @@ class Doppler_Fourier_Net(nn.Module):
 
 
 class ComplexAct(nn.Module):
-    """Upstream's complex activation: with use_phase, act(|z| + m) * exp(i arg z)."""
+    """The reference's complex activation: with use_phase, act(|z| + m) * exp(i arg z)."""
 
     def __init__(self, act, use_phase=False):
         super().__init__()
@@ -82,11 +83,11 @@ class ComplexAct(nn.Module):
 
 
 class FourierNet(nn.Module):
-    """Upstream FFT_Net. Input complex (B, C, n_samples, n_chirps); output real
+    """The reference's FFT_Net. Input complex (B, C, n_samples, n_chirps); output real
     (B, 2C, n_samples, n_chirps), i.e. range x Doppler as the stored RD spectra: real
     parts then imaginary parts, instance-normalized.
 
-    activation "nl" is the non-linear variant of the paper (upstream's commented-out
+    activation "nl" is the non-linear variant of the paper (the reference's commented-out
     forward): ComplexAct(LeakyReLU, use_phase=True) after each of the two transforms."""
 
     ACTIVATIONS = ("linear", "nl")
@@ -121,7 +122,7 @@ class FourierNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------------------
-# Swin Transformer encoder, upstream model/Swin.py (identical in RadIal/ and RADDet/),
+# Swin Transformer encoder, the reference's model/Swin.py (identical in RadIal/ and RADDet/),
 # itself from Microsoft's Swin-Transformer-Object-Detection (MIT, Ze Liu et al. 2021).
 # Bodies unchanged; the 2D encoder only, kept apart from T-RODNet's 3D, U-shaped Swin.
 
@@ -564,7 +565,7 @@ class SwinTransformer(nn.Module):
 
     def init_weights(self, pretrained=None):
         """Initialize the weights. T-FFTRadNet never calls this; loading a pretrained
-        checkpoint here needed mmdet helpers that upstream does not import either."""
+        checkpoint here needed mmdet helpers that the reference code does not import either."""
 
         def _init_weights(m):
             if isinstance(m, nn.Linear):
@@ -614,9 +615,9 @@ class SwinTransformer(nn.Module):
 
 
 # ---------------------------------------------------------------------------------------
-# Decoders and heads, upstream model/FFTRadNet_ViT.py. RADIal and RADDet each have their
+# Decoders and heads, the reference's model/FFTRadNet_ViT.py. RADIal and RADDet each have their
 # own Detection_Header and Swin_RangeAngle_Decoder (different sizes; RADDet adds a 6-class
-# head); they are renamed here per dataset. Attribute names are upstream's.
+# head); they are renamed here per dataset. Attribute names are the reference's.
 
 def conv3x3(in_planes, out_planes, stride=1, bias=False):
     """3x3 convolution with padding"""
@@ -804,7 +805,7 @@ class RaddetDetectionHeader(nn.Module):
 
 class RaddetSwinDecoder(nn.Module):
     """RADDet/model/FFTRadNet_ViT.py Swin_RangeAngle_Decoder (RD and ADC inputs).
-    deconv2 is built but unused, as upstream; it is kept for the checkpoint keys."""
+    deconv2 is built but unused, as in the reference; it is kept for the checkpoint keys."""
 
     def __init__(self, ):
         super().__init__()
@@ -836,7 +837,7 @@ class RaddetSwinDecoder(nn.Module):
 
 class RaddetSwinDecoderRAD(nn.Module):
     """RADDet/model/FFTRadNet_ViT.py Swin_RangeAngle_Decoder_RAD (RAD cube input, Doppler
-    as channels). conv_block4 is built but unused, as upstream; kept for the keys."""
+    as channels). conv_block4 is built but unused, as in the reference; kept for the keys."""
 
     def __init__(self, ):
         super().__init__()
