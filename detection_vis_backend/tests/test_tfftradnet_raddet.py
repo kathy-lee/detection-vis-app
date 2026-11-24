@@ -107,6 +107,17 @@ def test_encoder_clips_at_the_first_azimuth_bin():
     assert np.nonzero(m[0])[1].tolist() == [0, 1] * 3
 
 
+@pytest.mark.parametrize("r, kept_rows", [(0.1, [0, 1]), (49.3, [62, 63]), (50.0, [63])])
+def test_encoder_crops_the_patch_at_the_range_edges(r, kept_rows):
+    # The reference writes a 3 x 3 patch into fewer rows here and raises a broadcast error;
+    # the patch is cropped instead, as at the azimuth edges.
+    from detection_vis_backend.datasets.adapters.raddet import encode_raddet_label
+    m = encode_raddet_label(np.array([[r, 0.0, 1]], dtype=np.float32))
+    rows = np.nonzero(m[0])[0]
+    assert sorted(set(rows.tolist())) == kept_rows and len(rows) == 3 * len(kept_rows)
+    assert np.isfinite(m).all() and (m[3 + 1][m[0] == 1] == 1).all()
+
+
 def test_encoder_drops_a_point_in_the_last_azimuth_bin_as_the_reference():
     # The reference's encoder has no branch for angle bin 127 (it tests >= 128), so such a
     # point gets no target; kept, as the published weights were trained on it.

@@ -361,8 +361,9 @@ def raddet_point_to_ra_pixel(r, phi_deg):
 def encode_raddet_label(points):
     """Points (N, 3) -> (9, 64, 128): [detection, range offset, angle offset, 6 class maps],
     a 3 x 3 patch per point. Port of the reference's RADDet/dataset/encoder.py
-    ra_encoder.encode, quirks included: a point in the last angle bin (127) or the first
-    range bin gets no target, as the reference's branches skip them."""
+    ra_encoder.encode, quirks included: a point in the last angle bin (127) gets no target,
+    as the reference's branches skip it. One change: at the first and last range bins the
+    patch is cropped, where the reference raises (no RADDet label has such a point)."""
     geometry, size = RADDET_RA_GEOMETRY, RADDET_RA_GEOMETRY["size"]
     res = geometry["resolution"]
     out = (2 + 1 + 6, geometry["ranges"][0] // 4, geometry["ranges"][1] // 2)
@@ -378,7 +379,12 @@ def encode_raddet_label(points):
         r_lin = np.linspace(res[0] * s, -res[0] * s, size) * 4.
         a_lin = np.linspace(res[1] * s, -res[1] * s, size) * 2.
         px_a, px_r = np.meshgrid(a_lin, r_lin)
-        rows = slice(range_bin - s, range_bin + (s + 1))
+        # The patch is cropped at the first and last range bins, as at the azimuth edges below;
+        # the reference writes the full patch there and raises a broadcast error.
+        top, bottom = max(range_bin - s, 0), min(range_bin + s + 1, out[1])
+        rows = slice(top, bottom)
+        kept = slice(top - (range_bin - s), bottom - (range_bin - s))
+        px_r, px_a = px_r[kept], px_a[kept]
         reg_r = lambda px: ((px + range_mod) - RADDET_REG_MEAN[0]) / RADDET_REG_STD[0]
         reg_a = lambda px: ((px + angle_mod) - RADDET_REG_MEAN[1]) / RADDET_REG_STD[1]
 
