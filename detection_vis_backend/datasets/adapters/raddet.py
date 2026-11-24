@@ -336,6 +336,28 @@ def raddet_point_labels(gt):
     return np.asarray(points, dtype=np.float32).reshape(-1, 3)
 
 
+RADDET_PARSER_CLASSES = ("person", "bicycle", "car", "motorcycle", "bus", "truck")   # RADDetDataset all_classes
+
+
+def raddet_class_to_parser(class_index):
+    """A class index in the reference's alphabetical order -> the parser's all_classes index,
+    the order the app's ground truth and display use."""
+    return RADDET_PARSER_CLASSES.index(RADDET_CLASSES[int(class_index)])
+
+
+def raddet_point_to_ra_pixel(r, phi_deg):
+    """(range m, angle deg) -> (row, col) of the 256 x 256 RA view the parser's get_RA shows.
+
+    Rows are range bins of 0.1953125 m with the radar at the bottom: row = 256 - R / 0.1953125.
+    Columns are uniform in sin(angle) about the centre column: col = 128 + 128 sin(phi).
+    Fitted on the labels the parser ships: the RA indices of gt['boxes'] against
+    raddet_point_labels' (R, phi) of the same objects from gt['cart_boxes'] (median gap
+    under 1 px on both axes). Clipped to the image."""
+    row = int(round(256 - r / RADDET_RA_GEOMETRY["resolution"][0]))
+    col = int(round(128 + 128 * np.sin(np.radians(phi_deg))))
+    return min(max(row, 0), 255), min(max(col, 0), 255)
+
+
 def encode_raddet_label(points):
     """Points (N, 3) -> (9, 64, 128): [detection, range offset, angle offset, 6 class maps],
     a 3 x 3 patch per point. Port of the reference's RADDet/dataset/encoder.py

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from detection_vis_backend.networks.radarpillar import rotated_iou_bev, nearest_bev_iou
+from detection_vis_backend.paths import resolve_stored_config, resolve_stored_path
 
 
 def _box(x, y, l, w, yaw):
@@ -429,7 +430,8 @@ def test_infer_readout_geometry():
     datafile = crud.get_datafile(db, 110)
     db.close()
     ds = ViewOfDelft()
-    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    # The files table stores paths relative to the dataset root; DatasetFactory joins them.
+    ds.parse(110, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
     ds._request_scoped = True
     ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
 
@@ -479,7 +481,7 @@ def test_radarpillar_evaluation_writes_kitti_files_and_scores(tmp_path):
     datafile = crud.get_datafile(db, 110)
     db.close()
     ds = ViewOfDelft()
-    ds.parse(110, datafile.path, datafile.name, datafile.config)
+    ds.parse(110, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
     ds._request_scoped = True
     ds.prepare_for_train(["radarPC"], train_cfg, model_cfg)
 

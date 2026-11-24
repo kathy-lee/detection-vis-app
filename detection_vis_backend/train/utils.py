@@ -276,6 +276,25 @@ def process_predictions_FFT(batch_predictions, confidence_threshold=0.1, nms_thr
     return final_point_cloud_predictions
 
 
+def raddet_detections(points, threshold=0.2, nms_threshold=0.3):
+    """Decoded RADDet points [R, A, confidence, class] -> the ones process_predictions_FFT
+    keeps (confidence above threshold, then NMS on their 4 x 1.8 m boxes), still as
+    [R, A, confidence, class] rows, so they can be drawn with their class."""
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 4)
+    points = points[points[:, 2] > threshold]
+    points = points[np.argsort(points[:, 2])[::-1]]
+    boxes = np.asarray(RA_to_cartesian_box(points)).reshape(-1, 8)
+    # perform_nms's loop: each surviving box removes the later ones overlapping it.
+    i = 0
+    while i < len(points) - 1:
+        ious = np.zeros(len(points))
+        ious[i + 1:] = bbox_iou(boxes[i], boxes[i + 1:])
+        keep = ious < nms_threshold
+        points, boxes = points[keep], boxes[keep]
+        i += 1
+    return points
+
+
 def pol2cart_ramap(rho, phi):
     """
     Transform from polar to cart under RAMap coordinates

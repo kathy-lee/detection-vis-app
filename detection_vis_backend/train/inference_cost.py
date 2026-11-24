@@ -339,6 +339,21 @@ class RaddetPipeline(Pipeline):
         return nms(predictions, self.train_config["nms_iou3d_threshold"], self.net.input_size, sigma=0.3, method="nms")
 
 
+class TFFTRadNetRaddetPipeline(Pipeline):
+    """T-FFTRadNet on RADDet: points decoded at 0.05 with softmax class probabilities, kept at
+    confidence 0.2 with NMS 0.3 (TFFTRadNet_raddet_evaluation's per-epoch detection metrics)."""
+
+    def inputs(self, batch, device):
+        return batch[self.features[0]].to(device).float()
+
+    def postprocess(self, outputs, batch):
+        from detection_vis_backend.datasets.adapters.raddet import decode_raddet_map
+        from detection_vis_backend.train.utils import raddet_detections
+        maps = torch.cat([outputs["Detection"], torch.softmax(outputs["class"], dim=1)], dim=1)
+        return [raddet_detections(decode_raddet_map(m, 0.05), threshold=0.2, nms_threshold=0.3)
+                for m in maps.detach().cpu().numpy()]
+
+
 class TransradPipeline(Pipeline):
     """TransRAD: decode the three scales, class NMS then location-aware NMS (TransRAD_evaluation)."""
 
@@ -431,6 +446,8 @@ class PillarPipeline(Pipeline):
 
 PIPELINE_FOR_EVALUATION = {
     evaluate.FFTRadNet_evaluation: DetectionMapPipeline,
+    evaluate.TFFTRadNet_radial_evaluation: DetectionMapPipeline,
+    evaluate.TFFTRadNet_raddet_evaluation: TFFTRadNetRaddetPipeline,
     evaluate.RODNet_evaluation: ConfmapPipeline,
     evaluate.RECORD_CRUW_evaluation: RecordCruwPipeline,
     evaluate.RECORD_CARRADA_evaluation: SegmentationPipeline,

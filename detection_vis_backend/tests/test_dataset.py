@@ -13,6 +13,9 @@ from detection_vis_backend.datasets.dataset import (
 )
 from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.nuscenes import NuScenes
+# The files table stores paths relative to the dataset root; DatasetFactory joins them
+# before parse, and these tests parse a row directly.
+from detection_vis_backend.paths import resolve_stored_config, resolve_stored_path
 
 from data import crud
 from data.database import get_session_local
@@ -51,7 +54,7 @@ def test_CARRADA_keeps_only_its_own_sequence_annotations(db_session: Session):
     datafile = crud.get_datafile(db_session, 50)
     assert datafile is not None and datafile.parse == "CARRADA"
     inst = CARRADA()
-    inst.parse(50, datafile.path, datafile.name, datafile.config)
+    inst.parse(50, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
 
     # keyed by frame id directly, not by sequence name
     assert datafile.name not in inst.annos, "annos still holds the whole 30-sequence dict"
@@ -66,7 +69,7 @@ def test_ViewOfDelft(db_session: Session):
     file_id = 110
     datafile = crud.get_datafile(db_session, file_id)
     assert datafile is not None
-    dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+    dataset_inst.parse(file_id, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
     
     id = 0
 
@@ -115,7 +118,7 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
     datafile = crud.get_datafile(db_session, 110)
     assert datafile is not None
     inst = ViewOfDelft()
-    inst.parse(110, datafile.path, datafile.name, datafile.config)
+    inst.parse(110, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
     inst._request_scoped = True   # simulate the factory's request copy
     train_cfg_stub = {
         "radar_variant": "radar_5frames",
@@ -132,7 +135,7 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
 
     # a train-split copy carries the augmentor
     inst_train = ViewOfDelft()
-    inst_train.parse(110, datafile.path, datafile.name, datafile.config)
+    inst_train.parse(110, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
     inst_train._request_scoped = True
     inst_train.prepare_for_train(["radarPC"], train_cfg_stub, model_cfg, splittype="train")
     assert inst_train.transformations is not None
@@ -163,7 +166,7 @@ def test_NuScenes(db_session: Session):
     file_id = 111
     datafile = crud.get_datafile(db_session, file_id)
     assert datafile is not None
-    dataset_inst.parse(file_id, datafile.path, datafile.name, datafile.config)
+    dataset_inst.parse(file_id, resolve_stored_path(datafile.path), datafile.name, resolve_stored_config(datafile.config))
 
     id = 0
 

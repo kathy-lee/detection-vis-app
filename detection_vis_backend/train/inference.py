@@ -129,6 +129,42 @@ def summarize_pred_objs(pred_objs):
     return summary
 
 
+def detection_map_image_boxes(net, data, feature, device):
+    """FFTRadNet-style RADIal detection map (FFTRadNet, SSMRadNet, T-FFTRadNet) -> camera-image
+    boxes [u1, v1, u2, v2]: decode at 0.05, confidence 0.2 and NMS as the scorer, then each
+    4 x 1.8 m box projected to the half-size camera image. feature names the input."""
+    output = net(torch.tensor(data[feature]).unsqueeze(0).to(device).float())
+    pred_obj = np.asarray(decode(output['Detection'].detach().cpu().numpy().copy()[0], 0.05))
+    if len(pred_obj) > 0:
+        pred_obj = process_predictions_FFT(pred_obj, confidence_threshold=0.2)
+    boxes = []
+    for box in pred_obj:
+        box = box[1:]
+        u1, v1 = worldToImage(-box[2], box[1], 0)
+        u2, v2 = worldToImage(-box[0], box[1], 1.6)
+        boxes.append([int(u1 / 2), int(v1 / 2), int(u2 / 2), int(v2 / 2)])
+    return boxes
+
+
+def tfftradnet_raddet_ra_boxes(net, data, feature, device):
+    """T-FFTRadNet on RADDet -> boxes [x1, y1, x2, y2, class] on the RA view: points decoded at
+    0.05 with softmax class probabilities, kept at confidence 0.2 with NMS 0.3 (the
+    reference's per-epoch scoring), each drawn as a 7 x 7 px box around its RA pixel, the
+    class in the parser's order. The network predicts points, not extents."""
+    from detection_vis_backend.datasets.adapters.raddet import (decode_raddet_map, raddet_class_to_parser,
+                                                                raddet_point_to_ra_pixel)
+    from detection_vis_backend.train.utils import raddet_detections
+    output = net(torch.tensor(data[feature]).unsqueeze(0).to(device).float())
+    maps = torch.cat([output['Detection'], torch.softmax(output['class'], dim=1)], dim=1)
+    points = raddet_detections(decode_raddet_map(maps.detach().cpu().numpy()[0], 0.05),
+                               threshold=0.2, nms_threshold=0.3)
+    boxes = []
+    for r, phi, _, cls in points:
+        row, col = raddet_point_to_ra_pixel(r, phi)
+        boxes.append([col - 3, row - 3, col + 3, row + 3, raddet_class_to_parser(cls)])
+    return boxes
+
+
 def relocate_datafile(file_info, file_id):
     """Refresh a train_info.txt datafile record's filesystem locations from the DB.
 
@@ -263,28 +299,12 @@ def infer(model, checkpoint_id, sample_id, file_id, split_type):
     # Prediction
     net.eval()
     with torch.set_grad_enabled(False):
-        if model_type in ("FFTRadNet", "SSMRadNet"):
-            # Same detection map and display; the input is the RD spectrum or the raw ADC.
-            input = torch.tensor(data["ADC" if model_type == "SSMRadNet" else "RD"]).unsqueeze(0).to(device).float()
-            output = net(input)
-            pred_obj = output['Detection'].detach().cpu().numpy().copy()[0]
-            pred_obj = decode(pred_obj,0.05)
-            pred_obj = np.asarray(pred_obj)
-            # process prediction: polar to cartesian, NMS...
-            if(len(pred_obj)>0):
-                pred_obj = process_predictions_FFT(pred_obj,confidence_threshold=0.2)
-            pred_objs = []
-            for box in pred_obj:
-                box = box[1:]
-                u1,v1 = worldToImage(-box[2],box[1],0)
-                u2,v2 = worldToImage(-box[0],box[1],1.6)
-                u1 = int(u1/2)
-                v1 = int(v1/2)
-                u2 = int(u2/2)
-                v2 = int(v2/2)
-                pred_objs.append([u1, v1, u2, v2])
-            #feature_show_pred = "image"
-            pred_objs = {"image": pred_objs}
+        if model_type == "T_FFTRadNet" and dataset_type == "RADDetDataset":
+            pred_objs = {"RA": tfftradnet_raddet_ra_boxes(net, data, parameters["features"][0], device)}
+        elif model_type in ("FFTRadNet", "SSMRadNet", "T_FFTRadNet"):
+            # Same detection map and display; the input is the trained feature (RD spectrum or
+            # raw ADC).
+            pred_objs = {"image": detection_map_image_boxes(net, data, parameters["features"][0], device)}
         elif model_type == "T_RODNet" and dataset_type == "CARRADA":
             # CARRADA-trained T-RODNet segments the RA view; the CRUW branch below would
             # peak-pick confidence maps it does not produce.
