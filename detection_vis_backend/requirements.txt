@@ -29,3 +29,5 @@ mamba-ssm @ https://github.com/state-spaces/mamba/releases/download/v2.2.4/mamba
 einops
 # mamba_ssm imports its language-model code, and so transformers, at package import.
 transformers<4.50
+# Complex-valued linear layers of T-FFTRadNet's Fourier-Net (initialized to the DFT).
+cplxmodule==2022.6

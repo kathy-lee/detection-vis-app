@@ -1,0 +1,31 @@
+{
+    "_about": "T-FFTRadNet (Giroux et al., ICCV 2023 BRAVO workshop) model block from upstream jgiroux8/T_FFTRadNet 68bc041 config/*_config.json. input_mode picks the input and must match the chosen feature (RD modes -> feature RD, ADC -> ADC, RAD modes -> RAD). RADIal: RD (stored radar_FFT), RD_shift_as_published (RD from ADC, Doppler shift discarded as upstream's Custom_RD), RD_shift (shift applied), RD_no_window, ADC. RADDetDataset: RAD (built from ADC as upstream), RAD_stored (magnitude of the stored RAD cubes), RD, RD_no_window, ADC. fourier_doppler_shift and fourier_activation ('linear' or 'nl') apply to ADC only. in_chans follows from dataset and mode.",
+    "RADIal": {
+        "dataset": "RADIal",
+        "input_mode": "RD",
+        "patch_size": 2,
+        "channels": [32, 40, 48, 56],
+        "embed_dim": 48,
+        "depths": [2, 2, 6, 2],
+        "num_heads": [3, 6, 12, 24],
+        "drop_rates": [0.0, 0.0, 0.0],
+        "detection_head": true,
+        "segmentation_head": true,
+        "fourier_doppler_shift": true,
+        "fourier_activation": "linear"
+    },
+    "RADDetDataset": {
+        "dataset": "RADDetDataset",
+        "input_mode": "RAD",
+        "patch_size": 2,
+        "channels": [32, 40, 48, 56],
+        "embed_dim": 48,
+        "depths": [2, 2, 6, 2],
+        "num_heads": [3, 6, 12, 24],
+        "drop_rates": [0.0, 0.0, 0.0],
+        "detection_head": true,
+        "segmentation_head": false,
+        "fourier_doppler_shift": true,
+        "fourier_activation": "linear"
+    }
+}

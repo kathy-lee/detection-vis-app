@@ -17,6 +17,10 @@ from detection_vis_backend.networks.radarcrossattention import CrossAttention, E
 from detection_vis_backend.networks.transrad import TransRADBody, TransRADLoss
 from detection_vis_backend.networks.trodnet import TRODNetBody
 from detection_vis_backend.networks.ssmradnet import RADFE, JaccardLoss
+from detection_vis_backend.networks.tfftradnet import (
+    FourierNet, SwinTransformer, BasicBlock as TFFTBasicBlock, RadialDetectionHeader, RadialSwinDecoder,
+    RaddetDetectionHeader, RaddetSwinDecoder, RaddetSwinDecoderRAD,
+)
 
 class NetworkFactory:
     # Old: cached instances keyed by class name only, so a second model of the same
@@ -1270,4 +1274,120 @@ class SSMRadNet(BaseNetwork):
             loss_seg *= pred['Segmentation'].size(0)
 
         losses = [loss_classif, loss_reg, loss_seg]
+        return sum(w * l for l, w in zip(losses, config['losses']['weight']))
+
+
+class T_FFTRadNet(BaseNetwork):
+    """T-FFTRadNet (Giroux et al., ICCV 2023 BRAVO workshop): Swin encoder under FFTRadNet's
+    heads, on RADIal or RADDet, fed the input the model config's input_mode names.
+    Everything model-shaped lives in networks/tfftradnet.py; this class is the app contract.
+
+    Submodule names are upstream's model objects' (vit, RA_decoder, detection_header,
+    freespace, DFT), so its checkpoints load. RADIal gives FFTRadNet's output dict and is
+    scored by its scorer; RADDet adds 'class', the 6-class logits of upstream's class head.
+    ADC arrives with real and imaginary parts stacked as channels (the loaders cast every
+    tensor with .float()) and is made complex here, before Fourier-Net."""
+
+    MODES = {
+        "RADIal": ("RD", "RD_shift_as_published", "RD_shift", "RD_no_window", "ADC"),
+        "RADDetDataset": ("RAD", "RAD_stored", "RD", "RD_no_window", "ADC"),
+    }
+    # (samples, chirps, receive channels) of each sensor's raw ADC, for Fourier-Net.
+    ADC_SIZE = {"RADIal": (512, 256, 16), "RADDetDataset": (256, 64, 8)}
+
+    def __init__(self, dataset, input_mode, patch_size=2, channels=(32, 40, 48, 56), embed_dim=48,
+                 depths=(2, 2, 6, 2), num_heads=(3, 6, 12, 24), drop_rates=(0.0, 0.0, 0.0),
+                 regression_layer=2, detection_head=True, segmentation_head=True,
+                 fourier_doppler_shift=True, fourier_activation="linear"):
+        super().__init__()
+        if dataset not in self.MODES:
+            raise ValueError(f"T_FFTRadNet dataset {dataset!r} not in {sorted(self.MODES)}")
+        if input_mode not in self.MODES[dataset]:
+            raise ValueError(f"T_FFTRadNet on {dataset}: input_mode {input_mode!r} not in {self.MODES[dataset]}")
+        self.dataset, self.input_mode = dataset, input_mode
+        self.detection_head = detection_head
+        # RADDet has no freespace label; upstream's RADDet configs set SegmentationHead False.
+        self.segmentation_head = segmentation_head and dataset == "RADIal"
+        is_rad = input_mode.startswith("RAD")
+
+        if input_mode == "ADC":
+            self.DFT = FourierNet(*self.ADC_SIZE[dataset], doppler_shift=fourier_doppler_shift,
+                                  activation=fourier_activation)
+        # Input channels follow from the dataset and mode: 2 x receive channels (real, imag)
+        # on RD and ADC, the 64 Doppler bins on a RAD cube.
+        in_chans = 64 if is_rad else 2 * self.ADC_SIZE[dataset][2]
+        self.vit = SwinTransformer(
+            pretrain_img_size=None, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            depths=list(depths), num_heads=list(num_heads), window_size=7, mlp_ratio=4., qkv_bias=True,
+            qk_scale=None, drop_rate=drop_rates[0], attn_drop_rate=drop_rates[1],
+            drop_path_rate=drop_rates[2], norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
+            out_indices=(0, 1, 2, 3), frozen_stages=-1, use_checkpoint=False)
+
+        if dataset == "RADIal":
+            self.RA_decoder = RadialSwinDecoder()
+            if self.detection_head:
+                self.detection_header = RadialDetectionHeader(input_angle_size=channels[3] * 4,
+                                                              reg_layer=regression_layer)
+            if self.segmentation_head:
+                self.freespace = nn.Sequential(TFFTBasicBlock(256, 128), TFFTBasicBlock(128, 64),
+                                               nn.Conv2d(64, 1, kernel_size=1))
+        else:
+            self.RA_decoder = RaddetSwinDecoderRAD() if is_rad else RaddetSwinDecoder()
+            if self.detection_head:
+                self.detection_header = RaddetDetectionHeader(input_angle_size=128, reg_layer=regression_layer)
+
+    def forward(self, x):
+        out = {'Detection': [], 'Segmentation': [], 'class': []}
+        if self.input_mode == "ADC":
+            c = x.shape[1] // 2
+            x = self.DFT(torch.complex(x[:, :c].float(), x[:, c:].float()))
+        RA = self.RA_decoder(self.vit(x))
+        if self.detection_head:
+            if self.dataset == "RADIal":
+                out['Detection'] = self.detection_header(RA)
+            else:
+                out['Detection'], out['class'] = self.detection_header(RA)
+        if self.segmentation_head:
+            out['Segmentation'] = self.freespace(F.interpolate(RA, (256, 224)))
+        return out
+
+    def init_lossfunc(self, config, device):
+        # As FFTRadNet's, which upstream's pixor_loss and freespace BCE equal. Regression:
+        # upstream configs say "smoothL1Loss", which this match (like upstream's) does not
+        # recognise, so they run plain L1 -- kept, as it produced the published numbers.
+        self.criterion_classif = FocalLoss(gamma=2) if config['losses']['classification'] == 'FocalLoss' \
+            else nn.BCELoss(reduction='sum')
+        self.criterion_reg = nn.SmoothL1Loss(reduction='sum') if config['losses']['regression'] == 'SmoothL1Loss' \
+            else nn.L1Loss(reduction='sum')
+        if self.segmentation_head:
+            self.criterion_seg = nn.BCEWithLogitsLoss(reduction='mean') \
+                if config['losses'].get('segmentation') == 'BCEWithLogitsLoss' else nn.BCELoss()
+        if self.dataset == "RADDetDataset":
+            # Upstream RADDet/Train.py: mean cross-entropy against the soft class map.
+            self.criterion_class = nn.CrossEntropyLoss(reduction='mean')
+
+    def get_loss(self, pred, target, config):
+        classif_pred = pred['Detection'][:, 0].contiguous().flatten()
+        classif_label = target['encoded_label'][:, 0].contiguous().flatten()
+        loss_classif = self.criterion_classif(classif_pred, classif_label)
+
+        T = target['encoded_label'][:, 1:]
+        P = pred['Detection'][:, 1:]
+        M = target['encoded_label'][:, 0].unsqueeze(1)
+        loss_reg = self.criterion_reg(P * M, T)
+        NbPts = M.sum()
+        if NbPts > 0:
+            loss_reg /= NbPts
+
+        if self.dataset == "RADIal":
+            if self.segmentation_head:
+                loss_third = self.criterion_seg(pred['Segmentation'].contiguous().flatten(),
+                                                target['seg_label'].contiguous().flatten())
+                loss_third *= pred['Segmentation'].size(0)
+            else:
+                loss_third = 0
+        else:
+            loss_third = self.criterion_class(pred['class'], target['class_map'])
+
+        losses = [loss_classif, loss_reg, loss_third]
         return sum(w * l for l, w in zip(losses, config['losses']['weight']))
