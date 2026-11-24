@@ -1766,7 +1766,7 @@ class RADDetDataset(Dataset):
         self.config = ""
 
         self.frame_sync = 0
-        self.features = ['image', 'RAD']
+        self.features = ['image', 'RAD', 'ADC']
         self.radar_cfg = {
             "designed_frequency" : 76.8,
             "config_frequency" : 77,
@@ -1827,14 +1827,24 @@ class RADDetDataset(Dataset):
 
         self.anno_filenames = get_sorted_filenames(os.path.join(self.root_path, 'gt'))
 
-    def get_image(self, idx=None, for_visualize=False): 
+    def get_image(self, idx=None, for_visualize=False):
         #image = np.asarray(Image.open(self.image_filenames[idx]))
         return self.image_filenames[idx]
-    
+
     def get_RAD(self, idx=None, for_visualize=False):
         rad = np.load(self.RAD_filenames[idx])
         return rad
-    
+
+    def get_ADC(self, idx=None, for_visualize=False):
+        """Raw ADC of frame idx, complex (256 samples, 64 chirps, 4 rx, 2 tx), from
+        ADC/<id>.npy. Read by the frame's number (its label file's name), not by position:
+        ADC/ also holds 135 frames that have no labels."""
+        frame_id = os.path.splitext(os.path.basename(self.anno_filenames[idx]))[0]
+        path = os.path.join(self.root_path, "ADC", f"{frame_id}.npy")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"RADDet raw ADC of frame {frame_id} not found: {path}")
+        return np.load(path)
+
     def get_RD(self, idx=None, for_visualize=False):
         rad = self.get_RAD(idx)
         rad = np.abs(rad)
@@ -1862,9 +1872,10 @@ class RADDetDataset(Dataset):
       
     def get_spectrogram(self, idx=None, for_visualize=False):
         return None
-    
+
     def get_feature(self, feature_name, idx=None, for_visualize=False):
         function_dict = {
+            'ADC': self.get_ADC,
             'RAD': self.get_RAD,
             'RD': self.get_RD,
             'RA': self.get_RA,
@@ -1876,7 +1887,7 @@ class RADDetDataset(Dataset):
         }
         feature_data = function_dict[feature_name](idx, for_visualize=for_visualize)
         return feature_data
-    
+
     def get_label(self, feature_name, idx=None):
         gt = []
         objs = self.annotation(idx)
