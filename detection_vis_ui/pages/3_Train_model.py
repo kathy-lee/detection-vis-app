@@ -204,7 +204,7 @@ def find_default_configs(dataset, feature, model):
       #   model_cfg = data[model][dataset][feature]
     else:
       model_cfg = data[model]
-  elif model in ("DAROD", "T_RODNet"):
+  elif model in ("DAROD", "T_RODNet", "T_FFTRadNet"):
     with open(os.path.join('detection_vis_backend', 'networks', f'{model}_model_config.json'), 'r') as file:
       config = json.load(file)
     if dataset in config.keys():

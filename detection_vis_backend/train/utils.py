@@ -46,6 +46,20 @@ def FFTRadNet_collate(batch):
         return {key: rd, 'encoded_label': encoded_label, 'box_label': box_label}
 
 
+def TFFTRadNet_collate(batch):
+    # T-FFTRadNet's samples carry one input ('RD', 'ADC' or 'RAD', after the input mode), the
+    # encoded detection map and the point labels; RADIal adds the freespace map, RADDet the
+    # class map.
+    key = next(k for k in ('RD', 'ADC', 'RAD') if k in batch[0])
+    out = {key: torch.stack([torch.as_tensor(item[key]) for item in batch], 0),
+           'encoded_label': torch.stack([torch.as_tensor(item['encoded_label']) for item in batch], 0),
+           'box_label': [torch.from_numpy(np.asarray(item['box_label'])) for item in batch]}
+    for extra in ('seg_label', 'class_map'):
+        if extra in batch[0]:
+            out[extra] = torch.stack([torch.as_tensor(item[extra]) for item in batch], 0)
+    return out
+
+
 def DAROD_collate(batch):
     # raw labels from CARRADA dataset: 1,2,3
     # raw labels from RADDet dataset: 1,2,3,4,5,6

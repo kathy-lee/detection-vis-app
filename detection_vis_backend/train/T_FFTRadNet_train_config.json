@@ -1,0 +1,77 @@
+{
+    "_about": "T-FFTRadNet (Giroux et al., ICCV 2023 BRAVO workshop) training recipe from the reference repo (jgiroux8/T_FFTRadNet 68bc041), RadIal/config/*_config.json and RADDet/config/*_config.json: seed 3, Adam lr 1e-4, StepLR 10 / 0.9, 150 epochs, FocalLoss + 'smoothL1Loss' (which runs plain L1, in the reference's loss code as in ours), loss weights [2, 100, 100] on RADIal (third term the freespace BCE) and [2, 100, 100000] on RADDet (third term the class map cross-entropy). Batch: RADIal 4; RADDet 16 for RD and ADC, 4 for RAD; val 4, test 1. The reference's 'asam' block is not read by its own training loop and is left out. Best checkpoint: F1 on RADIal, select_score on RADDet.",
+    "_split_note": "RADIal: the reference splits by valeo's sequence lists (mode 'sequence'), which is this app's 'original' split. RADDet: the reference splits its train directory at random 0.9 / 0.1 and tests on the test directory; here the dataset's official split (original_split_info.json, 7314 train / 812 val / 2032 test) is used, the test set being the same.",
+    "_merge_note": "The Train page starts from 'default' and replaces whole top-level keys with the dataset block, or with the dataset's per-feature block when one exists for the chosen feature (not both); so the RADDet 'RAD' block repeats the RADDet losses and test_checkpoint.",
+    "default": {
+        "seed": 3,
+        "losses": {
+            "classification": "FocalLoss",
+            "regression": "smoothL1Loss",
+            "segmentation": "BCEWithLogitsLoss",
+            "weight": [2, 100, 100]
+        },
+        "lr_scheduler": {
+            "type": "step",
+            "step_size": 10,
+            "gamma": 0.9
+        },
+        "optimizer": {
+            "lr": 1e-4
+        },
+        "num_epochs": 150,
+        "dataloader": {
+            "splitmode": "original",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {"batch_size": 4, "num_workers": 4},
+            "val": {"batch_size": 4, "num_workers": 4},
+            "test": {"batch_size": 1, "num_workers": 1}
+        },
+        "test_checkpoint": {"monitor": "F1", "mode": "max"}
+    },
+    "RADIal": {},
+    "RADDetDataset": {
+        "losses": {
+            "classification": "FocalLoss",
+            "regression": "smoothL1Loss",
+            "weight": [2, 100, 100000]
+        },
+        "test_checkpoint": {"monitor": "select_score", "mode": "max"},
+        "dataloader": {
+            "splitmode": "original",
+            "split_sequence": {
+                "train": [],
+                "val": [],
+                "test": []
+            },
+            "split_random": [],
+            "train": {"batch_size": 16, "num_workers": 8},
+            "val": {"batch_size": 4, "num_workers": 4},
+            "test": {"batch_size": 1, "num_workers": 1}
+        },
+        "RAD": {
+            "losses": {
+                "classification": "FocalLoss",
+                "regression": "smoothL1Loss",
+                "weight": [2, 100, 100000]
+            },
+            "test_checkpoint": {"monitor": "select_score", "mode": "max"},
+            "dataloader": {
+                "splitmode": "original",
+                "split_sequence": {
+                    "train": [],
+                    "val": [],
+                    "test": []
+                },
+                "split_random": [],
+                "train": {"batch_size": 4, "num_workers": 4},
+                "val": {"batch_size": 4, "num_workers": 4},
+                "test": {"batch_size": 1, "num_workers": 1}
+            }
+        }
+    }
+}

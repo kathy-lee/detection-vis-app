@@ -28,7 +28,7 @@ from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATED
 from detection_vis_backend.datasets.adapters.radial import radial_sequence_split
 from detection_vis_backend.networks.network import NetworkFactory
-from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate
+from detection_vis_backend.train.utils import FFTRadNet_collate, default_collate, DAROD_collate, radarpillar_collate, TransRAD_collate, TFFTRadNet_collate
 from detection_vis_backend.train.evaluate import eval_func_dict
 from data import crud, schemas
 from data.database import get_session_local
@@ -147,6 +147,7 @@ def CreateDataLoaders(datafiles: list, features: list, model_config: dict, train
     collate_func = {
         'FFTRadNet': FFTRadNet_collate,
         'SSMRadNet': FFTRadNet_collate,
+        'T_FFTRadNet': TFFTRadNet_collate,
         'RODNet_CDC': default_collate,
         'RODNet_CDCv2': default_collate,
         'RODNet_HG': default_collate,

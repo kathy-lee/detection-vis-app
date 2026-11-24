@@ -276,5 +276,17 @@
       256
     ],
     "notes": "Raw ADC: 512 fast-time samples x 256 chirps x 32 (real, then imag, of the 16 Rx). Needs RADIal's radar_ADC (scripts/extract_radial_adc.py); frames without an adc file are left out. Output and scoring as FFTRadNet: 128x224 detection map, freespace upsampled to 256x224. Mamba kernels: CUDA only."
+  },
+  "T_FFTRadNet": {
+    "features": [
+      "RD",
+      "ADC",
+      "RAD"
+    ],
+    "datasets": [
+      "RADIal",
+      "RADDetDataset"
+    ],
+    "notes": "The model config's input_mode picks the input and must match the chosen feature: RD modes -> RD, ADC -> ADC, RAD modes -> RAD. RADIal: RD (stored radar_FFT), RD_shift_as_published, RD_shift, RD_no_window, ADC; every mode but RD needs radar_ADC and leaves out frames without it. RADDetDataset: RAD (built from ADC), RAD_stored (the stored cubes), RD, RD_no_window, ADC; all but RAD_stored read RADDet's ADC files. ADC modes run through a Fourier-Net (complex linear layers initialized to the DFT). Output: RADIal 128x224 detection map and freespace, as FFTRadNet; RADDet 64x128 detection map and 6-class map."
   }
 }
