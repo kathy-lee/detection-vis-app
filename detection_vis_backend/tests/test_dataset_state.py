@@ -147,6 +147,28 @@ def test_parse_runs_once_per_file_id():
     assert calls == [("a", "b")], f"parse ran {len(calls)} times, expected once"
 
 
+def test_parse_gets_stored_paths_joined_to_the_dataset_root(monkeypatch, tmp_path):
+    """The files table stores path and config relative to DATASET_ROOTDIR; every parser
+    is reached through this factory, so it is where they become absolute again."""
+    (tmp_path / "CRUW").mkdir()
+    (tmp_path / "CRUW" / "sensor.json").write_text("{}")
+    monkeypatch.setenv("DATASET_ROOTDIR", str(tmp_path))
+    factory = _fresh_factory()
+    calls = []
+
+    class FakeParsed:
+        def parse(self, *args):
+            calls.append(args)
+
+    factory.instance_dict[9006] = FakeParsed()
+    factory.instance_dict[9007] = FakeParsed()
+    factory.get_shared_instance("CRUW", 9006, parse_args=(9006, "CRUW", "seq", "CRUW/sensor.json"))
+    factory.get_shared_instance("NuScenes", 9007, parse_args=(9007, "nuscenes", "mini", "v1.0-mini"))
+
+    assert calls == [(9006, str(tmp_path / "CRUW"), "seq", str(tmp_path / "CRUW" / "sensor.json")),
+                     (9007, str(tmp_path / "nuscenes"), "mini", "v1.0-mini")]
+
+
 def test_shared_instance_creation_is_thread_safe():
     """With handlers in a threadpool, _shared() races: two threads can both
     see the file_id missing, both construct, and hand different objects to different

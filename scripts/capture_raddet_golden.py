@@ -29,7 +29,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
-from detection_vis_backend.paths import load_env, relative_to_dataset_root  # noqa: E402
+from detection_vis_backend.paths import load_env, relative_to_dataset_root, resolve_stored_path  # noqa: E402
 
 load_env()
 os.environ.setdefault("LOGURU_LEVEL", "ERROR")
@@ -94,7 +94,7 @@ def build(model, features, variant, splittype, file_row):
 
 
 def capture(file_row):
-    chosen = pick_indices(file_row["path"])
+    chosen = pick_indices(resolve_stored_path(file_row["path"]))
     indices = sorted({i for group in chosen.values() for i in group})
     fixture = {"dataset": DATASET, "file_id": file_row["id"], "file_name": file_row["name"],
                "root_path": relative_to_dataset_root(file_row["path"]),

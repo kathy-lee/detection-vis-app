@@ -62,6 +62,24 @@ def test_relative_to_dataset_root(monkeypatch):
     assert paths.relative_to_dataset_root("/other/img.jpg") == "/other/img.jpg"
 
 
+def test_stored_dataset_path_is_joined_to_the_root(monkeypatch):
+    monkeypatch.setenv("DATASET_ROOTDIR", "/d")
+    assert paths.resolve_stored_path("UWCR/Automotive") == "/d/UWCR/Automotive"
+    assert paths.resolve_stored_path("/old/UWCR/Automotive") == "/old/UWCR/Automotive"
+    assert paths.resolve_stored_path("") == ""
+
+
+def test_stored_config_is_joined_only_when_it_names_a_file(monkeypatch, tmp_path):
+    (tmp_path / "CRUW").mkdir()
+    (tmp_path / "CRUW" / "sensor.json").write_text("{}")
+    monkeypatch.setenv("DATASET_ROOTDIR", str(tmp_path))
+    assert paths.resolve_stored_config("CRUW/sensor.json") == str(tmp_path / "CRUW" / "sensor.json")
+    # NuScenes stores its version name here, not a path.
+    assert paths.resolve_stored_config("v1.0-mini") == "v1.0-mini"
+    assert paths.resolve_stored_config("") == ""
+    assert paths.resolve_stored_config("/abs/cfg.json") == "/abs/cfg.json"
+
+
 def test_repo_env_file_is_ignored_by_git():
     with open(os.path.join(paths.REPO_ROOT, ".gitignore")) as f:
         assert "/.env" in f.read().split()

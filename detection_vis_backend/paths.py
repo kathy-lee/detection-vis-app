@@ -68,6 +68,22 @@ def dataset_path(*parts: str) -> str:
     return os.path.join(dataset_root(), *parts)
 
 
+def resolve_stored_path(path: str) -> str:
+    """A files-table `path` (relative to the dataset root) as an absolute path. Empty
+    stays empty; an absolute value is returned as it is."""
+    return dataset_path(path) if path else path
+
+
+def resolve_stored_config(config: str) -> str:
+    """A files-table `config` as an absolute path when it names a file under the dataset
+    root. Otherwise it is returned as it is: some parsers store a name there, not a path
+    (NuScenes keeps its version, e.g. 'v1.0-mini'), and many store ''."""
+    if not config:
+        return config
+    joined = dataset_path(config)
+    return joined if os.path.exists(joined) else config
+
+
 def relative_to_dataset_root(path: str) -> str:
     """path without the dataset root in front; a path outside the root is returned as it is."""
     root = dataset_root().rstrip("/") + "/"

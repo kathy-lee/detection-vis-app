@@ -35,6 +35,7 @@ from detection_vis_backend.datasets.view_of_delft import ViewOfDelft
 from detection_vis_backend.datasets.nuscenes import NuScenes
 from detection_vis_backend.datasets.utils import read_radar_params, reshape_frame, gen_steering_vec, peak_search_full_variance, generate_confmaps, load_anno_txt, read_pointcloudfile, inv_trans, quat_to_rotation, get_transformations, VFlip, HFlip, normalize, complexTo2Channels, confmap2ra, find_nearest, generate_confmap, normalize_confmap, add_noise_channel, get_co_vec, bi_var_gauss, plain_gauss, get_center_map, get_orent_map, ra2idx, require_shared_instance, require_request_scope
 from detection_vis_backend.datasets.cfar import CA_CFAR
+from detection_vis_backend.paths import resolve_stored_config, resolve_stored_path
 
 
 class DatasetFactory:
@@ -95,6 +96,11 @@ class DatasetFactory:
             parse_lock = self._parse_lock_for(inst)
             with parse_lock:
                 if not getattr(inst, "_parsed", False):
+                    if len(parse_args) == 4:
+                        # (file_id, path, name, config) of a files-table row, whose path
+                        # and config are stored relative to the dataset root.
+                        file_id, path, name, config = parse_args
+                        parse_args = (file_id, resolve_stored_path(path), name, resolve_stored_config(config))
                     inst.parse(*parse_args)
                     inst._parsed = True
         return inst

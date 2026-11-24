@@ -3,6 +3,11 @@ A web application for automotive sensor data visualizaion, analysis and detectio
 
 ## Running the app
 
+First, copy `.env.example` to `.env` at the repo root and set this machine's data
+paths (`DATASET_ROOTDIR`, `MODEL_ROOTDIR`, `TMP_ROOTDIR`). `.env` is not committed;
+both `run.sh` files, the scripts and the tests read it, and stop with an error if it
+is missing.
+
 Dev mode uses two long-running processes, each started by its own `run.sh`.
 Run each in its own terminal:
 
@@ -67,11 +72,12 @@ insert directories+files ─┘
 `detection_vis_backend/datasets/dataset.py` (see `RaDICaL`, `RADIal`,
 `CARRADA`, … as templates). It needs:
 - `parse(self, file_id, file_path, file_name, config)` — extract per-frame
-  features to disk;
+  features to disk. `DatasetFactory` has already joined `file_path` (and `config`,
+  when it names a file) to `DATASET_ROOTDIR`, so the parser uses them as they are;
 - feature getters for the data types it has (`get_RD`, `get_RA`, `get_RAD`,
   `get_radarpointcloud`, `get_lidarpointcloud`, image/depth handling, …);
 - `get_feature(...)` and `__len__` for the UI and the dataloader; `annotation(idx)` returning the
-  frame's raw labels. **Migrated datasets** (today: `RADDetDataset`) have no `__getitem__` of
+  frame's raw labels. **Migrated datasets** (today: `RADDetDataset`, `CRUW`, `CARRADA`, `RADIal`) have no `__getitem__` of
   their own — each model that reads them gets a *sample adapter* in
   `detection_vis_backend/datasets/adapters/` (see "Adding a new model"). The other datasets
   still build samples in their own `__getitem__` / `prepare_for_train`.
@@ -84,7 +90,9 @@ a hand-maintained data dump — not an alembic migration and not run
 automatically). Insert:
 - `directories` — the dataset tree (use `parent_id` for sub-datasets);
 - `files` — one row per datafile, setting `parse` (your new class name),
-  `path`, `name`, `size`, `config`, `directory_id`, the native-data feature
+  `path`, `name`, `size`, `config`, `directory_id` (`path`, and `config` when it
+  is a file, are relative to `DATASET_ROOTDIR` from the repo's `.env`, e.g.
+  `'CRUW'`, `'CRUW/sensor_config_rod2021.json'`), the native-data feature
   booleans (`ADC/RAD/RA/AD/RD/spectrogram/radarPC/lidarPC/image/depth_image`),
   and `labeled`.
 
