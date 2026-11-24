@@ -12,6 +12,8 @@ from loguru import logger
 from PIL import Image
 
 from detection_vis_backend.datasets.adapters import SampleAdapter, register
+from detection_vis_backend.datasets.adapters.tfftradnet_common import (
+    feature_of_mode, load_tfftradnet_statistics, normalize_channels_last)
 
 # Per-channel mean and std of the 32 RD channels (16 Rx real, then imag), from valeo's
 # FFTRadNet release.
@@ -221,4 +223,103 @@ class SSMRadNetOnRADIal(SampleAdapter):
         data_dict = {'ADC': adc, 'encoded_label': encoded_label, 'box_label': box_labels}
         if self.segmentation_head:
             data_dict.update({'seg_label': radial_freespace(self.parser, i)})
+        return data_dict
+
+
+def radial_complex_adc(raw):
+    """(1048576, 4) int16 chip streams -> complex64 (512 samples, 256 chirps, 16 Rx) with
+    the DC offset (mean over samples and chirps, per receiver) removed: what upstream
+    T-FFTRadNet's ADCProcessing/rpl.py stores with method='ADC'."""
+    decoded = decode_radial_adc(raw)
+    cube = decoded[..., :16].astype(np.float64) + 1j * decoded[..., 16:]
+    return (cube - cube.mean(axis=(0, 1))).astype(np.complex64)
+
+
+def radial_rd_from_adc(adc, window, shift):
+    """Upstream T-FFTRadNet Custom_RD (RadIal/dataset/dataset.py): Hamming windows on range
+    and Doppler when window, range then Doppler FFT, Doppler fftshift when shift; real
+    parts then imaginary parts, float32 (512, 256, 32). Upstream computes the shift and
+    then discards it, so its published RD-shift mode is shift=False here."""
+    n_s, n_c = adc.shape[0], adc.shape[1]
+    w_r, w_d = np.ones(n_s), np.ones(n_c)
+    if window:
+        w_r = 0.54 - 0.46 * np.cos(2 * np.pi * np.arange(n_s) / (n_s - 1))
+        w_d = 0.54 - 0.46 * np.cos(2 * np.pi * np.arange(n_c) / (n_c - 1))
+    rd = np.fft.fft(adc * w_r[:, None, None], n_s, axis=0)
+    rd = np.fft.fft(rd * w_d[None, :, None], n_c, axis=1)
+    if shift:
+        rd = np.fft.fftshift(rd, axes=1)
+    return np.concatenate([rd.real, rd.imag], axis=2).astype(np.float32)
+
+
+@register
+class TFFTRadNetOnRADIal(SampleAdapter):
+    """T-FFTRadNet's input for the model config's input_mode, with FFTRadNet's encoded
+    detection map, box labels and freespace map:
+      RD                     stored radar_FFT, normalized (32, 512, 256)
+      RD_shift_as_published  RD from ADC, Doppler shift discarded as upstream, normalized
+      RD_shift               RD from ADC with the Doppler shift, normalized
+      RD_no_window           RD from ADC without windows, normalized
+      ADC                    DC-free complex ADC, real then imaginary parts (32, 512, 256)
+    Modes read from ADC serve only the frames whose radar_ADC file exists, numbered as
+    SSMRadNetOnRADIal numbers them."""
+    MODELS, DATASET = ("T_FFTRadNet",), "RADIal"
+
+    def __init__(self, parser, features, model_cfg, train_cfg, splittype=None):
+        super().__init__(parser, features, model_cfg, train_cfg, splittype)
+        self.mode = model_cfg.get('input_mode', 'RD')
+        self.key = feature_of_mode("T_FFTRadNet", "RADIal", self.mode, features)
+        self.stats = load_tfftradnet_statistics("RADIal", self.mode)
+        self.segmentation_head = bool(model_cfg.get('segmentation_head', True))
+        self.frames = None
+        if self.mode != 'RD':
+            self.adc_dir = os.path.join(parser.root_dir, 'radar_ADC')
+            if not os.path.isdir(self.adc_dir):
+                raise FileNotFoundError(f"{self.adc_dir} not found: T-FFTRadNet {self.mode} reads RADIal's "
+                                        "raw ADC (written by scripts/extract_radial_adc.py)")
+            present = set(os.listdir(self.adc_dir))
+            self.frames = [i for i, key in enumerate(parser.sample_keys) if f"adc_{key:06d}.npy" in present]
+            if not self.frames:
+                raise FileNotFoundError(f"{self.adc_dir} holds no adc file of the {len(parser)} labelled frames")
+            logger.info(f"RADIal ADC: kept {len(self.frames)} of {len(parser)} frames")
+            self._sample_of = {frame: i for i, frame in enumerate(self.frames)}
+            # Training and inference look for these methods to translate between samples
+            # and dataset frames; the RD mode serves every frame and has none of them.
+            # Bound methods, not lambdas: fresh DataLoader workers get the adapter pickled.
+            self.dataset_frame = self._dataset_frame
+            self.has_frame = self._has_frame
+            self.sample_of_frame = self._sample_of_frame
+
+    def __len__(self):
+        return len(self.parser) if self.frames is None else len(self.frames)
+
+    def _dataset_frame(self, i):
+        return self.frames[i]
+
+    def _has_frame(self, frame):
+        return frame in self._sample_of
+
+    def _sample_of_frame(self, frame):
+        if frame not in self._sample_of:
+            raise ValueError(f"RADIal frame {frame} (numSample {self.parser.sample_keys[frame]}) "
+                             f"has no raw ADC file in {self.adc_dir}")
+        return self._sample_of[frame]
+
+    def _input(self, i):
+        """The mode's input, channels last."""
+        if self.mode == 'RD':
+            return normalize_channels_last(self.parser.get_RD(i), self.stats)
+        adc = radial_complex_adc(np.load(os.path.join(self.adc_dir, f"adc_{self.parser.sample_keys[i]:06d}.npy")))
+        if self.mode == 'ADC':
+            return np.concatenate([adc.real, adc.imag], axis=2).astype(np.float32)
+        rd = radial_rd_from_adc(adc, window=self.mode != 'RD_no_window', shift=self.mode == 'RD_shift')
+        return normalize_channels_last(rd, self.stats)
+
+    def __getitem__(self, index):
+        i = index if self.frames is None else self.frames[index]
+        box_labels = radial_box_labels(self.parser.annotation(i))
+        data_dict = {self.key: np.transpose(self._input(i), (2, 0, 1)),
+                     'encoded_label': encode_radial_label(box_labels).copy(), 'box_label': box_labels}
+        if self.segmentation_head:
+            data_dict['seg_label'] = radial_freespace(self.parser, i)
         return data_dict
