@@ -152,9 +152,20 @@ def test_feature_mode_mismatch_raises(parser):
         _adapter(parser, "RD", features=["ADC"])
 
 
-def test_rd_no_window_without_statistics_raises_clearly(parser):
+def test_rd_no_window_drops_the_windows(parser):
+    mean, std = _stats("RD_no_window")
+    got = _adapter(parser, "RD_no_window")[0]["RD"]
+    np.testing.assert_allclose(got, (_upstream_rd(_raw(10), window=False) - mean) / std, rtol=1e-4, atol=1e-5)
+
+
+def test_missing_statistics_raise_naming_the_script(monkeypatch, tmp_path):
+    import json
+    from detection_vis_backend.datasets.adapters import tfftradnet_common
+    f = tmp_path / "stats.json"
+    f.write_text(json.dumps({"RADIal": {"RD_no_window": None}}))
+    monkeypatch.setattr(tfftradnet_common, "STATISTICS_FILE", str(f))
     with pytest.raises(ValueError, match="tfftradnet_input_statistics"):
-        _adapter(parser, "RD_no_window")
+        tfftradnet_common.load_tfftradnet_statistics("RADIal", "RD_no_window")
 
 
 @pytest.mark.skipif(not os.path.isdir(os.path.join(REAL_RADIAL, "radar_ADC")), reason="RADIal ADC absent")
