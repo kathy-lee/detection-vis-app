@@ -190,7 +190,6 @@ def test_evaluate_module_calls_match_signatures():
 
 def _carrada_datafile(fid):
     os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
-    os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
     from data import crud
     from data.database import get_session_local
     db = get_session_local()
@@ -269,9 +268,8 @@ def test_train_accepts_progress_cb():
 @pytest.mark.skipif(os.getenv("RUN_GPU_TESTS") != "1",
                     reason="requires GPU + CRUW dataset; run with RUN_GPU_TESTS=1")
 def test_train_calls_progress_cb_per_epoch():
-    here = os.path.dirname(__file__)
-    with open(os.path.join(here, "sample_for_train_test.json")) as f:
-        sample = json.load(f)
+    from detection_vis_backend.tests.golden_utils import load_train_sample
+    sample = load_train_sample(os.path.join(os.path.dirname(__file__), "sample_for_train_test.json"))
     cb = MagicMock()
     train(sample["datafiles"], sample["features"], sample["model_config"],
           sample["train_config"], progress_cb=cb)
@@ -626,16 +624,16 @@ def test_relocate_datafile_takes_live_path_and_keeps_identity(monkeypatch, stale
     """
     from detection_vis_backend.train.inference import relocate_datafile
     _patch_db(monkeypatch, row=_Row(id=110, name="renamed", parse="Something",
-                                    path="/home/kangle/dataset/ViewOfDelft",
-                                    config="/home/kangle/dataset/cfg.json"))
+                                    path="/data/ViewOfDelft",
+                                    config="/data/cfg.json"))
 
     record = stale_train_info_record
     original = dict(record)
 
     out = relocate_datafile(record, 110)
 
-    assert out["path"] == "/home/kangle/dataset/ViewOfDelft"
-    assert out["config"] == "/home/kangle/dataset/cfg.json"
+    assert out["path"] == "/data/ViewOfDelft"
+    assert out["config"] == "/data/cfg.json"
     assert out["name"] == "ViewOfDelft" and out["parse"] == "ViewOfDelft"
     assert record == original, "input was mutated"
 

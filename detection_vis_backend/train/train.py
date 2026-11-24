@@ -21,7 +21,8 @@ from contextlib import contextmanager
 from loguru import logger
 
 import sys
-sys.path.insert(0, '/home/kangle/projects/detection-vis-app')
+# The repository root, so the package imports when this file is run directly.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from detection_vis_backend.datasets.dataset import DatasetFactory
 from detection_vis_backend.datasets.adapters import make_sample_adapter, MIGRATED

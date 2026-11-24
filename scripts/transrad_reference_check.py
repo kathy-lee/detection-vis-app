@@ -18,14 +18,14 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
-os.environ.setdefault("MODEL_ROOTDIR", "/home/kangle/dataset/trained_models")
-os.environ.setdefault("DATASET_ROOTDIR", "/home/kangle/dataset")
-os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
+from detection_vis_backend.paths import dataset_path, load_env  # noqa: E402
+
+load_env()
 os.environ.setdefault("LOGURU_LEVEL", "ERROR")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
 
 AUTHORS = {0.1: 0.730876, 0.3: 0.601569, 0.4: 0.495822, 0.5: 0.377664, 0.6: 0.249594, 0.7: 0.129277}
-CHECKPOINT = "/home/kangle/dataset/transrad_reference/TransRAD/model_data/best_epoch_weights.pth"
+CHECKPOINT = dataset_path("transrad_reference", "TransRAD", "model_data", "best_epoch_weights.pth")
 
 
 def main():

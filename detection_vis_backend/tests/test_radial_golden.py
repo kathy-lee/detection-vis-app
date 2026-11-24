@@ -8,11 +8,12 @@ import sys
 
 import pytest
 
+from detection_vis_backend.paths import dataset_path
 from detection_vis_backend.tests.golden_utils import digest_sample
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "radial_golden.json")
-ROOT = "/home/kangle/dataset/radial/RADIal-labeled"
+ROOT = dataset_path("radial", "RADIal-labeled")
 with open(FIXTURE) as _f:
     GOLDEN = json.load(_f)
 

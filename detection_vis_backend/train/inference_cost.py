@@ -24,6 +24,7 @@ from torch.utils.flop_counter import FlopCounterMode
 
 from detection_vis_backend.datasets.utils import confmap2ra
 from detection_vis_backend.networks.transrad import decode_predictions as transrad_decode, nms_class_then_location as transrad_nms
+from detection_vis_backend.paths import dataset_path
 from detection_vis_backend.train import evaluate
 from detection_vis_backend.train.evaluate import ConfmapStack, eval_func_dict
 from detection_vis_backend.train.utils import (association, create_default, decode, distribute, nms, peaks_detect,
@@ -447,12 +448,11 @@ PIPELINE_FOR_EVALUATION = {
 def _range_angle_grids(dataset_type):
     """(rng_grid, agl_grid) of the confidence-map models, from the radar configuration
     their evaluation functions read."""
-    root = os.environ.get("DATASET_ROOTDIR", "/home/kangle/dataset")
     if dataset_type == "CRUW":
-        with open(os.path.join(root, "CRUW", "sensor_config_rod2021.json")) as f:
+        with open(dataset_path("CRUW", "sensor_config_rod2021.json")) as f:
             radar_cfg = json.load(f)["radar_cfg"]
     else:
-        with open(os.path.join(root, "UWCR", "Automotive", "radar_config.json")) as f:
+        with open(dataset_path("UWCR", "Automotive", "radar_config.json")) as f:
             radar_cfg = json.load(f)
     return confmap2ra(radar_cfg, name="range"), confmap2ra(radar_cfg, name="angle")
 

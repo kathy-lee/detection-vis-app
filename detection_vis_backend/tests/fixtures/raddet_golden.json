@@ -2,9 +2,8 @@
  "dataset": "RADDetDataset",
  "file_id": 52,
  "file_name": "RADDet_Dataset",
- "root_path": "/home/kangle/dataset/RADDet_reform_dataset",
+ "root_path": "RADDet_reform_dataset",
  "config": "",
- "tmp_rootdir": "/home/kangle/dataset/tmp",
  "chosen": {
   "first": [
    116,
@@ -148,7 +147,7 @@
        7
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000138.jpg"
     },
     "200": {
      "RAD": {
@@ -179,7 +178,7 @@
        7
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000222.jpg"
     },
     "308": {
      "RAD": {
@@ -210,7 +209,7 @@
        7
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000369.jpg"
     },
     "9966": {
      "RAD": {
@@ -241,7 +240,7 @@
        7
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/010101.jpg"
     }
    }
   },
@@ -391,7 +390,7 @@
        4
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000138.jpg"
     },
     "200": {
      "RD": {
@@ -418,7 +417,7 @@
        4
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000222.jpg"
     },
     "308": {
      "RD": {
@@ -445,7 +444,7 @@
        4
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/000369.jpg"
     },
     "9966": {
      "RD": {
@@ -472,7 +471,7 @@
        4
       ]
      },
-     "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+     "image_path": "RADDet_reform_dataset/stereo_image/010101.jpg"
     }
    },
    "train_seeded": {
@@ -502,7 +501,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000138.jpg"
      },
      "200": {
       "RD": {
@@ -529,7 +528,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000222.jpg"
      },
      "308": {
       "RD": {
@@ -556,7 +555,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000369.jpg"
      },
      "9966": {
       "RD": {
@@ -583,7 +582,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/010101.jpg"
      }
     },
     "1": {
@@ -612,7 +611,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000138.jpg"
      },
      "200": {
       "RD": {
@@ -639,7 +638,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000222.jpg"
      },
      "308": {
       "RD": {
@@ -666,7 +665,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000369.jpg"
      },
      "9966": {
       "RD": {
@@ -693,7 +692,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/010101.jpg"
      }
     },
     "123": {
@@ -722,7 +721,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000138.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000138.jpg"
      },
      "200": {
       "RD": {
@@ -749,7 +748,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000222.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000222.jpg"
      },
      "308": {
       "RD": {
@@ -776,7 +775,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/000369.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/000369.jpg"
      },
      "9966": {
       "RD": {
@@ -803,7 +802,7 @@
         4
        ]
       },
-      "image_path": "/home/kangle/dataset/RADDet_reform_dataset/stereo_image/010101.jpg"
+      "image_path": "RADDet_reform_dataset/stereo_image/010101.jpg"
      }
     }
    }

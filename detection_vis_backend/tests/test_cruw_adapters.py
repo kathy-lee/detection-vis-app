@@ -6,7 +6,9 @@ import pickle
 import numpy as np
 import pytest
 
-SENSOR_CFG = "/home/kangle/dataset/CRUW/sensor_config_rod2021.json"
+from detection_vis_backend.paths import dataset_path
+
+SENSOR_CFG = dataset_path("CRUW", "sensor_config_rod2021.json")
 needs_sensor_cfg = pytest.mark.skipif(not os.path.exists(SENSOR_CFG),
                                       reason=f"CRUW sensor config not at {SENSOR_CFG}")
 

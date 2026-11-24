@@ -157,7 +157,7 @@ def test_ViewOfDelft_getitem_for_radarpillar(db_session: Session):
     assert found_gt, "expected at least one of the probed frames to contain objects"
 
 
-@pytest.mark.skip(reason="NuScenes mini dataset not on this machine (/home/kangle/dataset/nuscences_v1.0_mini)")
+@pytest.mark.skip(reason="NuScenes mini dataset not on this machine ($DATASET_ROOTDIR/nuscences_v1.0_mini)")
 def test_NuScenes(db_session: Session):
     dataset_inst = NuScenes()
     file_id = 111

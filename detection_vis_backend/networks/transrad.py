@@ -2,7 +2,7 @@
 
 Port of https://github.com/radar-lab/TransRAD (commit 8f9b9ad, GPL-3.0; Cheng & Cao,
 IEEE TRS 2025, arXiv 2501.17977), itself built on qhfan/RMT and bubbliiiing/yolov8-pytorch.
-A pristine checkout lives at /home/kangle/dataset/transrad_reference/TransRAD and every
+A pristine checkout lives at $DATASET_ROOTDIR/transrad_reference/TransRAD and every
 class below names the file and lines it was copied from. Deviations from the reference
 are commented where they happen; there are five: SyncBatchNorm -> BatchNorm2d (same
 keys, same single-GPU behaviour), feature strides fixed from the architecture instead of
@@ -24,8 +24,6 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 
 from detection_vis_backend.train.utils import iou3d_np
-
-REF_CHECKPOINT = "/home/kangle/dataset/transrad_reference/TransRAD/model_data/best_epoch_weights.pth"
 
 
 # ---------------------------------------------------------------------------------------

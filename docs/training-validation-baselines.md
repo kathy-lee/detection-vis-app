@@ -269,7 +269,7 @@ Rows 11/12 are mAP@0.5; rows 4a/4b/9 are mIoU; row 10 is 3D-IoU AP at four thres
 figure @0.5. Row 10 is the only one compared against the paper rather than a reference anchor,
 for the reason given in its closure section — it is the only pair that does not fall short.
 The last column names the run directory under `$MODEL_ROOTDIR`
-(`/home/kangle/dataset/trained_models`), so the weights behind every number can be found —
+(set in the repo's `.env`), so the weights behind every number can be found —
 and so that pruning old runs does not destroy the campaign's evidence by accident. Each was
 identified by matching the reported metric back to the run's `test_eval.csv` / checkpoint
 filenames, not by name: several rows come from directories no prose in this file mentions,
@@ -718,7 +718,7 @@ Three things were checked before making that change:
 ### TransRAD: validated against the authors' checkpoint (2026-10-16)
 
 TransRAD (radar-lab/TransRAD @8f9b9ad, GPL-3.0; a pristine clone with the shipped
-`model_data/best_epoch_weights.pth` lives at `/home/kangle/dataset/transrad_reference/`)
+`model_data/best_epoch_weights.pth` lives at `$DATASET_ROOTDIR/transrad_reference/`)
 is the first network added through the sample-adapter mechanism: `RADDetDataset` is
 untouched and `TransRADOnRADDet` builds the reference's sample (log-magnitude cube,
 Doppler resized 64→256 by nearest neighbour, edge boxes clamped to their larger part).
@@ -1003,7 +1003,7 @@ RADDet has **no reference weights**: the pre-trained `.ckpt` the README offers
 (`README.md:214`) is a Google Drive link that now 404s. So the weights-through-our-pipeline
 check that closed CARRADA and DAROD/RADDet is unavailable, and this pair falls under the
 "when no trained reference weights exist" procedure above. All six steps were run against
-a pristine worktree of `ZhangAoCanada/RADDet@75f4603` at `/home/kangle/projects/raddet-pristine`
+a pristine worktree of `ZhangAoCanada/RADDet@75f4603` (a local worktree, `raddet-pristine`)
 (the existing `RADDet` checkout is not usable as a reference — it carries uncommitted debug
 `print`s, `batch_size` 3 → 1, and a `break` after the first training batch).
 
@@ -1193,7 +1193,7 @@ Not needed for row 10 (above), but recording what it would take. Running the ref
 globs `train_set_dir/RAD/*/*.npy` (two levels, `part_1` … `part_5`) and reads train and test from
 separate directories. That layout exists only as `RADDet_dataset` on the USB disk (8126 train +
 2032 test). The pristine repo also needs its environment rebuilt — the venv at
-`/home/kangle/projects/RADDet/.venv` has a Python 3.12 interpreter against 3.10 site-packages, so
+of the local RADDet checkout (`RADDet/.venv`) has a Python 3.12 interpreter against 3.10 site-packages, so
 TensorFlow will not import. The one thing it would buy is neutralising the unknown-duration
 problem, by running both sides for the same number of steps.
 
@@ -1525,7 +1525,7 @@ reproducible — data not released*.
 Row 14, published **0.94 / 0.86** (mean AP at 2 m / 1 m over pedestrian, cyclist, car;
 per class 0.91/0.80, 0.93/0.88, 0.97/0.91 — RadarCrossAttention Table I, "Bivar Cross
 Atten. + offset loss"). Reference: `ravikothari510/crossattention_radar_detector`,
-checkout `/home/kangle/projects/crossattention_radar_detector` @3e2169c. Same pre-run
+commit 3e2169c. Same pre-run
 checklist as the other families; the audit found the port faithful in its arithmetic and
 wrong in its configuration.
 
@@ -1946,7 +1946,7 @@ it read 0.1025 before the gt-box defect was fixed; on RADDet 0.0031 before the i
 normalization defect. **Run it first on any pair that has a reference implementation.**
 
 Reference checkpoints, per-class results, the saved comparison tensors and the harness
-scripts are preserved outside the repo at `/home/kangle/dataset/darod_reference/`
+scripts are preserved outside the repo at `$DATASET_ROOTDIR/darod_reference/`
 (see its README). Twenty defects were found and fixed to reach the numbers above; the
 commit messages on `feat/validate-baselines` carry the details.
 

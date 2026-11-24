@@ -10,8 +10,7 @@ from data.models import Directory, File, MLmodel
 def set_env_vars():
     os.environ['DATABASE_URL'] = "postgresql://postgres:postgres@localhost/postgres"
     os.environ['BACKEND_SERVICE'] = "localhost"
-    os.environ['TMP_ROOTDIR'] = "/home/kangle/dataset/tmp"
-    os.environ['MODEL_ROOTDIR'] = "/home/kangle/dataset/trained_models"
+    # TMP_ROOTDIR and MODEL_ROOTDIR come from the repo's .env (loaded in conftest.py).
 
 
 client = TestClient(app)
@@ -116,7 +115,6 @@ def test_blocking_handlers_run_in_threadpool():
     from detection_vis_backend.app import app as fastapi_app
 
     BLOCKING_PATHS = {
-        "/download",
         "/parse/{file_id}",
         "/sync_check/{file_id}",
         "/sync_set/{file_id}",
@@ -232,9 +230,8 @@ def mock_training(monkeypatch):
 
 
 def _sample():
-    here = os.path.dirname(__file__)
-    with open(os.path.join(here, "sample_for_train_test.json")) as f:
-        return json.load(f)
+    from detection_vis_backend.tests.golden_utils import load_train_sample
+    return load_train_sample(os.path.join(os.path.dirname(__file__), "sample_for_train_test.json"))
 
 
 def test_train_returns_job_id_and_job_finishes(fake_queue, mock_training):

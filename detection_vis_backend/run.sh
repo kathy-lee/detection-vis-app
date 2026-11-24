@@ -10,9 +10,16 @@ fi
 
 echo "Backend running in ${RUN_MODE} mode"
 
-export MODEL_ROOTDIR="/home/kangle/dataset/trained_models"
-export DATASET_ROOTDIR="/home/kangle/dataset"
-export TMP_ROOTDIR="/home/kangle/dataset/tmp"  # Dir for keeping temporary results
+# DATASET_ROOTDIR, MODEL_ROOTDIR and TMP_ROOTDIR (temporary results) are this machine's
+# paths, kept only in the repo's .env (see .env.example).
+ENV_FILE="$(dirname "$0")/../.env"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "Missing $ENV_FILE: copy .env.example to .env and set the data paths." >&2
+    exit 1
+fi
+set -a
+. "$ENV_FILE"
+set +a
 export LOGURU_LEVEL="INFO"
 
 if [ $RUN_MODE = "prod" ]; then

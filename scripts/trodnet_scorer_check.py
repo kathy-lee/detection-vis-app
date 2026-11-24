@@ -35,11 +35,13 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
+from detection_vis_backend.paths import dataset_path, load_env  # noqa: E402
+
+load_env()
 os.environ.setdefault("LOGURU_LEVEL", "ERROR")
 
-REF_DIR = "/home/kangle/dataset/trodnet_reference/T-RODNet"
-CRUW_ROOT = "/home/kangle/dataset/CRUW"
+REF_DIR = dataset_path("trodnet_reference", "T-RODNet")
+CRUW_ROOT = dataset_path("CRUW")
 TEST_SEQS = ("2019_04_09_BMS1001", "2019_04_30_MLMS001", "2019_05_23_PM1S013", "2019_09_29_ONRD005")
 CLASSES = ["pedestrian", "cyclist", "car"]
 

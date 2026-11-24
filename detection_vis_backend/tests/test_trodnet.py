@@ -7,7 +7,9 @@ import types
 import pytest
 import torch
 
-REF_DIR = "/home/kangle/dataset/trodnet_reference/T-RODNet"
+from detection_vis_backend.paths import dataset_path
+
+REF_DIR = dataset_path("trodnet_reference", "T-RODNet")
 needs_ref = pytest.mark.skipif(not os.path.isdir(REF_DIR), reason=f"reference clone not at {REF_DIR}")
 
 

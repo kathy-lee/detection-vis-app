@@ -22,7 +22,9 @@ Result 2026-11-22 on 500 frames (ids 47-10284): correlation 0.99996-0.99999, err
 import os, sys
 import numpy as np
 
-root = "/home/kangle/dataset/RADDet_reform_dataset"
+from detection_vis_backend.paths import dataset_path
+
+root = dataset_path("RADDet_reform_dataset")
 n = int(sys.argv[1])
 ids = sorted(int(f[:6]) for f in os.listdir(f"{root}/RAD"))
 rng = np.random.default_rng(0)

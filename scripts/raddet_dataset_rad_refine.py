@@ -18,7 +18,9 @@ error 0.6-0.7 % of the peak.
 import itertools, sys
 import numpy as np
 
-root = "/home/kangle/dataset/RADDet_reform_dataset"
+from detection_vis_backend.paths import dataset_path
+
+root = dataset_path("RADDet_reform_dataset")
 
 def ncorr(a, b):
     return float(abs(np.vdot(a, b)) / np.sqrt(np.vdot(a, a).real * np.vdot(b, b).real))

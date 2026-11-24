@@ -19,6 +19,7 @@ from loguru import logger
 
 from detection_vis_backend.train.utils import decode, RA_to_cartesian_box, bbox_iou, get_class_name, get_metrics, process_predictions_FFT, post_process_single_frame, get_ols_btw_objects, yoloheadToPredictions, nms, create_default, peaks_detect, distribute, update_peaks, association, pol2cord, orent, distance
 from detection_vis_backend.datasets.utils import confmap2ra, get_class_id, iou3d
+from detection_vis_backend.paths import dataset_path
 from detection_vis_backend.networks.transrad import decode_predictions as transrad_decode, nms_class_then_location as transrad_nms
 
 
@@ -717,7 +718,7 @@ def summarize(eval, olsThrs, recThrs, n_class, gl=True):
 
 
 def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
-    root_path = "/home/kangle/dataset/CRUW"
+    root_path = dataset_path("CRUW")
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
     radar_cfg = sensor_cfg['radar_cfg']
@@ -883,7 +884,7 @@ def RODNet_evaluation(net, dataloader, train_config, features, save_dir, eval_ty
 
 
 def RECORD_CRUW_evaluation(net, dataloader, train_config, features, save_dir, eval_type, device):
-    root_path = "/home/kangle/dataset/CRUW"
+    root_path = dataset_path("CRUW")
     with open(os.path.join(root_path, 'sensor_config_rod2021.json'), 'r') as file:
         sensor_cfg = json.load(file)
     radar_cfg = sensor_cfg['radar_cfg']
@@ -1767,7 +1768,7 @@ def RAMP_CNN_evaluation(net, dataloader, train_config, features, output_dir, eva
 
     # 1.Generate network output (confmaps) and post-process them to the form of detection predictions
     classes = ["pedestrian", "cyclist", "car"] 
-    with open('/home/kangle/dataset/UWCR/Automotive/radar_config.json', 'r') as file:
+    with open(dataset_path('UWCR', 'Automotive', 'radar_config.json'), 'r') as file:
         radar_cfg = json.load(file)
     rng_grid = confmap2ra(radar_cfg, name='range')
     agl_grid = confmap2ra(radar_cfg, name='angle')

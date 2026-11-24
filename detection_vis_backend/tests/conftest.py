@@ -5,6 +5,12 @@ from loguru import logger
 from fakeredis import FakeStrictRedis
 from rq import Queue
 
+from detection_vis_backend.paths import load_env
+
+# This machine's DATASET_ROOTDIR, MODEL_ROOTDIR and TMP_ROOTDIR, from the repo's .env,
+# for every test and the code under test (variables already set in the shell win).
+load_env()
+
 
 def pytest_configure(config):
     # Next to this file, wherever pytest is started from (a relative path made a nested

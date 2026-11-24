@@ -1,7 +1,6 @@
 import uuid
 import os
 import uvicorn
-import paramiko
 import subprocess
 import json
 import torch
@@ -102,44 +101,6 @@ def read_datasetfiles(id: int, skip: int = 0, limit: int = 100, db: Session = De
     if datasetfiles is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return datasetfiles
-
-
-@app.get("/download")
-def download_file(file_path: str, file_name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Automatically add the server's SSH key (not recommended for production)
-    try:
-        # private_key = paramiko.RSAKey.from_private_key_file("id_rsa")
-        private_key = paramiko.RSAKey.from_private_key_file("/home/kangle/.ssh/id_rsa_mifcom")
-    except paramiko.PasswordRequiredException:
-        logger.error("Private key is encrypted, password is required")
-    except paramiko.SSHException:
-        logger.error("Private key file is not a valid RSA private key file")
-    except FileNotFoundError:
-        logger.error("Private key file does not exist")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
-
-    try:
-        ssh.connect('mifcom-desktop', username='kangle', pkey=private_key)
-    except paramiko.AuthenticationException:
-        return Response(content="SSH connection failed", status_code=status.HTTP_401_UNAUTHORIZED)
-    
-    sftp = ssh.open_sftp()
-    remote_file_path = os.path.join("/home/kangle/dataset", file_path, file_name)
-    # remote_file_path = os.path.join("/home/kangle", file_path, "test.txt") # for testing
-    local_file_path = file_name
-    # sftp.get(remote_file_path, local_file_path)
-    # sftp.close()
-    # ssh.close()
-    try:
-        sftp.get(remote_file_path, local_file_path)
-    except IOError:
-        return Response(content="File not found", status_code=status.HTTP_404_NOT_FOUND)
-    finally:
-        sftp.close()
-        ssh.close()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/parse/{file_id}")

@@ -18,7 +18,9 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
-os.environ.setdefault('MODEL_ROOTDIR', '/home/kangle/dataset/trained_models')
+from detection_vis_backend.paths import load_env  # noqa: E402
+
+load_env()
 os.environ.setdefault('DATABASE_URL', 'postgresql://postgres:postgres@localhost/postgres')
 
 from data.database import get_session_local

@@ -34,9 +34,9 @@ sys.path.insert(0, REPO_ROOT)
 # Mirror detection_vis_backend/run.sh:13-16 -- the dataset parsers read these directly and
 # fail deep in Path() with an unhelpful TypeError if any is unset (TMP_ROOTDIR is the
 # feature cache used by the CRUW/RADIal parsers).
-os.environ.setdefault("MODEL_ROOTDIR", "/home/kangle/dataset/trained_models")
-os.environ.setdefault("DATASET_ROOTDIR", "/home/kangle/dataset")
-os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
+from detection_vis_backend.paths import load_env  # noqa: E402
+
+load_env()
 os.environ.setdefault("LOGURU_LEVEL", "INFO")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
 

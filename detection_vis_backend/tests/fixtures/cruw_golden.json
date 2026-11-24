@@ -2,9 +2,8 @@
  "dataset": "CRUW",
  "file_id": 17,
  "file_name": "2019_04_09_BMS1001",
- "root_path": "/home/kangle/dataset/CRUW",
- "config": "/home/kangle/dataset/CRUW/sensor_config_rod2021.json",
- "tmp_rootdir": "/home/kangle/dataset/tmp",
+ "root_path": "CRUW",
+ "config": "CRUW/sensor_config_rod2021.json",
  "chirp_seeds": [
   0,
   1,

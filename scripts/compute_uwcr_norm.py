@@ -41,8 +41,9 @@ from multiprocessing import Pool
 
 import numpy as np
 
-CACHE_ROOT = os.path.join(
-    os.environ.get("TMP_ROOTDIR", "/home/kangle/dataset/tmp"), "uwcr_frame_cache")
+from detection_vis_backend.paths import tmp_root
+
+CACHE_ROOT = os.path.join(tmp_root(), "uwcr_frame_cache")
 
 SPLIT_SRC = "scripts/smoke_sweep.py build_split(), UWCR branch"
 TEST_DATE = "2019_05_29"

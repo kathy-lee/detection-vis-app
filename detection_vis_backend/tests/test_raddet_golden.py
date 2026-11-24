@@ -2,17 +2,15 @@
 built before the refactor (fixture captured by scripts/capture_raddet_golden.py on
 2026-10-15, unrefactored code). Needs the dataset on disk; skipped elsewhere.
 """
-import json
 import os
 
 import numpy as np
 import pytest
 
-from detection_vis_backend.tests.golden_utils import digest_sample
+from detection_vis_backend.tests.golden_utils import digest_sample, load_golden
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "raddet_golden.json")
-with open(FIXTURE) as _f:
-    GOLDEN = json.load(_f)
+GOLDEN = load_golden(FIXTURE)
 
 pytestmark = pytest.mark.skipif(not os.path.isdir(GOLDEN["root_path"]),
                                 reason=f"RADDet dataset not at {GOLDEN['root_path']}")

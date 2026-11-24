@@ -176,7 +176,7 @@ What follows for this project (see the T-FFTRadNet design):
 ## Reproducing this
 
 All three scripts run in the project environment and read the dataset from
-`/home/kangle/dataset/RADDet_reform_dataset`:
+`$DATASET_ROOTDIR/RADDet_reform_dataset` (the dataset root is set in the repo's `.env`):
 
 ```
 uv run python scripts/raddet_dataset_rad_search.py 26

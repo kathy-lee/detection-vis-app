@@ -1,7 +1,9 @@
 import os
 import pytest
 
-VOD_ROOT = "/home/kangle/dataset/ViewOfDelft"
+from detection_vis_backend.paths import dataset_path
+
+VOD_ROOT = dataset_path("ViewOfDelft")
 GT_DIR = os.path.join(VOD_ROOT, "radar", "training", "label_2")
 
 

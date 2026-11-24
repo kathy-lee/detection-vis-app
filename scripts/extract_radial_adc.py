@@ -104,15 +104,24 @@ def extract_record(record_dir, frames, fft_dir, out_dir):
     return written, mismatched
 
 
+def default_radial_dir(name):
+    """RADIal's folder `name` under this machine's dataset root (the repo's .env). uv runs
+    this script in its own environment, without the project installed, so the repo root
+    is put on the import path; detection_vis_backend.paths needs only the standard library."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from detection_vis_backend.paths import dataset_path
+    return dataset_path("radial", name)
+
+
 def count_adc_files(out_dir):
     return len([f for f in os.listdir(out_dir) if f.startswith("adc_") and f.endswith(".npy")])
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--raw-root", default="/home/kangle/dataset/radial/RADIal-raw",
+    p.add_argument("--raw-root", default=default_radial_dir("RADIal-raw"),
                    help="folder holding the downloaded RECORD@... recordings")
-    p.add_argument("--labeled-root", default="/home/kangle/dataset/radial/RADIal-labeled",
+    p.add_argument("--labeled-root", default=default_radial_dir("RADIal-labeled"),
                    help="ready-to-use release: labels.csv, radar_FFT; radar_ADC is written here")
     args = p.parse_args()
 

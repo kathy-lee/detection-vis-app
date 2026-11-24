@@ -29,9 +29,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
-os.environ.setdefault("MODEL_ROOTDIR", "/home/kangle/dataset/trained_models")
-os.environ.setdefault("DATASET_ROOTDIR", "/home/kangle/dataset")
-os.environ.setdefault("TMP_ROOTDIR", "/home/kangle/dataset/tmp")
+from detection_vis_backend.paths import load_env, relative_to_dataset_root  # noqa: E402
+
+load_env()
 os.environ.setdefault("LOGURU_LEVEL", "ERROR")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/postgres")
 
@@ -97,8 +97,8 @@ def capture(file_row):
     chosen = pick_indices(file_row["path"])
     indices = sorted({i for group in chosen.values() for i in group})
     fixture = {"dataset": DATASET, "file_id": file_row["id"], "file_name": file_row["name"],
-               "root_path": file_row["path"], "config": file_row["config"],
-               "tmp_rootdir": os.environ["TMP_ROOTDIR"],
+               "root_path": relative_to_dataset_root(file_row["path"]),
+               "config": relative_to_dataset_root(file_row["config"]),
                "chosen": chosen, "train_seeds": TRAIN_SEEDS, "cases": []}
     for model, features, variant in CASES:
         ds, model_cfg, train_cfg = build(model, features, variant, "val", file_row)

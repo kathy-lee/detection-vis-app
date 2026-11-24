@@ -2,9 +2,8 @@
  "dataset": "CARRADA",
  "file_id": 25,
  "file_name": "2019-09-16-13-06-41",
- "root_path": "/home/kangle/dataset/CARRADA",
+ "root_path": "CARRADA",
  "config": "",
- "tmp_rootdir": "/home/kangle/dataset/tmp",
  "seeds": [
   0,
   1,
@@ -9209,7 +9208,7 @@
    "train": {
     "0": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "2c2d4f7f1876ed7d39793d0bcc45fb4effb3c82b85dcf15fa3ffddf319fd8722",
        "dtype": "float32",
@@ -9257,7 +9256,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "a3d27e7c493cf6c5525e8971c9c7aa2dc15da4fa6ccc1b9ea86ba90020cfc7d2",
        "dtype": "float32",
@@ -9305,7 +9304,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "bce60e5871cfcbcc0156169572e98d1e3cd32976ec3e81738d63d3f3171af31e",
        "dtype": "float32",
@@ -9353,7 +9352,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "6e1abde0e995ff1c572e72e8efdce87e0719ee1cda2e4b262113f831ca973f59",
        "dtype": "float32",
@@ -9403,7 +9402,7 @@
     },
     "1": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "4a2d2cc10184165035502b3e6eeca488f0393e32c0217d2de7b9584c7eea4128",
        "dtype": "float32",
@@ -9451,7 +9450,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "d8106f1ebb404e29ab227a7087f8d6bb57c18a407e8d42e5fc7f9cf814b2d71f",
        "dtype": "float32",
@@ -9499,7 +9498,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "3f2a9ac93eebd74ffdbd553c952e7629f00d721c3082c3ba803ceff8586693c3",
        "dtype": "float32",
@@ -9547,7 +9546,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "ff31ffee43569894a686627e2f6cd13d8d5eb1f6fd9cba6f72efc0f6183820e8",
        "dtype": "float32",
@@ -9597,7 +9596,7 @@
     },
     "2": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "17d4f0c5f841985cdc70ddbc221a2e9c754c3227296abc87ee2c3dae2c4fd9cc",
        "dtype": "float32",
@@ -9645,7 +9644,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "0fbb5c56e033ee7b2af7455ebb84c170c7883563f8ec662aac7cc3417ebf6980",
        "dtype": "float32",
@@ -9693,7 +9692,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "7f6e7422660d3b88f1120c0ca49ac27a9725cfe83af4c2b3a1d25cb7d89b7853",
        "dtype": "float32",
@@ -9741,7 +9740,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "a373d0ead850fd1a0274a76c58dc59c1c8f73b9eb697c0b19ac7a409f862a118",
        "dtype": "float32",
@@ -9793,7 +9792,7 @@
    "val": {
     "0": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -9841,7 +9840,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -9889,7 +9888,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -9937,7 +9936,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",
@@ -9987,7 +9986,7 @@
     },
     "1": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -10035,7 +10034,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -10083,7 +10082,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -10131,7 +10130,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",
@@ -10181,7 +10180,7 @@
     },
     "2": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -10229,7 +10228,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -10277,7 +10276,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -10325,7 +10324,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",
@@ -10377,7 +10376,7 @@
    "test": {
     "0": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -10425,7 +10424,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -10473,7 +10472,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -10521,7 +10520,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",
@@ -10571,7 +10570,7 @@
     },
     "1": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -10619,7 +10618,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -10667,7 +10666,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -10715,7 +10714,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",
@@ -10765,7 +10764,7 @@
     },
     "2": {
      "0": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000024.jpg",
       "RD": {
        "sha256": "f2c57be63709f3c3e26cde375bf8a4c5fa6f49317630fcfbdd100070bf616f3e",
        "dtype": "float32",
@@ -10813,7 +10812,7 @@
       }
      },
      "1": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000025.jpg",
       "RD": {
        "sha256": "b0593a3011b80bb9c6020be818b07cf5c0441eb780ef4adf46df7bec20c61db8",
        "dtype": "float32",
@@ -10861,7 +10860,7 @@
       }
      },
      "98": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000430.jpg",
       "RD": {
        "sha256": "8bedd281ad72f768b358d8dd62bae002be2eb957342a594d7a1b3802b20a5d7e",
        "dtype": "float32",
@@ -10909,7 +10908,7 @@
       }
      },
      "195": {
-      "image_path": "/home/kangle/dataset/CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
+      "image_path": "CARRADA/Carrada/2019-09-16-13-06-41/camera_images/000681.jpg",
       "RD": {
        "sha256": "afb2d86a02c2befed97350fc1c65d9084e9792af344c0003ca71ca66dcd1e92e",
        "dtype": "float32",

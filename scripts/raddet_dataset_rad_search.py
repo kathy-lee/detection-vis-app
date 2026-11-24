@@ -21,7 +21,9 @@ further and raddet_dataset_rad_verify.py checks it on many frames.
 import itertools, sys
 import numpy as np
 
-root = "/home/kangle/dataset/RADDet_reform_dataset"
+from detection_vis_backend.paths import dataset_path
+
+root = dataset_path("RADDet_reform_dataset")
 fid = int(sys.argv[1])
 raw = np.load(f"{root}/ADC/{fid:06d}.npy")          # (256, 64, 4, 2)
 ref = np.load(f"{root}/RAD/{fid:06d}.npy").astype(complex)   # (256, 256, 64)

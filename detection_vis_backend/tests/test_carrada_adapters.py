@@ -1,14 +1,14 @@
 """CARRADA as a parser and its sample adapters. Uses one real sequence; skipped when the
 dataset or the database is unavailable."""
-import json
 import os
 
 import numpy as np
 import pytest
 
+from detection_vis_backend.tests.golden_utils import load_golden
+
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "carrada_golden.json")
-with open(FIXTURE) as _f:
-    _G = json.load(_f)
+_G = load_golden(FIXTURE)
 
 pytestmark = pytest.mark.skipif(not os.path.isdir(_G["root_path"]),
                                 reason=f"CARRADA dataset not at {_G['root_path']}")

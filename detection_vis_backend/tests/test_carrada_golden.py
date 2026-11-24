@@ -1,17 +1,15 @@
 """Byte-level regression: the CARRADA adapters must rebuild exactly the samples CARRADA
 built before the refactor (fixture captured by scripts/capture_carrada_golden.py on
 2026-10-22, unrefactored code, commit 6dc18f0). Needs the dataset on disk."""
-import json
 import os
 
 import numpy as np
 import pytest
 
-from detection_vis_backend.tests.golden_utils import digest_sample
+from detection_vis_backend.tests.golden_utils import digest_sample, load_golden
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "carrada_golden.json")
-with open(FIXTURE) as _f:
-    GOLDEN = json.load(_f)
+GOLDEN = load_golden(FIXTURE)
 
 pytestmark = pytest.mark.skipif(not os.path.isdir(GOLDEN["root_path"]),
                                 reason=f"CARRADA dataset not at {GOLDEN['root_path']}")

@@ -6,7 +6,9 @@ import os
 import pytest
 import torch
 
-UPSTREAM_MODEL = "/home/kangle/dataset/ssmradnet_reference/SSMRadNet/FFTRadNet/model/SSMRadNet.py"
+from detection_vis_backend.paths import dataset_path
+
+UPSTREAM_MODEL = dataset_path("ssmradnet_reference", "SSMRadNet", "FFTRadNet", "model", "SSMRadNet.py")
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="Mamba kernels need CUDA")
 
 

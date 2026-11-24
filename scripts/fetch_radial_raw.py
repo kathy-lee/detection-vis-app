@@ -36,7 +36,7 @@ import zipfile
 
 import pandas as pd
 
-from extract_radial_adc import count_adc_files, extract_record, labelled_frames, missing_frames
+from extract_radial_adc import count_adc_files, default_radial_dir, extract_record, labelled_frames, missing_frames
 
 DRIVE_FOLDER_ID = "1ur9Dgr7fjE4v0QbdBKXLtk5t8ey__3wn"
 # Room for the largest zip plus its unpacked recording; below this the loop stops.
@@ -72,9 +72,9 @@ def free_gib(path):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--raw-root", default="/home/kangle/dataset/radial/RADIal-raw",
+    p.add_argument("--raw-root", default=default_radial_dir("RADIal-raw"),
                    help="where each zip is downloaded and unpacked, then deleted")
-    p.add_argument("--labeled-root", default="/home/kangle/dataset/radial/RADIal-labeled",
+    p.add_argument("--labeled-root", default=default_radial_dir("RADIal-labeled"),
                    help="ready-to-use release: labels.csv, radar_FFT; radar_ADC is written here")
     args = p.parse_args()
 

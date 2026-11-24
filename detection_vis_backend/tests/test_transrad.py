@@ -8,12 +8,14 @@ import pytest
 import torch
 
 from detection_vis_backend.networks import transrad as T
+from detection_vis_backend.paths import dataset_path
 
 torch.manual_seed(0)
 np.random.seed(0)
 
-HAS_REF = os.path.exists(T.REF_CHECKPOINT)
-needs_ref = pytest.mark.skipif(not HAS_REF, reason=f"authors' checkpoint not at {T.REF_CHECKPOINT}")
+REF_CHECKPOINT = dataset_path("transrad_reference", "TransRAD", "model_data", "best_epoch_weights.pth")
+HAS_REF = os.path.exists(REF_CHECKPOINT)
+needs_ref = pytest.mark.skipif(not HAS_REF, reason=f"authors' checkpoint not at {REF_CHECKPOINT}")
 
 
 def test_drop_path_is_identity_in_eval_and_scales_in_train():
@@ -61,7 +63,7 @@ def test_rmt_train_mode_keeps_batchnorm_in_eval():
 
 @needs_ref
 def test_rmt_keys_match_the_authors_backbone():
-    sd = torch.load(T.REF_CHECKPOINT, map_location="cpu")
+    sd = torch.load(REF_CHECKPOINT, map_location="cpu")
     ref = {k[len("backbone."):] for k in sd if k.startswith("backbone.")}
     ours = set(T.RMT(**RMT_KW).state_dict())
     assert ours == ref, f"missing {sorted(ref - ours)[:5]} unexpected {sorted(ours - ref)[:5]}"
@@ -92,7 +94,7 @@ def test_body_strides_equal_a_dummy_forward():
 
 @needs_ref
 def test_body_state_dict_matches_the_authors_checkpoint_exactly():
-    sd = torch.load(T.REF_CHECKPOINT, map_location="cpu")
+    sd = torch.load(REF_CHECKPOINT, map_location="cpu")
     body = T.TransRADBody(**BODY_KW)
     assert set(body.state_dict()) == set(sd)
     assert {k: tuple(v.shape) for k, v in body.state_dict().items()} == {k: tuple(v.shape) for k, v in sd.items()}
@@ -350,7 +352,7 @@ def test_transrad_network_loads_the_authors_checkpoint_without_a_key_map():
     with open("detection_vis_backend/networks/TransRAD_model_config.json") as f:
         cfg = json.load(f)
     net = NetworkFactory().get_instance("TransRAD", cfg)
-    sd = torch.load(T.REF_CHECKPOINT, map_location="cpu")
+    sd = torch.load(REF_CHECKPOINT, map_location="cpu")
     net.load_state_dict(sd, strict=True)
     assert set(net.state_dict()) == set(sd)
 
