@@ -2253,13 +2253,168 @@ def RadarPillar_evaluation(net, dataloader, train_config, features, output_dir, 
     return result
 
 
+def TFFTRadNet_radial_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
+    """T-FFTRadNet on RADIal is scored as FFTRadNet. F1 = 2PR / (P + R) is added because the
+    paper picks its checkpoint by it; 0 when nothing is detected."""
+    result = FFTRadNet_evaluation(net, loader, train_config, features, output_path, eval_type, device)
+    p, r = float(result['mAP']), float(result['mAR'])
+    result['F1'] = 2 * p * r / (p + r) if p + r > 0 else 0.0
+    return result
+
+
+# The reference repo's RADDet scoring (jgiroux8/T_FFTRadNet 68bc041, RADDet/utils/metrics.py):
+# points decoded from the 64 x 128 map, a 4 x 1.8 m box around each, NMS at IoU 0.3, objects
+# kept between 0 and 50 m.
+RADDET_NMS_THRESHOLD = 0.3
+
+
+def _raddet_counts(predictions, labels, threshold, range_min, range_max, iou_threshold):
+    """TP, FP, FN, summed range and angle errors and matched objects over the frames, at
+    one confidence threshold; the frame loop of the reference's GetFullMetrics.
+    predictions: [R, A, confidence(, class)] rows per frame; labels: [R, A(, class)] rows."""
+    tp = fp = fn = 0
+    range_error = angle_error = 0.0
+    n_objects = 0
+    for pred, label in zip(predictions, labels):
+        pred, label = np.asarray(pred, dtype=np.float64), np.asarray(label, dtype=np.float64)
+        objects = []
+        if len(pred) > 0:
+            # Our process_predictions_FFT reads the confidence from the last column.
+            objects = process_predictions_FFT(pred[:, :3], confidence_threshold=threshold,
+                                              nms_threshold=RADDET_NMS_THRESHOLD)
+        if len(objects) > 0:
+            distance = (objects[:, 2] + objects[:, 4]) / 2
+            objects = objects[(distance >= range_min) & (distance <= range_max)]
+        boxes = []
+        if len(label) > 0:
+            label = label[(label[:, 0] >= range_min) & (label[:, 0] <= range_max)]
+            if len(label) > 0:
+                boxes = np.asarray(RA_to_cartesian_box(label))
+        if len(boxes) > 0 and len(objects) > 0:
+            used = np.zeros(len(boxes))
+            for prediction in objects:
+                ids = np.where(bbox_iou(prediction[1:], boxes) >= iou_threshold)[0]
+                if len(ids) > 0:
+                    tp += 1
+                    used[ids] = 1
+                    # As the reference: the "range" and "angle" errors are differences of
+                    # the boxes' last two corner coordinates (x1, y2), in metres.
+                    range_error += np.sum(np.abs(boxes[ids, -2] - prediction[-2]))
+                    angle_error += np.sum(np.abs(boxes[ids, -1] - prediction[-1]))
+                    n_objects += len(ids)
+                else:
+                    fp += 1
+            fn += int(np.sum(used == 0))
+        elif len(boxes) == 0:
+            fp += len(objects)
+        else:
+            fn += len(boxes)
+    return tp, fp, fn, range_error, angle_error, n_objects
+
+
+def raddet_class_metrics(predictions, labels, range_min=0, range_max=50, iou=0.5):
+    """The reference's GetAPMetrics: per class [AP, AR, F1], and mAP / mAR over the six
+    classes. predictions: [R, A, confidence, class] rows per frame; labels [R, A, class].
+
+    The reference resets its precision and recall lists inside the confidence loop
+    (0.1 to 0.95 by 0.05), so a class's "AP" and "AR" are its precision and recall at
+    confidence 0.95 alone. Kept, since it produced the published numbers; only that last
+    confidence is computed."""
+    from detection_vis_backend.datasets.adapters.raddet import RADDET_CLASSES
+    threshold = np.arange(0.1, .96, 0.05)[-1]
+    results = {}
+    for class_id, name in enumerate(RADDET_CLASSES):
+        pred_c = [np.asarray(p)[np.asarray(p)[:, 3] == class_id] if len(p) else p for p in predictions]
+        label_c = [np.asarray(l)[np.asarray(l)[:, 2] == class_id] if len(l) else l for l in labels]
+        tp, fp, fn, *_ = _raddet_counts(pred_c, label_c, threshold, range_min, range_max, iou)
+        p, r = (tp / (tp + fp), tp / (tp + fn)) if tp else (0, 0)
+        results[name] = [p, r, (p * r) / ((p + r + 1e-6) / 2)]
+    results['mAP'] = float(np.mean([results[n][0] for n in RADDET_CLASSES]))
+    results['mAR'] = float(np.mean([results[n][1] for n in RADDET_CLASSES]))
+    return results
+
+
+def raddet_detection_metrics(predictions, labels, threshold=0.2, range_min=0, range_max=50):
+    """The reference's per-epoch Metrics / GetDetMetrics: class-agnostic precision and recall at
+    one confidence, IoU 0.5; 0 where undefined."""
+    tp, fp, fn, *_ = _raddet_counts(predictions, labels, threshold, range_min, range_max, 0.5)
+    return (tp / (tp + fp) if tp + fp else 0), (tp / (tp + fn) if tp + fn else 0)
+
+
+def raddet_full_metrics(predictions, labels, iou=0.5, range_min=0, range_max=50):
+    """The reference's GetFullMetrics: class-agnostic precision and recall averaged over the
+    confidences 0.1 to 0.9, their F1 (0 where the reference divides 0 by 0), and the mean
+    range and angle errors of the matches (nan when nothing matched)."""
+    precision, recall, range_errors, angle_errors = [], [], [], []
+    for threshold in np.arange(0.1, 0.96, 0.1):
+        tp, fp, fn, range_error, angle_error, n_objects = _raddet_counts(
+            predictions, labels, threshold, range_min, range_max, iou)
+        precision.append(tp / (tp + fp) if tp else 0)
+        recall.append(tp / (tp + fn) if tp else 0)
+        if n_objects > 0:
+            range_errors.append(range_error / n_objects)
+            angle_errors.append(angle_error / n_objects)
+    p, r = float(np.mean(precision)), float(np.mean(recall))
+    return {'precision': p, 'recall': r, 'F1': (p * r) / ((p + r) / 2) if p + r > 0 else 0.0,
+            'range_error': float(np.mean(range_errors)) if range_errors else float('nan'),
+            'angle_error': float(np.mean(angle_errors)) if angle_errors else float('nan')}
+
+
+def TFFTRadNet_raddet_evaluation(net, loader, train_config, features, output_path, eval_type, device='cpu'):
+    """T-FFTRadNet on RADDet. val: loss, class-wise mAP / mAR, class-agnostic det_AP / det_AR at
+    IoU 0.5 and select_score = mAP + det_AP (the checkpoint pick: the reference saves every
+    epoch and leaves the choice to the user), plus the reference's per-epoch precision and
+    recall at confidence 0.2. test: the same without the loss, with per-class AP / AR / F1,
+    det_AP at IoU 0.1 to 0.9, det_F1 and the range and angle errors."""
+    from detection_vis_backend.datasets.adapters.raddet import RADDET_CLASSES, decode_raddet_map
+    net.eval()
+    running_loss = 0.0
+    predictions, labels = [], []
+    for data in loader:
+        for key in data:
+            if isinstance(data[key], torch.Tensor):
+                data[key] = data[key].to(device).float()
+        inputs = data.pop(features[0])
+        with torch.set_grad_enabled(False):
+            outputs = net(inputs)
+            if eval_type == 'val':
+                running_loss += net.get_loss(outputs, data, train_config).item() * inputs.shape[0]
+        # Class probabilities by softmax, as the reference's run_APEvaluation; the decoded
+        # class is their argmax either way.
+        maps = torch.cat([outputs['Detection'], torch.softmax(outputs['class'], dim=1)], dim=1)
+        for pred_map, label in zip(maps.detach().cpu().numpy(), data['box_label']):
+            predictions.append(np.asarray(decode_raddet_map(pred_map, 0.05), dtype=np.float64).reshape(-1, 4))
+            labels.append(np.asarray(label.cpu() if isinstance(label, torch.Tensor) else label,
+                                     dtype=np.float64).reshape(-1, 3))
+
+    classes = raddet_class_metrics(predictions, labels)
+    full = raddet_full_metrics(predictions, labels, iou=0.5)
+    result = {'mAP': classes['mAP'], 'mAR': classes['mAR'], 'mIoU': 0.0,
+              'det_AP': full['precision'], 'det_AR': full['recall'],
+              'select_score': classes['mAP'] + full['precision']}
+    if eval_type == 'val':
+        result['loss'] = running_loss / len(loader.dataset)
+        result['det_precision@0.2'], result['det_recall@0.2'] = raddet_detection_metrics(predictions, labels)
+    else:
+        for name in RADDET_CLASSES:
+            result[f'AP_{name}'], result[f'AR_{name}'], result[f'F1_{name}'] = classes[name]
+        for iou in np.arange(0.1, 0.95, 0.1):
+            result[f'det_AP@{iou:.1f}'] = raddet_full_metrics(predictions, labels, iou=iou)['precision']
+        result.update({'det_F1': full['F1'], 'range_error': full['range_error'],
+                       'angle_error': full['angle_error']})
+    logger.info(f"T-FFTRadNet RADDet {eval_type}: " + ", ".join(f"{k} {v:.4f}" for k, v in result.items()))
+    return result
+
+
 RODNet_subtypes = ["RODNet_CDC", "RODNet_CDCv2", "RODNet_HG", "RODNet_HGv2", "RODNet_HGwI", "RODNet_HGwIv2", "T_RODNet"]
 RECORD_subtypes = ["RECORD", "RECORDNoLstm", "RECORDNoLstmMulti"]
-network_types = ["FFTRadNet", "SSMRadNet", "MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
+network_types = ["FFTRadNet", "SSMRadNet", "T_FFTRadNet","MVRECORD", "DAROD", "RADDet", "TransRAD", "RAMP_CNN", "RadarCrossAttention", "RadarPillar", "PointPillar" ] + RODNet_subtypes + RECORD_subtypes
 dataset_types = ["RADIal", "CRUW", "CARRADA", "RADDetDataset", "UWCR", "ViewOfDelft"]
 eval_func_dict = {(i, j): None for i in network_types for j in dataset_types}
 eval_func_dict["FFTRadNet", "RADIal"] = FFTRadNet_evaluation
 eval_func_dict["SSMRadNet", "RADIal"] = FFTRadNet_evaluation
+eval_func_dict["T_FFTRadNet", "RADIal"] = TFFTRadNet_radial_evaluation
+eval_func_dict["T_FFTRadNet", "RADDetDataset"] = TFFTRadNet_raddet_evaluation
 for i in RODNet_subtypes:
     eval_func_dict[i, "CRUW"] = RODNet_evaluation
 for i in RECORD_subtypes:
