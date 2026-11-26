@@ -142,7 +142,8 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE / AE 0.162 m / 0.249° @ IoU 0.5). Mamba-2 variant: within 1–3 points, see the section | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
 | 21a | T_FFTRadNet / RADIal / RD | **90.5 / 89.9** test AP/AR @ IoU 0.5, freespace mIoU **79.6** (1 seed, official split, seed 3, best-val-F1 weights = epoch 131 of 150; F1 90.2, RE 0.157 m, AE 0.118°) | 89.6 / 89.5, mIoU 80.2 | **89.6 / 89.5, mIoU 80.2** (authors' checkpoint through our adapter and evaluator, all 1035 test frames) | **reproduced** (+0.9 / +0.4 / −0.6 points) | `T_FFTRadNet_RADIal_Nov-24-2026_22:01:40` |
 | 21b | T_FFTRadNet / RADIal / ADC | **88.5 / 86.4** test AP/AR @ IoU 0.5, freespace mIoU **79.8** (1 seed, official split, seed 3, best-val-F1 weights = epoch 146 of 150; RE 0.156 m, AE 0.123°) | 88.2 / 86.7, mIoU 79.6 | **88.2 / 86.7, mIoU 79.6** (authors' checkpoint, same pipeline) | **reproduced** (+0.3 / −0.3 / +0.2 points) | `T_FFTRadNet_RADIal_Nov-25-2026_14:49:35` |
-| 22a–c | T_FFTRadNet / RADDetDataset / RD, RAD, ADC | not run yet | 46.8 / 55.7 / 49.1 mean class-wise AP | not run | — | — |
+| 22a | T_FFTRadNet / RADDetDataset / RD | **45.1** test mean class-wise AP, mean class-wise AR 21.0 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 64 of 150, counted from 0); class-agnostic AP @ IoU 0.5 58.3, AR 52.9 | 46.8 | not run | **reproduced** (−1.7 points) | `T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10` |
+| 22b–c | T_FFTRadNet / RADDetDataset / RAD, ADC | not run yet | 55.7 / 49.1 mean class-wise AP | not run | — | — |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -181,6 +182,7 @@ validation — real elapsed time, not GPU-busy time).
 | 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | FP32 | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
 | 21a | T_FFTRadNet / RADIal RD | 9.64 M (paper Table 1 9.64 M) | FP32 | 116 M (with optimizer state) | 150 | 14.5 h | 5.8 m |
 | 21b | T_FFTRadNet / RADIal ADC | 9.64 M + Fourier layers 2 × 327,680 real values | FP32 | 124 M (with optimizer state) | 150 | 22.8 h | 9.1 m (reads raw ADC files) |
+| 22a | T_FFTRadNet / RADDetDataset RD | not logged | FP32 | 86 M (with optimizer state) | 150 | 2.4 h | 1.0 m (epoch 1 10 m while the files were first read from disk) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -1043,6 +1045,26 @@ the repo's code.
 **Not run** (Table 2 rows, trained only on request): Shift 91.3 / 88.3 / 79.5,
 No Windowing 89.4 / 87.6 / 79.3, ADC - NL 88.1 / 86.1 / 78.8, ADC - No Shift
 88.1 / 85.5 / 78.8.
+
+### T-FFTRadNet / RADDet: RD reproduced (2026-11-26)
+
+`T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10`, 2026-11-26 14:13 → 16:36, launched with
+`scripts/train_tfftradnet.py`. Recipe as in the reference repo: seed 3, Adam 1e-4 decaying
+×0.9 every 10 epochs, 150 epochs, batch 16, loss weights [2, 100, 100000], the official
+split (7314 train / 812 val / 2032 test frames), and the checkpoint with the best
+validation `select_score` tested (epoch 64, counted from 0).
+
+- Test mean class-wise average precision (AP) **45.1** against the paper's 46.8 (Table 3):
+  reproduced, 1.7 points below.
+- Per class AP: person 72.6, car 62.1, bicycle 58.4, truck 49.2, bus 28.6,
+  motorcycle 0.0. Motorcycle is rare in the RADDet test split, and its zero pulls the mean
+  down.
+- Class-agnostic AP @ IoU 0.5 58.3 (@ 0.1 89.4, @ 0.3 79.2, @ 0.7 30.5), average recall
+  (AR) 52.9, range error 0.224, angle error 0.229 (as the evaluator logs them). The paper's class-agnostic figures
+  (Table 5) are not yet copied here.
+
+Class-wise AP counts only detections above confidence 0.95, as the reference does, so it
+stays at 0 for the first epochs while the class-agnostic AP is already rising.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
