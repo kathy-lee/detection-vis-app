@@ -13,11 +13,13 @@ from detection_vis_backend.tests.test_tfftradnet_training import _model_config, 
 WEIGHTS = os.path.expanduser("~/Downloads/tfftradnet_trained_models")
 REAL_RADIAL = dataset_path("radial", "RADIal-labeled")
 
-# Published file -> (dataset, input_mode). The names follow the reference repo's configs:
-# RadIal RD_Shift_config.json reads "Custom_RD", the RD from ADC whose Doppler shift is discarded.
+# Published file -> (dataset, input_mode). RD_Shift scores as the paper only on RD from ADC
+# with the Doppler shift applied (test AP 91.4 / AR 88.3 on the full test set), although the
+# reference code's "Custom_RD" discards the shift (AP 80.9 / AR 66.6 there), so the weights
+# were not trained on that code's input.
 PUBLISHED = {
     "RADIal_SwinTransformer_RD.pth": ("RADIal", "RD"),
-    "RADIal_SwinTransformer_RD_Shift.pth": ("RADIal", "RD_shift_as_published"),
+    "RADIal_SwinTransformer_RD_Shift.pth": ("RADIal", "RD_shift"),
     "RADIal_SwinTransformer_ADC.pth": ("RADIal", "ADC"),
     "RADDet_SwinTransformer_RD.pth": ("RADDetDataset", "RD"),
     "RADDet_SwinTransformer_RADCube.pth": ("RADDetDataset", "RAD"),
