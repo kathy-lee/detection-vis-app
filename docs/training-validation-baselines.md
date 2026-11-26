@@ -78,8 +78,13 @@ The remaining 14 pairs are one run each. Rows below are indexed per run.
 | 18 | T_RODNet | CRUW | AP / AR (OLS) | **83.27 / 86.98** (pedestrian 82.19/85.41, cyclist 82.28/84.30, car 86.22/92.53) — on four held-out LABELLED training sequences the authors name, so, unlike rows 2–7, locally reproducible | T-RODNet Table I; split in the reference README |
 | 19 | T_RODNet | CARRADA (RA) | mIoU / mDice | **43.5 / 53.6** (IoU bg/ped/cyc/car 99.9/25.4/9.5/39.4; Dice 99.9/40.5/17.4/56.6) | T-RODNet Table II |
 | 20 | SSMRadNet | RADIal (raw ADC) | freespace mIoU; detection F1 / mAP / mAR | **0.79; 0.77 / 0.83 / 0.71** (range error (RE) 0.14 m, azimuth angle error (AE) 0.15°; 0.31 M params, 1.67 GMACs), on a random 0.8 / 0.2 frame split; detection IoU threshold not stated | SSMRadNet Table 4 |
+| 21a | T_FFTRadNet | RADIal (RD) | AP / AR / F1 @ IoU 0.5; freespace mIoU | **89.6 / 89.5 / 89.5; 80.2** (RE 0.15 m, AE 0.12°) | T-FFTRadNet Table 2, `T-FFTRadNet` |
+| 21b | T_FFTRadNet | RADIal (raw ADC) | AP / AR / F1 @ IoU 0.5; freespace mIoU | **88.2 / 86.7 / 87.4; 79.6** (RE 0.16 m, AE 0.13°) | T-FFTRadNet Table 2, `T-FFTRadNet (ADC)` |
+| 22a | T_FFTRadNet | RADDetDataset (RD) | mean class-wise AP; class-agnostic AP | **46.8**; Table 5 | T-FFTRadNet Tables 3 and 5 |
+| 22b | T_FFTRadNet | RADDetDataset (RAD) | mean class-wise AP; class-agnostic AP | **55.7**; Table 5 | T-FFTRadNet Tables 3 and 5 |
+| 22c | T_FFTRadNet | RADDetDataset (raw ADC) | mean class-wise AP; class-agnostic AP | **49.1**; Table 5 | T-FFTRadNet Tables 3 and 5 |
 
-Coverage: **22 of the 26 runs have a published number**; 4 are unbaselined
+Coverage: **27 of the 31 runs have a published number**; 4 are unbaselined
 (`RECORDNoLstm` and `RECORDNoLstmMulti` on CARRADA, each in both views) and 1 of the 20
 is bracketed rather than pointed (`RODNet_HGwIv2`).
 
@@ -135,6 +140,9 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 18 | T_RODNet / CRUW | **81.18 / 85.99** test AP/AR (1 seed, the authors' 36/4 split, final-epoch weights; pedestrian 79.39/85.45, cyclist 81.03/83.06, car 84.26/90.16) | 83.27 / 86.98 | not possible (no weights shipped); the **scorer** was checked instead — the authors' evaluator gives 81.19 / 86.00 on our final detections (see the T-RODNet section) | **reproduced** (−2.5% / −1.1%) | `T_RODNet_CRUW_Oct-20-2026_11:35:31` (epochs 1–88) + `T_RODNet_CRUW_Oct-21-2026_10:04:46` (resumed, epochs 89–100 + test) |
 | 19 | T_RODNet / CARRADA / RA | **41.01 / 49.91** test mIoU/mDice (1 seed, official split, final-epoch weights; IoU bg/ped/cyc/car 99.9/21.3/5.1/37.7, Dice 99.9/35.2/9.8/54.8). Val, same weights: 46.06 / 57.02. **Recipe has three choices the paper does not state** — MSE on one-hot masks, flips off, 100 epochs testing the final weights (see the T-RODNet / CARRADA section) | 43.5 / 53.6 | not possible (no weights shipped) | **below the pass bar** (−2.5 / −3.7 points; cyclist IoU 5.1 vs 9.5) — open, a flips-on or weighted-CE+Dice variant is pending | `T_RODNet_CARRADA_Oct-23-2026_23:15:53` (epochs 1–79) + `T_RODNet_CARRADA_Oct-24-2026_22:22:55` (epochs 80–99) + `T_RODNet_CARRADA_Oct-25-2026_09:04:47` (epoch 100 + test) |
 | 20 | SSMRadNet / RADIal (ADC) | **70.43** freespace mIoU (0–50 m); detection F1 / mAP / mAR **55.86 / 58.18 / 53.72** @ IoU 0.5, 66.97 / 69.11 / 64.96 @ IoU 0.1 (1 seed, random 0.8 / 0.2 frame split, seed 3, 1651 val frames, final weights; RE / AE 0.162 m / 0.249° @ IoU 0.5). Mamba-2 variant: within 1–3 points, see the section | 79 ; 77 / 83 / 71 | not possible (no weights shipped, and no released code trains or scores the detection head) | **not reproduced** (mIoU −8.6 points, mAP −24.8 / −13.9, mAR −17.3 / −6.0 at IoU 0.5 / 0.1); several recipe settings are ours, see the SSMRadNet section | `SSMRadNet_RADIal_Nov-02-2026_09:47:10` |
+| 21a | T_FFTRadNet / RADIal / RD | **90.5 / 89.9** test AP/AR @ IoU 0.5, freespace mIoU **79.6** (1 seed, official split, seed 3, best-val-F1 weights = epoch 131 of 150; F1 90.2, RE 0.157 m, AE 0.118°) | 89.6 / 89.5, mIoU 80.2 | **89.6 / 89.5, mIoU 80.2** (authors' checkpoint through our adapter and evaluator, all 1035 test frames) | **reproduced** (+0.9 / +0.4 / −0.6 points) | `T_FFTRadNet_RADIal_Nov-24-2026_22:01:40` |
+| 21b | T_FFTRadNet / RADIal / ADC | **88.5 / 86.4** test AP/AR @ IoU 0.5, freespace mIoU **79.8** (1 seed, official split, seed 3, best-val-F1 weights = epoch 146 of 150; RE 0.156 m, AE 0.123°) | 88.2 / 86.7, mIoU 79.6 | **88.2 / 86.7, mIoU 79.6** (authors' checkpoint, same pipeline) | **reproduced** (+0.3 / −0.3 / +0.2 points) | `T_FFTRadNet_RADIal_Nov-25-2026_14:49:35` |
+| 22a–c | T_FFTRadNet / RADDetDataset / RD, RAD, ADC | not run yet | 46.8 / 55.7 / 49.1 mean class-wise AP | not run | — | — |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -171,6 +179,8 @@ validation — real elapsed time, not GPU-busy time).
 | 18 | T_RODNet / CRUW | 156.8 M (paper Table IV 159.70 M) | FP32 | 0.82 G | 100 | **23.9 h** | 14.2 m (12 train + 2 monitor on one sequence; 12 m test pass once) |
 | 19 | T_RODNet / CARRADA RA | 156.8 M | FP32 | 0.84 G | 100 | **18.8 h** | 11 m (≈9.5 train + 1.5 val; 75 s test pass once) |
 | 20 | SSMRadNet / RADIal (ADC) | 0.307 M (paper Table 4 0.31 M) | FP32 | 3.4 M | 200 | 15.2 h | 4.6 m (train + val; slowed at times by other load on the machine) |
+| 21a | T_FFTRadNet / RADIal RD | 9.64 M (paper Table 1 9.64 M) | FP32 | 116 M (with optimizer state) | 150 | 14.5 h | 5.8 m |
+| 21b | T_FFTRadNet / RADIal ADC | 9.64 M + Fourier layers 2 × 327,680 real values | FP32 | 124 M (with optimizer state) | 150 | 22.8 h | 9.1 m (reads raw ADC files) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -996,6 +1006,43 @@ Final weights, same scorer:
 - **Cost.** 15.5 h for 200 epochs, about the same as Mamba: the faster Mamba-2 layer
   does not shorten an epoch dominated by data loading and validation. Checkpoints 3.3 MB
   (Mamba-2 has fewer parameters: 9,176 / 30,296 per layer against 12,992 / 38,784).
+
+### T-FFTRadNet / RADIal: RD and ADC reproduced (2026-11-26)
+
+T-FFTRadNet (Giroux et al., ICCV 2023 workshop) puts a Swin Transformer encoder under
+FFTRadNet's heads, and in its ADC (analog-to-digital converter) mode learns the Fourier
+transforms itself. Our port follows the reference repo (jgiroux8/T_FFTRadNet, commit
+68bc041) module for module, so the authors' published checkpoints load with every key
+matched. Recipe as in the paper: seed 3, Adam 1e-4 decaying ×0.9 every 10 epochs, 150
+epochs, batch 4, loss weights [2, 100, 100], the official sequence split (6231 train /
+986 val / 1035 test frames), and the checkpoint with the best validation F1 tested.
+Both runs were launched with `scripts/train_tfftradnet.py`, which builds the configs as
+the Train page does.
+
+- **RD** (`T_FFTRadNet_RADIal_Nov-24-2026_22:01:40`, 2026-11-24 22:01 → 2026-11-25 12:31):
+  test average precision (AP) / average recall (AR) 90.5 / 89.9, freespace mean
+  intersection over union (mIoU) 79.6, against the paper's 89.6 / 89.5 / 80.2.
+- **ADC** (`T_FFTRadNet_RADIal_Nov-25-2026_14:49:35`, 2026-11-25 14:49 → 2026-11-26 13:35):
+  88.5 / 86.4 / 79.8, against 88.2 / 86.7 / 79.6.
+
+Validation freespace mIoU stayed near 0.70 in both runs while the test score reached
+about 80: the validation sequences are harder for that head, not a defect.
+
+**The authors' checkpoints through our pipeline** (2026-11-25, all 1035 test frames)
+give the paper's Table 2 numbers exactly — RD 89.6 / 89.5 / 80.2, ADC 88.2 / 86.7 / 79.6
+— which checks our input reading and normalization, labels, split and scoring against
+the reference independently of our training.
+
+**The published RD_Shift checkpoint expects the Doppler shift applied.** On our
+`RD_shift` mode it scores 91.4 / 88.3 / 79.5, the paper's `T-FFTRadNet (Shift)` row
+(91.3 / 88.3 / 79.5). On `RD_shift_as_published` — what the reference repo's
+`Custom_RD` code produces, building RD from ADC and discarding the shift — it scores
+80.9 / 66.6 / 58.1. So the paper's Shift row was made with the shift applied, not with
+the repo's code.
+
+**Not run** (Table 2 rows, trained only on request): Shift 91.3 / 88.3 / 79.5,
+No Windowing 89.4 / 87.6 / 79.3, ADC - NL 88.1 / 86.1 / 78.8, ADC - No Shift
+88.1 / 85.5 / 78.8.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 

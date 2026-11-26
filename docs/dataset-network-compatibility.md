@@ -201,6 +201,16 @@ RECORD is a task-agnostic encoder–decoder, the dataset's annotation decides wh
 | **Adjustable configs** | none exposed; the sample/chirp/Rx sizes are pinned by the RADIal ADC layout and the detection head's 128×224 grid |
 
 
+| **T_FFTRadNet** | Requirements |
+|---|---|
+|**Input** | Picked by the model config's `input_mode`, which must match the chosen feature. **RADIal:** `RD` = stored range-Doppler (RD) map `32×512×256` (real and imaginary parts of 16 receive channels); `RD_shift`, `RD_no_window`, `RD_shift_as_published` = RD built from the raw ADC (analog-to-digital converter) samples (with the Doppler shift, without the windows, or without the shift as the reference code does); `ADC` = raw ADC `32×512×256`, transformed by the network's learned Fourier layers. **RADDetDataset:** `RAD` = range-azimuth-Doppler (RAD) cube `64×256×256` built from ADC as the reference does; `RAD_stored` = magnitude of the stored cubes; `RD`, `RD_no_window` = `16×256×64` from ADC; `ADC` = raw ADC `16×256×64`. Every mode except `ADC` is normalized with per-channel statistics (`datasets/adapters/tfftradnet_statistics.json`). |
+| **Frames** | Single |
+| **Label** | **RADIal:** the FFTRadNet targets — objectness + range/angle regression grid `(3,128,224)` + freespace segmentation mask `(256×224)`. **RADDetDataset:** object **centres** (range, angle) on a `64×128` range-azimuth grid: objectness + range/angle regression `(3,64,128)` + 6-class map; the 3D boxes are reduced to their centres. |
+| **Preprocessing** | Built by `TFFTRadNetOnRADIal` (`datasets/adapters/radial.py`) and `TFFTRadNetOnRADDet` (`datasets/adapters/raddet.py`). Modes read from ADC serve only frames whose ADC file exists. |
+| **Wired dataset(s)** | RADIal (`RD`, `ADC` features), RADDetDataset (`RD`, `RAD`, `ADC`; the Train page offers `ADC` only when the dataset row has `ADC` set, which RADDet's does not yet) |
+| **Adjustable configs** | `input_mode`; Swin encoder `patch_size`, `embed_dim`, `depths`, `num_heads`, `drop_rates`; `segmentation_head` (RADIal only); `fourier_doppler_shift`, `fourier_activation` (`linear` / `nl`, ADC only). Input channels follow from dataset and mode; the 128×224 (RADIal) and 64×128 (RADDet) output grids are pinned. |
+
+
 | **DAROD** | Requirements |
 |---|---|
 |**Input** | RD `1×256×64`|
@@ -305,6 +315,7 @@ train any network (C2/C5).
 | **TransRAD** | ❌mod | ❌mod | ⚠️gt | ✅ | ❌mod | ❌mod | ❌mod | ❌mod |
 | **T_RODNet** | ❌mod | ✅ | ⚠️gt | ❌seq | ⚠️np | ❌mod | ❌mod | ❌mod |
 | **SSMRadNet** | ✅ | ❌mod | ❌mod | ❌mod | ❌geo,gt | ❌mod | ❌mod | ❌mod |
+| **T_FFTRadNet** | ✅ | ❌mod | ❌geo,gt | ✅ | ❌geo | ❌mod | ❌mod | ❌mod |
 | **DAROD** | ❌gt | ❌mod | ✅ | ✅ | ❌gt | ❌mod | ❌mod | ❌mod |
 | **RAMP_CNN** | ❌mod | ❌mod | ⚠️gt | ❌mod,seq | ✅ | ❌mod | ❌mod | ❌mod |
 | **RadarCrossAttention** | ❌mod | ❌mod | ✅ | ❌mod,seq | ❌geo,gt | ❌mod | ❌mod | ❌mod |
@@ -365,9 +376,9 @@ train any network (C2/C5).
 
 ### Summary
 
-- **Supported today (✅):** exactly the 19 wired pairs below (24 entries in
+- **Supported today (✅):** exactly the 21 wired pairs below (27 entries in
   `eval_func_dict`, counting RODNet's six subtypes individually) — FFTRadNet/RADIal;
-  SSMRadNet/RADIal;
+  SSMRadNet/RADIal; T_FFTRadNet/RADIal & /RADDetDataset;
   RODNet×6/CRUW; T_RODNet/CRUW; RECORD·RECORDNoLstm·RECORDNoLstmMulti /CRUW & /CARRADA;
   MVRECORD/CARRADA; RADDet/RADDetDataset; TransRAD/RADDetDataset; DAROD/CARRADA & /RADDetDataset;
   RAMP_CNN/UWCR; RadarCrossAttention/CARRADA; PointPillar/ViewOfDelft;
