@@ -143,7 +143,8 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 21a | T_FFTRadNet / RADIal / RD | **90.5 / 89.9** test AP/AR @ IoU 0.5, freespace mIoU **79.6** (1 seed, official split, seed 3, best-val-F1 weights = epoch 131 of 150; F1 90.2, RE 0.157 m, AE 0.118°) | 89.6 / 89.5, mIoU 80.2 | **89.6 / 89.5, mIoU 80.2** (authors' checkpoint through our adapter and evaluator, all 1035 test frames) | **reproduced** (+0.9 / +0.4 / −0.6 points) | `T_FFTRadNet_RADIal_Nov-24-2026_22:01:40` |
 | 21b | T_FFTRadNet / RADIal / ADC | **88.5 / 86.4** test AP/AR @ IoU 0.5, freespace mIoU **79.8** (1 seed, official split, seed 3, best-val-F1 weights = epoch 146 of 150; RE 0.156 m, AE 0.123°) | 88.2 / 86.7, mIoU 79.6 | **88.2 / 86.7, mIoU 79.6** (authors' checkpoint, same pipeline) | **reproduced** (+0.3 / −0.3 / +0.2 points) | `T_FFTRadNet_RADIal_Nov-25-2026_14:49:35` |
 | 22a | T_FFTRadNet / RADDetDataset / RD | **45.1** test mean class-wise AP, mean class-wise AR 21.0 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 64 of 150, counted from 0); class-agnostic AP @ IoU 0.5 58.3, AR 52.9 | 46.8 | not run | **reproduced** (−1.7 points) | `T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10` |
-| 22b–c | T_FFTRadNet / RADDetDataset / RAD, ADC | not run yet | 55.7 / 49.1 mean class-wise AP | not run | — | — |
+| 22b | T_FFTRadNet / RADDetDataset / RAD | **57.0** test mean class-wise AP, mean class-wise AR 21.7 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 53 of 150, counted from 0); class-agnostic AP @ IoU 0.5 60.9, AR 54.9 | 55.7 | not run | **reproduced** (+1.3 points) | `T_FFTRadNet_RADDetDataset_Nov-26-2026_18:30:22` |
+| 22c | T_FFTRadNet / RADDetDataset / ADC | not run yet | 49.1 mean class-wise AP | not run | — | — |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -183,6 +184,7 @@ validation — real elapsed time, not GPU-busy time).
 | 21a | T_FFTRadNet / RADIal RD | 9.64 M (paper Table 1 9.64 M) | FP32 | 116 M (with optimizer state) | 150 | 14.5 h | 5.8 m |
 | 21b | T_FFTRadNet / RADIal ADC | 9.64 M + Fourier layers 2 × 327,680 real values | FP32 | 124 M (with optimizer state) | 150 | 22.8 h | 9.1 m (reads raw ADC files) |
 | 22a | T_FFTRadNet / RADDetDataset RD | not logged | FP32 | 86 M (with optimizer state) | 150 | 2.4 h | 1.0 m (epoch 1 10 m while the files were first read from disk) |
+| 22b | T_FFTRadNet / RADDetDataset RAD | not logged | FP32 | 95 M (with optimizer state) | 150 | 14.3 h | 5.6 m (the cubes, about 245 GB per epoch, do not fit in memory, so every epoch reads them from disk; the 4 loading workers, not the GPU, set the pace) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -1046,7 +1048,7 @@ the repo's code.
 No Windowing 89.4 / 87.6 / 79.3, ADC - NL 88.1 / 86.1 / 78.8, ADC - No Shift
 88.1 / 85.5 / 78.8.
 
-### T-FFTRadNet / RADDet: RD reproduced (2026-11-26)
+### T-FFTRadNet / RADDet: RD and RAD reproduced (2026-11-27)
 
 `T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10`, 2026-11-26 14:13 → 16:36, launched with
 `scripts/train_tfftradnet.py`. Recipe as in the reference repo: seed 3, Adam 1e-4 decaying
@@ -1065,6 +1067,19 @@ validation `select_score` tested (epoch 64, counted from 0).
 
 Class-wise AP counts only detections above confidence 0.95, as the reference does, so it
 stays at 0 for the first epochs while the class-agnostic AP is already rising.
+
+**RAD** (`T_FFTRadNet_RADDetDataset_Nov-26-2026_18:30:22`, 2026-11-26 18:30 → 2026-11-27
+08:47): same recipe with batch 4, the RAD cube as input, best validation `select_score` at
+epoch 53 (counted from 0).
+
+- Test mean class-wise AP **57.0** against the paper's 55.7 (Table 3): reproduced,
+  1.3 points above.
+- Per class AP: person 74.2, bicycle 70.0, car 63.1, truck 59.5, motorcycle 50.0,
+  bus 25.0.
+- Class-agnostic AP @ IoU 0.5 60.9 (@ 0.1 90.7, @ 0.3 81.1, @ 0.7 31.2), AR 54.9, range
+  error 0.222, angle error 0.235 (as the evaluator logs them).
+- Validation class-wise mAP peaked at 78.6 (epoch 53) and ended near 51; the validation
+  split scores well above test for this metric, so read the test number only.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
