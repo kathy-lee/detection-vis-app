@@ -144,7 +144,7 @@ evaluates -- it restores `latest_checkpoint`, not a best-val checkpoint).
 | 21b | T_FFTRadNet / RADIal / ADC | **88.5 / 86.4** test AP/AR @ IoU 0.5, freespace mIoU **79.8** (1 seed, official split, seed 3, best-val-F1 weights = epoch 146 of 150; RE 0.156 m, AE 0.123°) | 88.2 / 86.7, mIoU 79.6 | **88.2 / 86.7, mIoU 79.6** (authors' checkpoint, same pipeline) | **reproduced** (+0.3 / −0.3 / +0.2 points) | `T_FFTRadNet_RADIal_Nov-25-2026_14:49:35` |
 | 22a | T_FFTRadNet / RADDetDataset / RD | **45.1** test mean class-wise AP, mean class-wise AR 21.0 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 64 of 150, counted from 0); class-agnostic AP @ IoU 0.5 58.3, AR 52.9 | 46.8 | not run | **reproduced** (−1.7 points) | `T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10` |
 | 22b | T_FFTRadNet / RADDetDataset / RAD | **57.0** test mean class-wise AP, mean class-wise AR 21.7 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 53 of 150, counted from 0); class-agnostic AP @ IoU 0.5 60.9, AR 54.9 | 55.7 | not run | **reproduced** (+1.3 points) | `T_FFTRadNet_RADDetDataset_Nov-26-2026_18:30:22` |
-| 22c | T_FFTRadNet / RADDetDataset / ADC | not run yet | 49.1 mean class-wise AP | not run | — | — |
+| 22c | T_FFTRadNet / RADDetDataset / ADC | **62.7** test mean class-wise AP, mean class-wise AR 25.7 (1 seed, official split, seed 3, best-validation-select_score weights = epoch 128 of 150, counted from 0); class-agnostic AP @ IoU 0.5 **62.1**, AR 53.5 | 49.1 | **49.1** mean class-wise AP; class-agnostic AP 61.8, AR 54.5 (authors' checkpoint through our adapter and evaluator, all 2032 test frames) | **reproduced, at parity** (class-agnostic AP +0.3 vs the authors' checkpoint; the +13.6 class-wise gap is one motorcycle detection, see the RADDet section) | `T_FFTRadNet_RADDetDataset_Nov-27-2026_10:50:02` |
 
 
 **All three numeric columns are percentages**, so a row can be read across without unit
@@ -185,6 +185,7 @@ validation — real elapsed time, not GPU-busy time).
 | 21b | T_FFTRadNet / RADIal ADC | 9.64 M + Fourier layers 2 × 327,680 real values | FP32 | 124 M (with optimizer state) | 150 | 22.8 h | 9.1 m (reads raw ADC files) |
 | 22a | T_FFTRadNet / RADDetDataset RD | not logged | FP32 | 86 M (with optimizer state) | 150 | 2.4 h | 1.0 m (epoch 1 10 m while the files were first read from disk) |
 | 22b | T_FFTRadNet / RADDetDataset RAD | not logged | FP32 | 95 M (with optimizer state) | 150 | 14.3 h | 5.6 m (the cubes, about 245 GB per epoch, do not fit in memory, so every epoch reads them from disk; the 4 loading workers, not the GPU, set the pace) |
+| 22c | T_FFTRadNet / RADDetDataset ADC | not logged | FP32 | 88 M (with optimizer state) | 150 | 2.4 h | 0.9 m on average (epoch 1 10 m and the next few about 5 m while the files were first read from disk, then about 1 m) |
 
 † resumed run — the row covers that DIRECTORY only, not the whole schedule, so wall time and
 epoch count understate the run (rows 2a, 3, 9, 13). ‡ killed before its test phase (4b, 13).
@@ -1048,7 +1049,7 @@ the repo's code.
 No Windowing 89.4 / 87.6 / 79.3, ADC - NL 88.1 / 86.1 / 78.8, ADC - No Shift
 88.1 / 85.5 / 78.8.
 
-### T-FFTRadNet / RADDet: RD and RAD reproduced (2026-11-27)
+### T-FFTRadNet / RADDet: RD, RAD and ADC reproduced (2026-11-27)
 
 `T_FFTRadNet_RADDetDataset_Nov-26-2026_14:13:10`, 2026-11-26 14:13 → 16:36, launched with
 `scripts/train_tfftradnet.py`. Recipe as in the reference repo: seed 3, Adam 1e-4 decaying
@@ -1080,6 +1081,40 @@ epoch 53 (counted from 0).
   error 0.222, angle error 0.235 (as the evaluator logs them).
 - Validation class-wise mAP peaked at 78.6 (epoch 53) and ended near 51; the validation
   split scores well above test for this metric, so read the test number only.
+
+**ADC** (`T_FFTRadNet_RADDetDataset_Nov-27-2026_10:50:02`, 2026-11-27 10:50 → 13:12):
+same recipe as RD (batch 16), raw ADC as input, best validation `select_score` at epoch
+128 (counted from 0).
+
+- Test mean class-wise AP **62.7** against the paper's 49.1 (Table 3). Per class AP:
+  motorcycle 100.0, person 68.8, bicycle 65.6, car 63.2, truck 50.0, bus 28.6.
+- Class-agnostic AP @ IoU 0.5 62.1 (@ 0.1 91.4, @ 0.3 81.6, @ 0.7 32.6), AR 53.5, range
+  error 0.218, angle error 0.234.
+
+**The authors' ADC checkpoint through our pipeline** (2026-11-27, the same 2032 test
+frames and evaluator) scores mean class-wise AP **49.1**, the paper's number exactly, so
+our input reading, labels, split and scoring match the reference for ADC as they do on
+RADIal. Side by side:
+
+| | Our run | Authors' checkpoint |
+|---|---|---|
+| Mean class-wise AP | 62.7 | 49.1 |
+| Class-agnostic AP @ IoU 0.5 / AR | 62.1 / 53.5 | 61.8 / 54.5 |
+| Motorcycle AP / AR | 100.0 / 4.8 | 0.0 / 0.0 |
+| Bus AP | 28.6 | 50.0 |
+| Mean of the other five classes | 55.2 | 58.9 |
+
+**So the two models detect equally well, and the class-wise gap is the rare classes.**
+The test frames hold 5640 objects: car 3377, person 1280, truck 720, bicycle 204, bus 38
+and motorcycle 21 (one per frame). Class-wise AP counts only detections at confidence
+0.95 or more, so a single such detection moves a rare class between 0 and 100: our run
+found 1 of the 21 motorcycles (AP 100, AR 4.8), the authors' none. That one detection
+adds 16.7 points to the six-class mean. Class-agnostic AP, which pools all objects, is
+the stable comparison, and it agrees within 0.3 points. The remaining difference
+between the two models is training (initial weights, batch order, augmentation, GPU
+non-determinism, and which epoch is kept); measuring its spread would need several
+seeds. The same caution applies to the RD (motorcycle 0.0) and RAD (motorcycle 50.0)
+class-wise means.
 
 ### RADDet: audited before Phase 2 (2026-09-01), two defects found and fixed
 
