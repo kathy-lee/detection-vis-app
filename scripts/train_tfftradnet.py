@@ -8,7 +8,8 @@ name to register.
 
 Usage:
     .venv/bin/python scripts/train_tfftradnet.py RADIal RD
-    .venv/bin/python scripts/train_tfftradnet.py RADDetDataset RAD --input-mode RAD
+    .venv/bin/python scripts/train_tfftradnet.py RADDetDataset ADC
+    .venv/bin/python scripts/train_tfftradnet.py RADIal RD --input-mode RD_shift
     SMOKE=1 ...   # one epoch
 
 Assumes Postgres with the datafile registry is reachable.
@@ -39,8 +40,9 @@ def configs(dataset, feature, input_mode):
     with open(os.path.join(REPO_ROOT, 'detection_vis_backend/networks/T_FFTRadNet_model_config.json')) as f:
         model_config = {k: v for k, v in json.load(f)[dataset].items() if not k.startswith('_')}
     model_config['class'] = 'T_FFTRadNet'
-    if input_mode:
-        model_config['input_mode'] = input_mode
+    # The dataset block's input_mode serves one feature only (RADDet's is RAD), so without
+    # an explicit mode the network reads the feature it was given.
+    model_config['input_mode'] = input_mode or feature
     with open(os.path.join(REPO_ROOT, 'detection_vis_backend/train/T_FFTRadNet_train_config.json')) as f:
         data = json.load(f)
     train_config = data['default'].copy()
@@ -56,7 +58,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('dataset', choices=['RADIal', 'RADDetDataset'])
     ap.add_argument('feature', choices=['RD', 'ADC', 'RAD'])
-    ap.add_argument('--input-mode', help="defaults to the model config's input_mode")
+    ap.add_argument('--input-mode', help="defaults to the feature; e.g. RD_shift for RADIal RD")
     args = ap.parse_args()
 
     db = get_session_local()
